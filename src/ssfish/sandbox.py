@@ -77,8 +77,8 @@ MAX_DELTA_PCT_PER_ROUND = 0.10
 
 
 def compute_price_impact(
-    net_flow_cny: float,
-    adv_cny: float,
+    net_flow_value: float,
+    adv_value: float,
     lambda_market: float = LAMBDA_LITERATURE["default"],
     max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
 ) -> float:
@@ -87,37 +87,40 @@ def compute_price_impact(
         ΔP/P = clip(λ × sign(net_flow) × sqrt(|net_flow| / ADV), ±max_delta_pct)
 
     The result is clipped to ±max_delta_pct (default ±10%, modeling A-share
-    daily 涨停板 limit). Without the cap, unbounded Kyle output produces
-    nonsense at extreme net flows.
+    daily 涨停板 limit; override for markets with different rules). Without
+    the cap, unbounded Kyle output produces nonsense at extreme net flows.
+
+    Currency-agnostic: net_flow_value and adv_value must be in the SAME unit
+    (CNY for A-share, USD for US equity, USD for crude oil futures, etc.).
 
     Args:
-        net_flow_cny: Net order flow this round in CNY (positive = net buy,
+        net_flow_value: Net order flow this round (positive = net buy,
             negative = net sell). Already aggregated across all persona classes
             per Gotcha 5 (single λ application to the summed flow, not per-class).
-        adv_cny: Average daily volume in CNY for the event ticker. Trailing
-            30 days is the conventional window. Must be > 0.
+        adv_value: Average daily volume in the same currency as net_flow.
+            Trailing 30 days is the conventional window. Must be > 0.
         lambda_market: Market impact coefficient (dimensionless). See
             LAMBDA_LITERATURE for default values per market.
         max_delta_pct: Per-round absolute price-change cap (default ±0.10).
 
     Returns:
         Fractional price change as a float (e.g., -0.097 means -9.7%).
-        Returns 0.0 if net_flow_cny is exactly 0.
+        Returns 0.0 if net_flow_value is exactly 0.
 
     Raises:
-        ValueError: if adv_cny <= 0.
+        ValueError: if adv_value <= 0.
 
     Example (spec §9.3 BYD case):
-        >>> compute_price_impact(net_flow_cny=-3e8, adv_cny=8e9, lambda_market=0.5)
+        >>> compute_price_impact(net_flow_value=-3e8, adv_value=8e9, lambda_market=0.5)
         -0.0968...  # ≈ -9.7% (within the ±10% cap)
     """
-    if adv_cny <= 0:
-        raise ValueError(f"adv_cny must be > 0, got {adv_cny}")
-    if net_flow_cny == 0:
+    if adv_value <= 0:
+        raise ValueError(f"adv_value must be > 0, got {adv_value}")
+    if net_flow_value == 0:
         return 0.0
 
-    sign = 1.0 if net_flow_cny > 0 else -1.0
-    magnitude = math.sqrt(abs(net_flow_cny) / adv_cny)
+    sign = 1.0 if net_flow_value > 0 else -1.0
+    magnitude = math.sqrt(abs(net_flow_value) / adv_value)
     raw = lambda_market * sign * magnitude
     return max(-max_delta_pct, min(max_delta_pct, raw))
 
@@ -733,55 +736,73 @@ def _build_sandbox_system_prompt(persona: Persona) -> str:
     )
 
 
+def _currency_format(currency: str) -> tuple[str, str, float]:
+    """Pick (symbol, big_unit, big_divisor) for a currency code.
+
+    Mirrors report.CURRENCY_FORMATS but kept here to avoid circular imports.
+    """
+    table = {
+        "CNY": ("¥",   "億", 1e8),
+        "USD": ("$",   "B",  1e9),
+        "EUR": ("€",   "B",  1e9),
+        "JPY": ("¥",   "B",  1e9),
+        "HKD": ("HK$", "B",  1e9),
+        "BTC": ("₿",   "K",  1e3),
+    }
+    return table.get(currency, table["USD"])
+
+
 def _build_sandbox_round_zero_user_message(
     event: Event,
     current_price: float,
-    adv_cny: float,
+    adv_value: float,
 ) -> str:
+    sym, big_unit, big_div = _currency_format(event.price_currency)
     return (
-        f"# 事件\n"
+        f"# Event\n"
         f"{event.to_simulation_input()}\n"
         f"\n"
-        f"# 当前市场状态\n"
-        f"  - 当前价格: ¥{current_price:.2f}\n"
-        f"  - 日均成交额 (ADV): ¥{adv_cny / 1e8:.1f}億\n"
-        f"  - 这是事件刚发生的瞬间, 尚无价格反应\n"
+        f"# Current market state\n"
+        f"  - Current price: {sym}{current_price:.2f}\n"
+        f"  - Average daily volume (ADV): {sym}{adv_value / big_div:.1f}{big_unit}\n"
+        f"  - This is t=0 (event just hit, no price reaction yet)\n"
         f"\n"
-        f"请输出你这一类参与者的 action_distribution + rationale + confidence."
+        f"Output your class's action_distribution + rationale + confidence."
     )
 
 
 def _build_sandbox_round_n_user_message(
     event: Event,
     current_price: float,
-    adv_cny: float,
+    adv_value: float,
     initial_price: float,
     round_idx: int,
     history: list["SandboxRoundRecord"],
 ) -> str:
+    sym, big_unit, big_div = _currency_format(event.price_currency)
     history_lines = []
     for r in history:
         history_lines.append(
-            f"  R{r.round_idx}: ¥{r.price_before:.2f} → ¥{r.price_after:.2f} "
-            f"(Δ {r.delta_pct * 100:+.2f}%, 净流 ¥{r.net_flow_cny / 1e8:+.2f}億)"
+            f"  R{r.round_idx}: {sym}{r.price_before:.2f} → {sym}{r.price_after:.2f} "
+            f"(Δ {r.delta_pct * 100:+.2f}%, net flow {sym}{r.net_flow_cny / big_div:+.2f}{big_unit})"
         )
     history_block = "\n".join(history_lines) if history_lines else "  (no prior rounds)"
     cumulative_delta = (current_price / initial_price - 1.0) * 100 if initial_price else 0.0
 
     return (
-        f"# 事件\n"
+        f"# Event\n"
         f"{event.to_simulation_input()}\n"
         f"\n"
-        f"# 历史轮次 (你已经看到的市场反应)\n"
+        f"# Round history (what you've already seen happen)\n"
         f"{history_block}\n"
         f"\n"
-        f"# 当前市场状态 (R{round_idx})\n"
-        f"  - 当前价格: ¥{current_price:.2f}\n"
-        f"  - 累计变动: {cumulative_delta:+.2f}%\n"
-        f"  - 日均成交额 (ADV): ¥{adv_cny / 1e8:.1f}億\n"
+        f"# Current market state (R{round_idx})\n"
+        f"  - Current price: {sym}{current_price:.2f}\n"
+        f"  - Cumulative change since R0: {cumulative_delta:+.2f}%\n"
+        f"  - ADV: {sym}{adv_value / big_div:.1f}{big_unit}\n"
         f"\n"
-        f"考虑前面几轮的反应, 输出你这一类参与者本轮的 action_distribution.\n"
-        f"持有的人看到 {cumulative_delta:+.2f}% 的累计变化后, 心态可能不一样了.\n"
+        f"Considering the prior rounds, output your class's action_distribution for this round.\n"
+        f"Holders who've seen {cumulative_delta:+.2f}% cumulative move may feel differently now.\n"
     )
 
 
@@ -822,7 +843,7 @@ class SandboxResult:
     cost_usd_at_end: float
     llm_seed: int | None
     lambda_used: float
-    adv_cny_used: float
+    adv_value_used: float
     final_agents_by_class: dict[str, list[Agent]] = field(default_factory=dict)
 
     @property
@@ -863,7 +884,7 @@ async def _query_class_action_distribution(
     persona: Persona,
     event: Event,
     current_price: float,
-    adv_cny: float,
+    adv_value: float,
     round_idx: int,
     history: list[SandboxRoundRecord],
     initial_price: float,
@@ -882,10 +903,10 @@ async def _query_class_action_distribution(
 
     system_msg = _build_sandbox_system_prompt(persona)
     if round_idx == 0:
-        user_msg = _build_sandbox_round_zero_user_message(event, current_price, adv_cny)
+        user_msg = _build_sandbox_round_zero_user_message(event, current_price, adv_value)
     else:
         user_msg = _build_sandbox_round_n_user_message(
-            event, current_price, adv_cny, initial_price, round_idx, history
+            event, current_price, adv_value, initial_price, round_idx, history
         )
 
     expected_actions = [a["name"] for a in sandbox.action_space]
@@ -926,7 +947,7 @@ async def run_sandbox_simulation(
         7. Record SandboxRoundRecord
 
     Args:
-        event: must have current_price and adv_cny set (Event.is_sandbox_ready)
+        event: must have current_price and adv_value set (Event.is_sandbox_ready)
         personas: list of v2 Personas with sandbox config
         n_rounds: number of rounds (default = settings.default_rounds)
         simulation_id: stable id for scorecard tracking (auto-generated if None)
@@ -945,7 +966,7 @@ async def run_sandbox_simulation(
     if not event.is_sandbox_ready:
         raise ValueError(
             f"event {event.ticker} is not sandbox-ready: "
-            f"current_price={event.current_price}, adv_cny={event.adv_cny}. "
+            f"current_price={event.current_price}, adv_value={event.adv_value}. "
             f"Sandbox mode requires both fields."
         )
 
@@ -968,7 +989,7 @@ async def run_sandbox_simulation(
         len(personas),
         n_rounds,
         event.current_price,
-        event.adv_cny,
+        event.adv_value,
         lambda_used,
         seed,
     )
@@ -998,7 +1019,7 @@ async def run_sandbox_simulation(
                 persona=p,
                 event=event,
                 current_price=current_price,
-                adv_cny=event.adv_cny,
+                adv_value=event.adv_value,
                 round_idx=round_idx,
                 history=history_for_this_round,
                 initial_price=initial_price,
@@ -1041,8 +1062,8 @@ async def run_sandbox_simulation(
 
         # Step 4: Kyle price impact
         delta_pct = compute_price_impact(
-            net_flow_cny=net_flow_total,
-            adv_cny=event.adv_cny,
+            net_flow_value=net_flow_total,
+            adv_value=event.adv_value,
             lambda_market=lambda_used,
         )
         price_after = current_price * (1.0 + delta_pct)
@@ -1094,7 +1115,7 @@ async def run_sandbox_simulation(
         cost_usd_at_end=cost_at_end,
         llm_seed=seed,
         lambda_used=lambda_used,
-        adv_cny_used=event.adv_cny,
+        adv_value_used=event.adv_value,
         final_agents_by_class=agents_by_class,
     )
 

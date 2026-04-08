@@ -267,7 +267,7 @@ def test_render_sandbox_disclaimer_is_compliant() -> None:
         event_type="other",
         event_date="2026-04-08",
         current_price=100.0,
-        adv_cny=1e9,
+        adv_value=1e9,
     )
     round_rec = SandboxRoundRecord(
         round_idx=0, price_before=100.0, price_after=98.0, delta_pct=-0.02,
@@ -291,7 +291,7 @@ def test_render_sandbox_disclaimer_is_compliant() -> None:
         cost_usd_at_end=0.01,
         llm_seed=42,
         lambda_used=0.5,
-        adv_cny_used=1e9,
+        adv_value_used=1e9,
         final_agents_by_class={"test_class": [Agent(
             persona_id="test_class", capital_cny=100000,
             cash_cny=50000, holdings_shares=500, max_holdings_value_cny=95000,

@@ -5,8 +5,16 @@ because, per Codex's review, "markets price surprise relative to consensus, not
 events in isolation". Without prior_consensus / recent_price_action, the
 simulation only sees ~25% of the actual signal.
 
-All non-essential fields default to empty strings — the user can leave them
-blank but the system warns about reduced confidence.
+This module is currency-agnostic. The Event carries:
+  - `current_price`     in the instrument's native currency
+  - `adv_value`         in the same currency as current_price
+  - `price_currency`    e.g. "CNY", "USD", "JPY", "BTC"
+  - `market`            slug like "ashare", "us-equity", "crude-oil-wti"
+  - `instrument`        display name (e.g. "BYD" or "比亚迪")
+
+VALID_EVENT_TYPES is intentionally broad — covers equity events, commodity
+events, crypto events, policy events, etc. Add new types here as new
+markets need them.
 """
 
 from __future__ import annotations
@@ -16,41 +24,58 @@ from dataclasses import dataclass
 
 
 VALID_EVENT_TYPES = {
+    # Equity-flavored
     "earnings",
-    "policy",
-    "m_a",
-    "management_change",
     "ipo",
     "dividend",
     "shareholder_action",
-    "lawsuit",
+    "m_a",
+    "management_change",
+    # Commodity-flavored
+    "supply_disruption",
+    "demand_shock",
+    "opec_meeting",
+    "inventory_release",
+    "weather",
+    "geopolitical",
+    # Crypto-flavored
+    "halving",
+    "exchange_event",
+    "protocol_upgrade",
+    # Universal
+    "policy",
     "regulatory",
+    "lawsuit",
+    "macro",
     "other",
 }
 
 
 @dataclass
 class Event:
-    ticker: str
+    ticker: str               # symbol or contract code (e.g. "002594", "NVDA", "CL=F", "BTC-USD")
     event_text: str
     event_type: str
-    event_date: str  # YYYY-MM-DD
+    event_date: str           # YYYY-MM-DD
+
+    # ── Optional context fields (boost simulation accuracy when filled) ──
     prior_consensus: str = ""
     recent_price_action: str = ""
     sector_context: str = ""
 
-    # ── Sandbox-mode fields (required for sandbox runs, optional for sentiment) ──
-    # `current_price` is the price at t=0 (before the event hits the market).
-    # `adv_cny` is the trailing-30-day average daily volume in CNY, used as the
-    # denominator in the Kyle square-root price impact formula. `sector_etf_ticker`
-    # is reserved for future cross-asset spillover modeling — currently unused
-    # (v1 sandbox is single-ticker per Q7 spec lock-in).
+    # ── Sandbox required fields (current state of the instrument) ──
     current_price: float | None = None
-    adv_cny: float | None = None
+    adv_value: float | None = None  # average daily volume in the same currency as price
+
+    # ── Market metadata (for currency formatting + persona pack selection) ──
+    market: str | None = None        # slug like "ashare", "us-equity"
+    price_currency: str = "CNY"      # currency code; default CNY for backward compat
+    instrument: str | None = None    # human-readable display name (e.g. "BYD")
+
+    # ── Reserved for future cross-asset spillover modeling ──
     sector_etf_ticker: str | None = None
 
     def __post_init__(self) -> None:
-        # Light validation, no exceptions on optional context (just warnings)
         if not self.ticker or not self.ticker.strip():
             raise ValueError("Event.ticker is required")
         if not self.event_text or not self.event_text.strip():
@@ -65,15 +90,23 @@ class Event:
             raise ValueError(
                 f"Event.current_price must be > 0 if set, got {self.current_price}"
             )
-        if self.adv_cny is not None and self.adv_cny <= 0:
+        if self.adv_value is not None and self.adv_value <= 0:
             raise ValueError(
-                f"Event.adv_cny must be > 0 if set, got {self.adv_cny}"
+                f"Event.adv_value must be > 0 if set, got {self.adv_value}"
             )
+        # Default instrument to ticker if not set
+        if self.instrument is None:
+            self.instrument = self.ticker
+
+    @property
+    def adv_cny(self) -> float | None:
+        """Backward-compat alias for adv_value (deprecated)."""
+        return self.adv_value
 
     @property
     def is_sandbox_ready(self) -> bool:
         """True iff the event has the fields required for sandbox-mode simulation."""
-        return self.current_price is not None and self.adv_cny is not None
+        return self.current_price is not None and self.adv_value is not None
 
     @property
     def context_completeness(self) -> float:
@@ -93,9 +126,12 @@ class Event:
 
     def to_simulation_input(self) -> str:
         """Render the full event context as a prompt block for personas."""
+        market_label = self.market or "unknown market"
+        instrument = self.instrument or self.ticker
         parts = [
             f"# Event being analyzed",
-            f"  - Ticker: {self.ticker}",
+            f"  - Market: {market_label}",
+            f"  - Instrument: {instrument} ({self.ticker})",
             f"  - Date: {self.event_date}",
             f"  - Type: {self.event_type}",
             f"",

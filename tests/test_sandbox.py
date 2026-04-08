@@ -107,8 +107,8 @@ class TestComputePriceImpact:
         """The canonical spec §9.3 example: BYD net flow -3億 / ADV 80億 / λ=0.5
         should yield ≈ -9.7%."""
         result = compute_price_impact(
-            net_flow_cny=-3e8,  # -3億
-            adv_cny=8e9,         # 80億
+            net_flow_value=-3e8,  # -3億
+            adv_value=8e9,         # 80億
             lambda_market=0.5,
         )
         # Hand calc: 0.5 * (-1) * sqrt(3e8 / 8e9)
@@ -119,49 +119,49 @@ class TestComputePriceImpact:
 
     def test_zero_net_flow_returns_zero(self):
         """Exactly zero net flow → exactly zero price change."""
-        assert compute_price_impact(0.0, adv_cny=1e9) == 0.0
+        assert compute_price_impact(0.0, adv_value=1e9) == 0.0
 
     def test_positive_net_flow_yields_positive_delta(self):
         """Net buy pressure pushes price up."""
-        result = compute_price_impact(net_flow_cny=2e8, adv_cny=8e9, lambda_market=0.5)
+        result = compute_price_impact(net_flow_value=2e8, adv_value=8e9, lambda_market=0.5)
         assert result > 0
         assert result == pytest.approx(0.5 * math.sqrt(2e8 / 8e9), abs=1e-6)
 
     def test_negative_net_flow_yields_negative_delta(self):
         """Net sell pressure pushes price down."""
-        result = compute_price_impact(net_flow_cny=-5e8, adv_cny=1e10, lambda_market=0.4)
+        result = compute_price_impact(net_flow_value=-5e8, adv_value=1e10, lambda_market=0.4)
         assert result < 0
 
     def test_concavity_large_flow_underestimated_relative_to_linear(self):
         """sqrt is concave, so doubling the flow should less-than-double the impact.
         This is the empirical reason we use sqrt rather than linear (Bouchaud 2010)."""
-        small = compute_price_impact(1e8, adv_cny=1e10, lambda_market=0.5)
-        large = compute_price_impact(2e8, adv_cny=1e10, lambda_market=0.5)
+        small = compute_price_impact(1e8, adv_value=1e10, lambda_market=0.5)
+        large = compute_price_impact(2e8, adv_value=1e10, lambda_market=0.5)
         # large / small should be sqrt(2) ≈ 1.414, NOT 2
         ratio = large / small
         assert ratio == pytest.approx(math.sqrt(2), rel=0.01)
         assert ratio < 1.5
 
     def test_zero_adv_raises(self):
-        with pytest.raises(ValueError, match="adv_cny must be > 0"):
-            compute_price_impact(net_flow_cny=1e8, adv_cny=0)
+        with pytest.raises(ValueError, match="adv_value must be > 0"):
+            compute_price_impact(net_flow_value=1e8, adv_value=0)
 
     def test_negative_adv_raises(self):
-        with pytest.raises(ValueError, match="adv_cny must be > 0"):
-            compute_price_impact(net_flow_cny=1e8, adv_cny=-1e9)
+        with pytest.raises(ValueError, match="adv_value must be > 0"):
+            compute_price_impact(net_flow_value=1e8, adv_value=-1e9)
 
     def test_default_lambda_used_when_omitted(self):
         """If lambda_market is not passed, the default literature value is used."""
-        result_default = compute_price_impact(1e8, adv_cny=1e9)
+        result_default = compute_price_impact(1e8, adv_value=1e9)
         result_explicit = compute_price_impact(
-            1e8, adv_cny=1e9, lambda_market=LAMBDA_LITERATURE["default"]
+            1e8, adv_value=1e9, lambda_market=LAMBDA_LITERATURE["default"]
         )
         assert result_default == result_explicit
 
     def test_lambda_scales_linearly(self):
         """Doubling λ should double the resulting price impact."""
-        a = compute_price_impact(1e8, adv_cny=1e10, lambda_market=0.3)
-        b = compute_price_impact(1e8, adv_cny=1e10, lambda_market=0.6)
+        a = compute_price_impact(1e8, adv_value=1e10, lambda_market=0.3)
+        b = compute_price_impact(1e8, adv_value=1e10, lambda_market=0.6)
         assert b == pytest.approx(2 * a, rel=1e-6)
 
     def test_market_lambdas_make_sense(self):
@@ -172,18 +172,18 @@ class TestComputePriceImpact:
         """Extreme flows (>> ADV) clip to ±10% (modeling A-share 涨停板)."""
         # Sell pressure 100x ADV → raw Kyle = 0.5 × -1 × sqrt(100) = -5.0
         # Should clip to -0.10
-        result = compute_price_impact(net_flow_cny=-1e12, adv_cny=1e10, lambda_market=0.5)
+        result = compute_price_impact(net_flow_value=-1e12, adv_value=1e10, lambda_market=0.5)
         assert result == pytest.approx(-0.10, abs=1e-9)
 
     def test_extreme_buy_pressure_clipped_to_positive_max(self):
-        result = compute_price_impact(net_flow_cny=+1e12, adv_cny=1e10, lambda_market=0.5)
+        result = compute_price_impact(net_flow_value=+1e12, adv_value=1e10, lambda_market=0.5)
         assert result == pytest.approx(+0.10, abs=1e-9)
 
     def test_max_delta_pct_override(self):
         """Caller can pass a different cap (e.g., for crypto/HK markets)."""
         result = compute_price_impact(
-            net_flow_cny=-1e12,
-            adv_cny=1e10,
+            net_flow_value=-1e12,
+            adv_value=1e10,
             lambda_market=0.5,
             max_delta_pct=0.30,
         )
@@ -848,7 +848,7 @@ from ssfish.sandbox import (
 )
 
 
-def _sandbox_event(adv_cny: float = 8e9, current_price: float = 218.50) -> Event:
+def _sandbox_event(adv_value: float = 8e9, current_price: float = 218.50) -> Event:
     return Event(
         ticker="002594",
         event_text="比亚迪 2026 Q1 营收 +18% YoY (beat), 毛利率 -2.3pp (miss)",
@@ -858,7 +858,7 @@ def _sandbox_event(adv_cny: float = 8e9, current_price: float = 218.50) -> Event
         recent_price_action="过去 30 天 -3%",
         sector_context="新能源板块情绪平稳",
         current_price=current_price,
-        adv_cny=adv_cny,
+        adv_value=adv_value,
     )
 
 
@@ -933,7 +933,7 @@ class TestRunSandboxSimulation:
         assert len(result.price_trajectory) == 6
         assert result.price_trajectory[0] == event.current_price
         assert result.lambda_used == LAMBDA_LITERATURE["ashare"]
-        assert result.adv_cny_used == event.adv_cny
+        assert result.adv_value_used == event.adv_value
 
     @pytest.mark.asyncio
     async def test_all_panic_sell_distribution_drives_price_down(self, monkeypatch):
@@ -947,7 +947,7 @@ class TestRunSandboxSimulation:
                 pos_max=0.30,
             ),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+        event = _sandbox_event(current_price=100.0, adv_value=1e9)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
@@ -975,7 +975,7 @@ class TestRunSandboxSimulation:
                 pos_max=0.0,
             ),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+        event = _sandbox_event(current_price=100.0, adv_value=1e9)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
@@ -994,7 +994,7 @@ class TestRunSandboxSimulation:
         personas = [
             _make_sandbox_persona(pid="retail", instance_count=100, prob_holding=1.0),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+        event = _sandbox_event(current_price=100.0, adv_value=1e9)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
@@ -1023,7 +1023,7 @@ class TestRunSandboxSimulation:
                 sigma=0.001,  # near-degenerate
             ),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+        event = _sandbox_event(current_price=100.0, adv_value=1e9)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
@@ -1071,7 +1071,7 @@ class TestRunSandboxSimulation:
                 pos_max=0.50,
             ),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e10)
+        event = _sandbox_event(current_price=100.0, adv_value=1e10)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
@@ -1141,7 +1141,7 @@ class TestRunSandboxSimulation:
             event_text="x",
             event_type="other",
             event_date="2026-04-29",
-            # current_price + adv_cny missing
+            # current_price + adv_value missing
         )
         personas = [_make_sandbox_persona()]
         with pytest.raises(ValueError, match="not sandbox-ready"):
@@ -1187,7 +1187,7 @@ class TestRunSandboxSimulation:
                 pos_max=0.20,
             ),
         ]
-        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+        event = _sandbox_event(current_price=100.0, adv_value=1e9)
 
         monkeypatch.setattr(
             "ssfish.sandbox.chat_action_distribution",
