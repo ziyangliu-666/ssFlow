@@ -1,0 +1,351 @@
+schema_version: 2
+market: crude-oil-wti
+locale: en-US
+last_updated: 2026-04-08
+
+# ssFish WTI Crude Oil persona pack v1 (sketch)
+#
+# Validates the persona pack v2 schema works for commodity futures markets,
+# not just equities. The CFTC Disaggregated Commitment of Traders report
+# splits crude oil traders into 4 categories (Producer/Merchant, Swap
+# Dealer, Managed Money, Other Reportables) — this pack expands those into
+# 10 archetypes representing the actual decision-making units.
+#
+# Reference: docs/persona-pack-spec-v1.md §4 (commodity market structure)
+# Coverage: CFTC Disaggregated COT, Oxford Energy speculative positions,
+# Money Managers + Other ranged 35-46% of OI 2020-2025.
+#
+# IMPORTANT differences from equity packs:
+#   - "shares" become "lots" or "barrels" depending on contract
+#   - "holdings_in_target" represents long positions; shorts are negative
+#   - Action space includes "go_short" / "cover_short" actions
+#   - λ_crude_oil = 0.40 (literature value, between equity and FX)
+#
+# Per spec lock-in (Q7), this v1 sketch only models a single contract
+# (front-month WTI). Cross-month spread strategies and Brent-WTI arbitrage
+# are out of scope.
+
+data_sources:
+  - id: cftc-cot-petroleum
+    name: CFTC Commitments of Traders, Disaggregated, Petroleum Futures
+    org: CFTC
+    url: https://www.cftc.gov/dea/futures/petroleum_lf.htm
+    accessed: 2026-04-08
+    note: 4 trader categories — commercial / swap dealer / managed money / other reportables
+  - id: oxford-energy-2025
+    name: The State of Speculative Positions in Oil Derivatives
+    org: Oxford Institute for Energy Studies
+    url: https://www.oxfordenergy.org/wpcms/wp-content/uploads/2025/12/Comment-The-State-of-%E2%80%98Speculative-positions-in-Oil-Derivatives.pdf
+    accessed: 2026-04-08
+    note: Money Managers + Other long+short = 35-46% of OI
+  - id: cftc-speculators-study
+    name: The Role of Speculators in the Crude Oil Futures Market
+    org: CFTC
+    url: https://www.cftc.gov/sites/default/files/idc/groups/public/@swaps/documents/file/plstudy_19_cftc.pdf
+    accessed: 2026-04-08
+
+personas:
+
+  - id: integrated_oil_major_hedger
+    archetype: Integrated Oil Major (Exxon/Shell hedge book)
+    sub_archetype: commercial_hedger_producer
+    display_name: Upstream production hedging desk, multi-quarter forward
+    decision_mode: systematic
+    role: commercial_hedger
+    market_share:
+      by_volume: 0.06
+      by_holdings: 0.10
+      citations:
+        - source_id: cftc-cot-petroleum
+          note: Producer/Merchant category covers integrated majors
+    capital_range_cny: [70000000000, 700000000000]
+    time_horizon_days: [90, 720]
+    behavior:
+      annual_turnover: 0.5
+    voice_prompt: |
+      You represent the production hedging desk of an integrated oil major
+      (e.g., ExxonMobil, Shell). You sell forward production via futures
+      to lock in revenue. You don't speculate. You react to price by
+      adjusting hedge ratios on a quarterly basis, not in real time.
+      News matters only insofar as it changes your forward production
+      assumptions or your treasurer's risk appetite.
+    sandbox:
+      instance_count: 8
+      capital_distribution: {type: lognormal, median_cny: 200000000000, sigma: 1.0}
+      initial_position_distribution: {type: fixed, value: 0.30}  # ~30% of capital in shorts (hedged)
+      risk:
+        max_position_pct: 0.50
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: increase_hedge_ratio_5pct, side: sell, pool: cash, fraction: 0.05}
+        - {name: decrease_hedge_ratio_3pct, side: buy, pool: holdings_in_target, fraction: 0.03}
+
+  - id: shale_e_p_hedger
+    archetype: Shale E&P (Pioneer/EOG/Diamondback hedge book)
+    sub_archetype: commercial_hedger_independent
+    display_name: Independent shale producer, hedges 50-70% of next-12m production
+    decision_mode: discretionary
+    role: commercial_hedger
+    market_share:
+      by_volume: 0.04
+      by_holdings: 0.05
+    capital_range_cny: [7000000000, 70000000000]
+    time_horizon_days: [30, 365]
+    behavior:
+      annual_turnover: 1.5
+    voice_prompt: |
+      You represent a US shale E&P treasurer's hedging desk. You hedge
+      50-70% of next-12-month production. You react to price spikes by
+      adding hedges, and to crashes by being scared into more hedges.
+      Your decisions affect 1-12 month forward strips.
+    sandbox:
+      instance_count: 30
+      capital_distribution: {type: lognormal, median_cny: 20000000000, sigma: 1.1}
+      initial_position_distribution: {type: fixed, value: 0.40}
+      risk:
+        max_position_pct: 0.70
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: hedge_more_8pct, side: sell, pool: cash, fraction: 0.08}
+        - {name: unwind_hedge_5pct, side: buy, pool: holdings_in_target, fraction: 0.05}
+
+  - id: airline_jet_fuel_hedger
+    archetype: Airline Jet Fuel Hedger (Delta/United/Southwest)
+    sub_archetype: commercial_hedger_consumer
+    display_name: Major airline jet-fuel buyer using WTI as proxy hedge
+    decision_mode: systematic
+    role: commercial_hedger
+    market_share:
+      by_volume: 0.02
+      by_holdings: 0.04
+    capital_range_cny: [3500000000, 35000000000]
+    time_horizon_days: [90, 540]
+    voice_prompt: |
+      You represent a major US airline's fuel hedging desk. You buy crude
+      futures (or jet-fuel-to-crude basis) to hedge expected fuel costs.
+      A jump in oil hurts your unhedged exposure but helps your existing
+      long hedge book. You add hedges on dips and reduce on spikes.
+    sandbox:
+      instance_count: 8
+      capital_distribution: {type: lognormal, median_cny: 10000000000, sigma: 0.9}
+      initial_position_distribution: {type: fixed, value: 0.50}  # long crude as a hedge
+      risk:
+        max_position_pct: 0.80
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: extend_hedge_5pct, side: buy, pool: cash, fraction: 0.05}
+        - {name: take_hedge_profit_3pct, side: sell, pool: holdings_in_target, fraction: 0.03}
+
+  - id: refiner_crack_spread_trader
+    archetype: Refiner (Valero/Marathon crack spread book)
+    sub_archetype: commercial_hedger_refiner
+    display_name: Refiner trading crack spreads + crude inputs
+    decision_mode: discretionary
+    role: commercial_hedger
+    market_share:
+      by_volume: 0.03
+      by_holdings: 0.04
+    voice_prompt: |
+      You represent a US refiner's risk management desk. You're long crude
+      inputs and short refined products via crack spreads. Your reaction
+      to a crude price move depends on whether refined product prices
+      moved with it.
+    sandbox:
+      instance_count: 10
+      capital_distribution: {type: lognormal, median_cny: 7000000000, sigma: 0.8}
+      initial_position_distribution: {type: fixed, value: 0.20}
+      risk:
+        max_position_pct: 0.40
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: increase_long_5pct, side: buy, pool: cash, fraction: 0.05}
+        - {name: trim_long_3pct, side: sell, pool: holdings_in_target, fraction: 0.03}
+
+  - id: cta_trend_following
+    archetype: CTA Trend Follower (Winton/AHL/Aspect)
+    sub_archetype: managed_money_systematic
+    display_name: Systematic trend-following CTA, multi-asset commodity book
+    decision_mode: systematic
+    role: directional_speculator
+    market_share:
+      by_volume: 0.10
+      by_holdings: 0.08
+      citations:
+        - source_id: oxford-energy-2025
+          note: Managed Money 25-35% of OI; CTAs are the largest subset
+    behavior:
+      annual_turnover: 5.0
+      reaction_speed: fast
+    biases:
+      momentum_chasing: 0.95
+      stop_loss_discipline: 1.0
+    voice_prompt: |
+      You are a systematic CTA running trend-following models on crude oil.
+      Your signals are based on multi-day moving averages and breakouts.
+      You don't read news. A 3% one-day move plus a confirming next-day
+      move triggers your model to scale into a position.
+    sandbox:
+      instance_count: 30
+      capital_distribution: {type: lognormal, median_cny: 5000000000, sigma: 1.2}
+      initial_position_distribution:
+        type: bernoulli
+        prob_holding: 0.50
+        position_size_pct_when_holding: {type: uniform, min: 0.05, max: 0.15}
+      risk:
+        max_position_pct: 0.20
+        margin_account_pct: 1.0
+        leverage_max: 4.0
+        stop_loss_threshold: -0.05
+        stop_loss_discipline: 1.0
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: trend_long_15pct, side: buy, pool: cash, fraction: 0.15}
+        - {name: trend_short_15pct, side: sell, pool: holdings_in_target, fraction: 0.15}
+        - {name: stop_loss_full, side: sell, pool: holdings_in_target, fraction: 1.0}
+
+  - id: macro_hedge_fund_discretionary
+    archetype: Macro Hedge Fund Discretionary (Brevan Howard, Tudor)
+    sub_archetype: managed_money_discretionary
+    display_name: Global macro fund taking discretionary commodity bets
+    decision_mode: discretionary
+    role: directional_speculator
+    market_share:
+      by_volume: 0.05
+      by_holdings: 0.04
+    behavior:
+      annual_turnover: 4.0
+      reaction_speed: fast
+    biases:
+      contrarian_to_consensus: 0.65
+    voice_prompt: |
+      You are a discretionary macro PM. You read news. You react to OPEC
+      meetings, geopolitical events, demand-side surprises. You take
+      concentrated bets when conviction is high.
+    sandbox:
+      instance_count: 15
+      capital_distribution: {type: lognormal, median_cny: 7000000000, sigma: 1.3}
+      initial_position_distribution:
+        type: bernoulli
+        prob_holding: 0.60
+        position_size_pct_when_holding: {type: uniform, min: 0.05, max: 0.20}
+      risk:
+        max_position_pct: 0.25
+        margin_account_pct: 1.0
+        leverage_max: 3.0
+        stop_loss_threshold: -0.10
+        stop_loss_discipline: 0.85
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: conviction_long_25pct, side: buy, pool: cash, fraction: 0.25}
+        - {name: conviction_short_25pct, side: sell, pool: holdings_in_target, fraction: 0.25}
+        - {name: stop_loss_full, side: sell, pool: holdings_in_target, fraction: 1.0}
+
+  - id: commodity_index_long
+    archetype: Commodity Index Fund (DJ-UBS / GSCI long-only)
+    sub_archetype: managed_money_passive
+    display_name: Passive commodity index fund, monthly rebalance
+    decision_mode: passive
+    role: passive_market_maker
+    market_share:
+      by_volume: 0.05
+      by_holdings: 0.10
+    behavior:
+      annual_turnover: 0.20
+    voice_prompt: |
+      You represent a passive commodity index fund (DJ-UBS or S&P GSCI).
+      You hold long futures across all commodities per index weights.
+      You only trade at month-end rebalancing or to roll expiring contracts.
+      You don't react to news.
+    sandbox:
+      instance_count: 10
+      capital_distribution: {type: lognormal, median_cny: 20000000000, sigma: 1.0}
+      initial_position_distribution: {type: fixed, value: 0.10}
+      risk:
+        max_position_pct: 0.15
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: rebalance_buy_3pct, side: buy, pool: cash, fraction: 0.03}
+        - {name: rebalance_sell_3pct, side: sell, pool: holdings_in_target, fraction: 0.03}
+
+  - id: swap_dealer_market_maker
+    archetype: Swap Dealer (Goldman/MS commodity desk)
+    sub_archetype: swap_dealer
+    display_name: OTC swap dealer warehousing risk via futures
+    decision_mode: systematic
+    role: market_maker_arb
+    market_share:
+      by_volume: 0.08
+      by_holdings: 0.12
+      citations:
+        - source_id: cftc-cot-petroleum
+          note: Swap Dealer category in CFTC disaggregated COT
+    voice_prompt: |
+      You represent a major investment bank's commodity swap dealer desk.
+      You take the other side of OTC swaps with corporate clients (airlines,
+      producers) and hedge the resulting risk in futures. Your futures
+      positions are mostly mechanical responses to client flow.
+    sandbox:
+      instance_count: 8
+      capital_distribution: {type: lognormal, median_cny: 70000000000, sigma: 0.9}
+      initial_position_distribution: {type: fixed, value: 0.15}
+      risk:
+        max_position_pct: 0.30
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: client_flow_buy_5pct, side: buy, pool: cash, fraction: 0.05}
+        - {name: client_flow_sell_5pct, side: sell, pool: holdings_in_target, fraction: 0.05}
+
+  - id: physical_trader_arbitrageur
+    archetype: Physical Trader (Vitol/Trafigura/Glencore)
+    sub_archetype: commercial_arbitrageur
+    display_name: Physical commodity trader running arb between physical + futures
+    decision_mode: discretionary
+    role: commercial_hedger
+    market_share:
+      by_volume: 0.07
+      by_holdings: 0.08
+    voice_prompt: |
+      You represent a major physical commodity trader (Vitol, Trafigura,
+      Glencore). You arbitrage between physical cargo prices, storage,
+      and futures. You react to news that affects physical supply chains:
+      shipping disruptions, refinery outages, OPEC announcements.
+    sandbox:
+      instance_count: 12
+      capital_distribution: {type: lognormal, median_cny: 30000000000, sigma: 1.1}
+      initial_position_distribution: {type: fixed, value: 0.20}
+      risk:
+        max_position_pct: 0.40
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: arb_long_10pct, side: buy, pool: cash, fraction: 0.10}
+        - {name: arb_short_10pct, side: sell, pool: holdings_in_target, fraction: 0.10}
+
+  - id: retail_uso_etf_holder
+    archetype: Retail USO ETF Holder
+    sub_archetype: retail_passive
+    display_name: Retail investors holding US Oil Fund ETF as crude proxy
+    decision_mode: discretionary
+    role: long_term_holder
+    market_share:
+      by_volume: 0.02
+      by_holdings: 0.03
+      by_account_count: 0.50
+    voice_prompt: |
+      You represent the aggregate retail position in USO (United States Oil
+      Fund) and similar crude-oil ETFs. You're not sophisticated. You buy
+      USO when oil drops and you think it's "cheap", you sell on big rallies.
+      You don't roll futures yourself — USO does that for you (and pays the
+      contango cost).
+    sandbox:
+      instance_count: 1000
+      capital_distribution: {type: lognormal, median_cny: 60000, sigma: 1.0}
+      initial_position_distribution:
+        type: bernoulli
+        prob_holding: 0.40
+        position_size_pct_when_holding: {type: uniform, min: 0.05, max: 0.30}
+      risk:
+        max_position_pct: 0.50
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: dip_buy_20pct, side: buy, pool: cash, fraction: 0.20}
+        - {name: panic_sell_30pct, side: sell, pool: holdings_in_target, fraction: 0.30}

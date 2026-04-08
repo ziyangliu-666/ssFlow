@@ -1,0 +1,145 @@
+schema_version: 2
+market: my-market           # required: short slug for this market (ashare, us-equity, etc.)
+locale: en-US               # required: IETF language tag
+last_updated: 2026-04-08    # required: ISO date when data sources were last refreshed
+
+# ssFish persona pack template — copy this file and customize for a new market.
+# See personas/SCHEMA.md for the full field reference.
+# See personas/ashare.yaml for a polished 14-persona example.
+# See personas/us-equity-v1.yaml or personas/crude-oil-wti-v1.yaml for sketches.
+
+# ── Data sources (at least 1; aim for 5-10 for a polished pack) ────────
+data_sources:
+  - id: example-source-1
+    name: <human readable name>
+    org: <publishing org, regulator, or research firm>
+    url: https://example.com/report.pdf
+    accessed: 2026-04-08
+    note: <optional 1-line caveat about what this source covers>
+
+# ── Personas (at least 1; aim for 8-15 covering all major participant classes) ──
+personas:
+
+  - id: example_persona_id
+    archetype: Example Archetype Label
+    sub_archetype: example_sub_category    # optional
+    display_name: One-line human description (capital range, age, info source)
+
+    # decision_mode: how this class makes decisions
+    #   discretionary - human judgment / fundamental analysis
+    #   systematic    - rule-based / quant model / mechanical
+    #   strategic     - long-horizon corporate/state actor (use for 大股东/政府)
+    #   passive       - mechanical rebalance only
+    decision_mode: discretionary
+
+    # role: their function in the market (free-form but recommended values)
+    #   directional_speculator | long_term_holder | strategic_holder
+    #   commercial_hedger | market_maker_arb | passive_market_maker
+    #   quant | sell_side_analyst | short_seller | contrarian_short
+    #   active_long_short | institutional_long_only | institutional_long_horizon
+    #   foreign_active | passive_buyer
+    role: directional_speculator
+
+    model: null    # null = use settings.default_model
+
+    # ── Market share (must set at least one dimension) ──
+    market_share:
+      by_volume: 0.10            # share of daily trading volume contributed
+      by_holdings: 0.05          # share of total stock held
+      by_account_count: 0.20     # share of total accounts (not always meaningful)
+      citations:
+        - source_id: example-source-1
+          note: <which figure from the source supports this number>
+
+    # ── Demographics (optional but recommended) ──
+    capital_range_cny: [50000, 500000]    # min, max wealth in CNY
+    time_horizon_days: [1, 90]             # min, max holding period
+
+    # ── Behavior fingerprint (optional) ──
+    behavior:
+      avg_position_pct: 0.85               # typical % of capital invested at any time
+      annual_turnover: 5.0                 # annual turnover ratio (5x = 5 round-trips/year)
+      typical_holding_period_days: 14
+      stop_loss_discipline: low            # low | medium | high
+      reaction_speed: fast                 # instant | fast | medium | slow
+
+    # ── Information environment (optional) ──
+    information:
+      primary_sources: [source_a, source_b]
+      secondary_sources: [source_c]
+      ignored: [conference_calls, annual_reports]
+      english_capable: false
+
+    # ── Behavioral biases (optional, surfaced into LLM prompt) ──
+    biases:
+      momentum_chasing: 0.85
+      loss_aversion: 0.70
+      herd_following: 0.75
+
+    # ── Free-form knowledge (optional, surfaced into LLM prompt) ──
+    knowledge:
+      typical_holdings: [stock_a, stock_b]
+      information_sources: [source_a]
+      ignores: [thing_x]
+
+    # ── Voice prompt (REQUIRED, sent to LLM as system prompt) ──
+    # Tips:
+    #   - Speak in second person ("You represent ...")
+    #   - Reference the demographics + behaviors above
+    #   - Describe what this class WOULD DO (not what to advise)
+    #   - Avoid forbidden vocab: 买入/卖出/建议/应该/减仓/加仓 etc.
+    #     Use descriptive language: 进入/离场/倾向 etc.
+    voice_prompt: |
+      You represent <archetype>. <Description of who they are, what they
+      believe, how they react>. Their typical behavior in events:
+        - <bullet 1>
+        - <bullet 2>
+        - <bullet 3>
+      Speak in their voice. Don't give advice; describe their reactions.
+
+    # ── Sandbox config (REQUIRED for sandbox-mode runs) ──
+    sandbox:
+      instance_count: 100        # how many agent instances to spawn per sim
+
+      capital_distribution:
+        type: lognormal
+        median_cny: 100000       # median agent's capital
+        sigma: 0.8               # log-scale spread (0.5=tight, 1.5=heavy tail)
+        floor_cny: 10000         # optional clip
+        ceiling_cny: 1000000     # optional clip
+
+      initial_position_distribution:
+        type: bernoulli
+        prob_holding: 0.60       # 60% of agents start holding the target
+        position_size_pct_when_holding:
+          type: uniform
+          min: 0.05              # 5% of capital
+          max: 0.30              # 30% of capital
+
+      risk:
+        max_position_pct: 0.95   # HARD CAP — buy actions clamped to respect this
+        margin_account_pct: 0.10 # informational
+        leverage_max: 1.5
+        stop_loss_threshold: -0.15
+        stop_loss_discipline: 0.50  # probability that stop is executed
+
+      # ── Action space (Gotcha 1: dicts not bare strings) ──
+      action_space:
+        - name: hold
+          side: none             # none | buy | sell
+          pool: none             # none | cash | holdings_in_target
+          fraction: 0.0
+        - name: trim_25pct
+          side: sell
+          pool: holdings_in_target
+          fraction: 0.25
+        - name: add_15pct
+          side: buy
+          pool: cash
+          fraction: 0.15
+        # add more actions as needed; keep names descriptive (not advisory)
+
+      reaction_lag_rounds:
+        type: discrete
+        values: [0, 0, 1, 1, 2]  # how many rounds before this class reacts
+                                  # informational; not yet used by run_sandbox v1
