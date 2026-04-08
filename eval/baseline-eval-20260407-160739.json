@@ -1,0 +1,372 @@
+{
+  "event_hash": "000468926771e02d",
+  "event_text": "比亚迪 (002594) 2026 年第一季度业绩公告:\n  - 新能源汽车销量 132 万辆, 同比增长 +18% (市场一致预期 +12%, 超预期)\n  - 毛利率 17.8%, 同比下降 2.3 个百分点 (市场一致预期持平, 低于预期)\n  - 海外订单占比提升至 23%, 但汇率对冲成本上升\n  - 公司管理层在问答环节表示 \"下半年会通过产品结构优化逐步缓解毛利压力\"\n  - 同日宁德时代公布价格联盟协议, 行业整体成本端有松动预期",
+  "models_tested": [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "claude-haiku-4-5",
+    "qwen-plus",
+    "gemini-2.5-flash",
+    "deepseek-chat"
+  ],
+  "models_ok": [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini"
+  ],
+  "models_failed": [
+    "gpt-4.1-nano",
+    "claude-haiku-4-5",
+    "qwen-plus",
+    "gemini-2.5-flash",
+    "deepseek-chat"
+  ],
+  "per_model": [
+    {
+      "model": "gpt-4o-mini",
+      "status": "ok",
+      "system_fingerprint": "fp_eb37e061ec",
+      "n_reactions": 10,
+      "sentiment_mean": 0.18,
+      "sentiment_std": 0.248,
+      "sentiments": [
+        0.2,
+        -0.3,
+        0.5,
+        0.4,
+        0.1,
+        -0.1,
+        0.3,
+        0.0,
+        0.5,
+        0.2
+      ],
+      "intents": [
+        "watch_kols",
+        "panic_observe",
+        "lean_in",
+        "wait_for_more_info",
+        "wait_for_more_info",
+        "lean_out",
+        "observe",
+        "observe",
+        "lean_in",
+        "watch_kols"
+      ],
+      "reactions": [
+        {
+          "persona_id": "retail_aunt",
+          "sentiment": 0.2,
+          "action_intent": "watch_kols",
+          "comment": "我又想起2018年被套牢的事了，毛利率下降让我有点担心。"
+        },
+        {
+          "persona_id": "chive",
+          "sentiment": -0.3,
+          "action_intent": "panic_observe",
+          "comment": "毛利率下降，感觉要跌了，赶紧观察一下！"
+        },
+        {
+          "persona_id": "youzi",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "销量超预期，资金流向可能会好转，值得关注。"
+        },
+        {
+          "persona_id": "xueqiu_kol",
+          "sentiment": 0.4,
+          "action_intent": "wait_for_more_info",
+          "comment": "巴菲特说过，短期波动不代表长期价值，需耐心观察。"
+        },
+        {
+          "persona_id": "analyst",
+          "sentiment": 0.1,
+          "action_intent": "wait_for_more_info",
+          "comment": "业绩超预期，但毛利率下降需关注，建议继续观察后续数据。"
+        },
+        {
+          "persona_id": "northbound",
+          "sentiment": -0.1,
+          "action_intent": "lean_out",
+          "comment": "毛利率下降，政策不确定性增加，可能会影响资金流入。"
+        },
+        {
+          "persona_id": "policy",
+          "sentiment": 0.3,
+          "action_intent": "observe",
+          "comment": "管理层提到的产品结构优化值得关注，可能会改善毛利。"
+        },
+        {
+          "persona_id": "quant",
+          "sentiment": 0.0,
+          "action_intent": "observe",
+          "comment": "数据波动不大，需继续监测vol和momentum。"
+        },
+        {
+          "persona_id": "kol_blogger",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "销量增长和海外订单提升是好消息，值得深入分析。"
+        },
+        {
+          "persona_id": "pe_research",
+          "sentiment": 0.2,
+          "action_intent": "watch_kols",
+          "comment": "管理层的表态很重要，需关注后续的市场反应。"
+        }
+      ],
+      "elapsed_seconds": 14.48,
+      "cost_usd": 0.0005,
+      "prompt_tokens": 711,
+      "completion_tokens": 669
+    },
+    {
+      "model": "gpt-4o",
+      "status": "ok",
+      "system_fingerprint": "fp_af7f7349a4",
+      "n_reactions": 10,
+      "sentiment_mean": 0.18,
+      "sentiment_std": 0.214,
+      "sentiments": [
+        -0.3,
+        0.2,
+        0.1,
+        0.5,
+        0.3,
+        0.2,
+        0.4,
+        0.0,
+        0.3,
+        0.1
+      ],
+      "intents": [
+        "panic_observe",
+        "lean_in",
+        "observe",
+        "lean_in",
+        "wait_for_more_info",
+        "watch_kols",
+        "observe",
+        "observe",
+        "lean_in",
+        "wait_for_more_info"
+      ],
+      "reactions": [
+        {
+          "persona_id": "retail_aunt",
+          "sentiment": -0.3,
+          "action_intent": "panic_observe",
+          "comment": "毛利率又降了，2018年套牢的阴影还在。"
+        },
+        {
+          "persona_id": "chive",
+          "sentiment": 0.2,
+          "action_intent": "lean_in",
+          "comment": "销量超预期，感觉有戏！但毛利率有点拉胯，心里有点慌。"
+        },
+        {
+          "persona_id": "youzi",
+          "sentiment": 0.1,
+          "action_intent": "observe",
+          "comment": "龙虎榜看资金流，暂时不动。"
+        },
+        {
+          "persona_id": "xueqiu_kol",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "销量超预期是好事，巴菲特说过，长期看竞争力更重要。"
+        },
+        {
+          "persona_id": "analyst",
+          "sentiment": 0.3,
+          "action_intent": "wait_for_more_info",
+          "comment": "销量超预期，但毛利率低于预期，需观察产品结构优化效果。"
+        },
+        {
+          "persona_id": "northbound",
+          "sentiment": 0.2,
+          "action_intent": "watch_kols",
+          "comment": "Earnings beat on volume, but margin pressure and FX cost are concerns."
+        },
+        {
+          "persona_id": "policy",
+          "sentiment": 0.4,
+          "action_intent": "observe",
+          "comment": "海外订单占比提升，政策支持新能源出口或有后续动作。"
+        },
+        {
+          "persona_id": "quant",
+          "sentiment": 0.0,
+          "action_intent": "observe",
+          "comment": "Momentum neutral, vol stable, skew slightly negative."
+        },
+        {
+          "persona_id": "kol_blogger",
+          "sentiment": 0.3,
+          "action_intent": "lean_in",
+          "comment": "销量超预期，海外市场扩张是亮点，但毛利率压力需关注。"
+        },
+        {
+          "persona_id": "pe_research",
+          "sentiment": 0.1,
+          "action_intent": "wait_for_more_info",
+          "comment": "管理层提到产品结构优化，下游反馈需进一步验证。"
+        }
+      ],
+      "elapsed_seconds": 11.82,
+      "cost_usd": 0.0084,
+      "prompt_tokens": 711,
+      "completion_tokens": 661
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "status": "ok",
+      "system_fingerprint": "fp_b6f445fc1c",
+      "n_reactions": 10,
+      "sentiment_mean": 0.3,
+      "sentiment_std": 0.245,
+      "sentiments": [
+        -0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.3,
+        0.2,
+        0.4,
+        0.1,
+        0.5,
+        0.3
+      ],
+      "intents": [
+        "lean_out",
+        "lean_in",
+        "lean_in",
+        "observe",
+        "wait_for_more_info",
+        "watch_kols",
+        "observe",
+        "observe",
+        "lean_in",
+        "wait_for_more_info"
+      ],
+      "reactions": [
+        {
+          "persona_id": "retail_aunt",
+          "sentiment": -0.3,
+          "action_intent": "lean_out",
+          "comment": "销量好是好，但毛利下降让我想起2018年套牢的痛。"
+        },
+        {
+          "persona_id": "chive",
+          "sentiment": 0.4,
+          "action_intent": "lean_in",
+          "comment": "销量爆了，毛利掉了，感觉有点割韭菜的节奏，稳住别慌！"
+        },
+        {
+          "persona_id": "youzi",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "资金流入明显，龙虎榜活跃，短线有机会。"
+        },
+        {
+          "persona_id": "xueqiu_kol",
+          "sentiment": 0.6,
+          "action_intent": "observe",
+          "comment": "巴菲特说过，短期波动不改长期价值，销量增长是好信号。"
+        },
+        {
+          "persona_id": "analyst",
+          "sentiment": 0.3,
+          "action_intent": "wait_for_more_info",
+          "comment": "销量超预期但毛利率下滑，维持观望，关注下半年产品结构调整效果。"
+        },
+        {
+          "persona_id": "northbound",
+          "sentiment": 0.2,
+          "action_intent": "watch_kols",
+          "comment": "Sales growth strong but margin pressure and FX hedging cost raise concerns, policy risk remains."
+        },
+        {
+          "persona_id": "policy",
+          "sentiment": 0.4,
+          "action_intent": "observe",
+          "comment": "管理层强调产品结构优化，符合政策导向，长期看好行业调整。"
+        },
+        {
+          "persona_id": "quant",
+          "sentiment": 0.1,
+          "action_intent": "observe",
+          "comment": "销量增长带动动量，毛利率下降影响波动率，需关注后续数据变化。"
+        },
+        {
+          "persona_id": "kol_blogger",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "销量创新高但毛利压力显现，宁德时代价格联盟带来成本松动预期。"
+        },
+        {
+          "persona_id": "pe_research",
+          "sentiment": 0.3,
+          "action_intent": "wait_for_more_info",
+          "comment": "调研显示下游需求强劲，管理层措辞谨慎，关注产品结构调整落实情况。"
+        }
+      ],
+      "elapsed_seconds": 15.2,
+      "cost_usd": 0.0014,
+      "prompt_tokens": 711,
+      "completion_tokens": 701
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model gpt-4.1-nano under group default (distributor) (request id: 2026040716070110102323N0nsqetw)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 9.1,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model claude-haiku-4-5 under group default (distributor) (request id: 2026040716071097768275168lI3vBL)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 13.48,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "qwen-plus",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model qwen-plus under group default (distributor) (request id: 20260407160720381960435qIkMYJ6n)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 9.26,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model gemini-2.5-flash under group default (distributor) (request id: 20260407160730292627724XVMGkYbc)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 9.91,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "deepseek-chat",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model deepseek-chat under group default (distributor) (request id: 20260407160739756715951hjW57nQk)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 10.36,
+      "cost_usd": 0.0
+    }
+  ],
+  "cross_family_mean": 0.22,
+  "cross_family_std": 0.057,
+  "avg_within_family_std": 0.236,
+  "verdict": {
+    "outcome": "multi_family_does_not_help",
+    "reason": "cross_family_std=0.057 ≤ 0.15 AND avg within-family std=0.236 < 0.30 — all 4 families converge on the same read AND none of them produce much intra-panel diversity. The correlated hallucination is not a yourapi.cn routing artifact; it's a fundamental property of same-training-data LLMs on ambiguous A-share events",
+    "next_step": "pivot architecture: inject disagreement by construction — force one persona to steel-man the bear case, another to steel-man the bull case, using prompt engineering rather than hoping models disagree"
+  },
+  "total_cost_usd": 0.0103,
+  "run_at": "2026-04-07T16:07:39.892847+00:00"
+}

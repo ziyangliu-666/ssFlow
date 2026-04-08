@@ -1,0 +1,152 @@
+{
+  "event_hash": "001611c9e343c003",
+  "event_text": "比亚迪 (002594) 2026 年第一季度业绩公告:\n  - 新能源汽车销量 132 万辆, 同比增长 +18% (市场一致预期 +12%, 超预期)\n  - 毛利率 17.8%, 同比下降 2.3 个百分点 (市场一致预期持平, 低于预期)\n  - 海外订单占比提升至 23%, 但汇率对冲成本上升\n  - 公司管理层在问答环节表示 \"下半年会通过产品结构优化逐步缓解毛利压力\"\n  - 同日宁德时代公布价格联盟协议, 行业整体成本端有松动预期",
+  "models_tested": [
+    "gpt-4o-mini",
+    "claude-haiku-4-5",
+    "qwen-plus",
+    "gemini-2.5-flash"
+  ],
+  "models_ok": [
+    "gpt-4o-mini"
+  ],
+  "models_failed": [
+    "claude-haiku-4-5",
+    "qwen-plus",
+    "gemini-2.5-flash"
+  ],
+  "per_model": [
+    {
+      "model": "gpt-4o-mini",
+      "status": "ok",
+      "system_fingerprint": "fp_eb37e061ec",
+      "n_reactions": 10,
+      "sentiment_mean": 0.19,
+      "sentiment_std": 0.262,
+      "sentiments": [
+        0.2,
+        -0.3,
+        0.5,
+        0.4,
+        0.1,
+        -0.1,
+        0.3,
+        0.0,
+        0.6,
+        0.2
+      ],
+      "intents": [
+        "watch_kols",
+        "panic_observe",
+        "lean_in",
+        "wait_for_more_info",
+        "observe",
+        "wait_for_more_info",
+        "watch_kols",
+        "observe",
+        "lean_in",
+        "lean_out"
+      ],
+      "reactions": [
+        {
+          "persona_id": "retail_aunt",
+          "sentiment": 0.2,
+          "action_intent": "watch_kols",
+          "comment": "我又想起2018年被套牢的经历了，心里不安。"
+        },
+        {
+          "persona_id": "chive",
+          "sentiment": -0.3,
+          "action_intent": "panic_observe",
+          "comment": "哎呀，毛利率下降，感觉要跌了，心慌慌！"
+        },
+        {
+          "persona_id": "youzi",
+          "sentiment": 0.5,
+          "action_intent": "lean_in",
+          "comment": "销量超预期，资金流向不错，值得关注。"
+        },
+        {
+          "persona_id": "xueqiu_kol",
+          "sentiment": 0.4,
+          "action_intent": "wait_for_more_info",
+          "comment": "巴菲特说过，短期波动不代表长期价值，需观察。"
+        },
+        {
+          "persona_id": "analyst",
+          "sentiment": 0.1,
+          "action_intent": "observe",
+          "comment": "业绩超预期，但毛利率下降，需进一步分析。"
+        },
+        {
+          "persona_id": "northbound",
+          "sentiment": -0.1,
+          "action_intent": "wait_for_more_info",
+          "comment": "政策不确定性加大，需谨慎观察后续动向。"
+        },
+        {
+          "persona_id": "policy",
+          "sentiment": 0.3,
+          "action_intent": "watch_kols",
+          "comment": "管理层的表态值得关注，可能会影响政策导向。"
+        },
+        {
+          "persona_id": "quant",
+          "sentiment": 0.0,
+          "action_intent": "observe",
+          "comment": "数据波动不大，继续监测vol和momentum。"
+        },
+        {
+          "persona_id": "kol_blogger",
+          "sentiment": 0.6,
+          "action_intent": "lean_in",
+          "comment": "销量增长和成本松动，故事很吸引人！"
+        },
+        {
+          "persona_id": "pe_research",
+          "sentiment": 0.2,
+          "action_intent": "lean_out",
+          "comment": "管理层的表态需验证，短期不急于行动。"
+        }
+      ],
+      "elapsed_seconds": 7.7,
+      "cost_usd": 0.0005,
+      "prompt_tokens": 711,
+      "completion_tokens": 652
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model claude-haiku-4-5 under group default (distributor) (request id: 20260407160458776561023sSfnAGCI)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 9.25,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "qwen-plus",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model qwen-plus under group default (distributor) (request id: 20260407160508898713052w7fomN24)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 12.21,
+      "cost_usd": 0.0
+    },
+    {
+      "model": "gemini-2.5-flash",
+      "status": "error",
+      "error_type": "InternalServerError",
+      "error_message": "Error code: 503 - {'error': {'code': 'model_not_found', 'message': 'No available channel for model gemini-2.5-flash under group default (distributor) (request id: 20260407160518898363062DNbPkifu)', 'type': 'new_api_error'}}",
+      "elapsed_seconds": 9.16,
+      "cost_usd": 0.0
+    }
+  ],
+  "cross_family_mean": 0.0,
+  "cross_family_std": 0.0,
+  "avg_within_family_std": 0.0,
+  "verdict": {
+    "outcome": "insufficient_data",
+    "reason": "fewer than 2 models completed successfully",
+    "next_step": "investigate the failed model(s), retry"
+  },
+  "total_cost_usd": 0.0005,
+  "run_at": "2026-04-07T16:05:17.380029+00:00"
+}
