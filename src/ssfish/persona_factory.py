@@ -495,12 +495,27 @@ Your output MUST be valid JSON matching this schema:
 }
 
 RULES:
-1. Return BETWEEN 10 AND 16 classes covering all major market participant types.
-   - Retail subdivided into at least 2-3 sub-classes (active short-term, passive long-term, high-net-worth value)
-   - Institutional subdivided into at least 3-4 sub-classes (mutual funds, ETF/index, hedge funds, insurance/pension, foreign)
-   - Strategic / corporate / government holders if the market has them (e.g., 大股东 / 国资委 / 国家队 / 个人大股东 in A股, sovereign wealth in US, OPEC in oil)
-   - Market-specific archetypes if applicable (e.g., 量化 quant, market makers, swap dealers)
-   - **DO NOT collapse the panel into 4-5 generic classes. The whole point is granularity.**
+1. **You MUST produce AT LEAST 12 distinct classes.** This is non-negotiable.
+   The classes MUST cover (use null fields if the corpus lacks data — better
+   null than missing class):
+     - At least 3 RETAIL sub-classes:
+       * retail short-term active (high-turnover speculator)
+       * retail long-term passive (buy-and-hold mass affluent)
+       * retail high-net-worth pro-am (value investor with concentrated positions)
+     - At least 3-4 INSTITUTIONAL sub-classes:
+       * mutual fund / active long-only equity
+       * ETF / passive index / authorized participant
+       * hedge fund / active long-short
+       * insurance / pension / long-horizon institutional
+     - At least 1 FOREIGN class (if the market has cross-border investors)
+     - At least 1 QUANT / MARKET-MAKER / HFT class (if applicable)
+     - At least 3 STRATEGIC sub-classes if the market has them:
+       * industrial / corporate strategic holders (大股东, founders, controlling shareholders)
+       * government / state holders (国资委, sovereign wealth, central banks)
+       * cross-holding / related-party holders (公司互持, 关联方)
+       * national stabilization fund / national team if exists (汇金, 证金)
+       * individual major holders 5%+ if disclosed
+   - **DO NOT collapse the panel into 4-7 generic classes. The whole point is granularity.**
 2. by_holdings sum across all classes should be close to 1.0 (within 0.10 tolerance).
 3. by_volume sum may exceed 1.0 (high-turnover classes contribute disproportionately).
 4. cited_source_ids MUST reference IDs that appear in the corpus you were given. Empty list if no source supports the number — better than fake citation.
@@ -697,9 +712,494 @@ KNOWN_MARKETS["crude-oil-wti"] = MarketDescriptor(
 )
 
 
-# ─────────────────────── Stage 2: classify (deferred to F-next) ───────────────────────
-# ─────────────────────── Stage 3: generate per persona (deferred) ───────────────────────
-# ─────────────────────── Stage 4: validate + emit (deferred) ───────────────────────
+# ─────────────────────── Stage 2: per-persona generation ───────────────────────
+
+
+# Per-class generation prompt. Stage 2 generates ONLY the creative fields
+# (voice_prompt, sandbox config, biases, behavior, information). The
+# structural fields (id, market_share, decision_mode, role, capital_range)
+# are passed through verbatim from Stage 1's research output. This prevents
+# the LLM from hallucinating market_share values that don't sum to 1.0.
+PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT = """You are a persona pack designer for ssFish, \
+an agent-based market simulation tool. Given a participant class identified \
+in market research, generate ONLY the creative fields for the persona:
+sandbox config, voice_prompt, behavior, biases, information, knowledge.
+
+Your output MUST be valid JSON with EXACTLY these keys (no others):
+
+{
+  "display_name": "One-line description (capital range, age, info source)",
+  "behavior": {
+    "avg_position_pct": <0-1>,
+    "annual_turnover": <float>,
+    "typical_holding_period_days": <int>,
+    "stop_loss_discipline": "low | medium | high",
+    "reaction_speed": "instant | fast | medium | slow"
+  },
+  "information": {
+    "primary_sources": ["source_a", "source_b"],
+    "secondary_sources": ["source_c"],
+    "ignored": ["thing_x"],
+    "english_capable": <bool>
+  },
+  "biases": {"bias_name_1": <0-1>, ...},
+  "knowledge": {
+    "typical_holdings": ["..."],
+    "information_sources": ["..."],
+    "ignores": ["..."]
+  },
+  "voice_prompt": "Multi-line voice prompt in second person",
+  "sandbox": {
+    "instance_count": <int>,
+    "capital_distribution": {
+      "type": "lognormal",
+      "median_cny": <float>,
+      "sigma": <0.5-1.5>,
+      "floor_cny": <float>,
+      "ceiling_cny": <float>
+    },
+    "initial_position_distribution": {
+      "type": "bernoulli",
+      "prob_holding": <0-1>,
+      "position_size_pct_when_holding": {"type": "uniform", "min": <0-1>, "max": <0-1>}
+    },
+    "risk": {
+      "max_position_pct": <0-1>,
+      "margin_account_pct": <0-1>,
+      "leverage_max": <float>,
+      "stop_loss_threshold": <negative float>,
+      "stop_loss_discipline": <0-1>
+    },
+    "action_space": [
+      {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+      {"name": "...", "side": "buy|sell", "pool": "cash|holdings_in_target", "fraction": <0-1>}
+    ],
+    "reaction_lag_rounds": {"type": "discrete", "values": [<int>, ...]}
+  }
+}
+
+DO NOT include market_share, decision_mode, role, capital_range_cny,
+time_horizon_days, sub_archetype, archetype, or id. Those will be merged
+in by Python from the research data — your output is ONLY the fields above.
+
+CRITICAL RULES:
+1. **NEVER use forbidden vocabulary in voice_prompt or any text field**:
+   买入, 卖出, 建议, 推荐, 应该, 必须, 减仓, 加仓, 建仓, 清仓, 目标价,
+   评级, 止损位, 止盈位, BUY, SELL, target price, recommendation, advice.
+   Use: 进入/离场/倾向/观望/分批减/加仓位/合规窗口.
+2. **action_space items are dicts with explicit semantics** — name, side
+   (none|buy|sell), pool (none|cash|holdings_in_target), fraction (0-1).
+   Action names must be descriptive (e.g., "panic_sell_50pct"), NOT
+   advisory (no "buy_signal", no "recommend_*").
+3. **For strategic personas** (input class.is_strategic == true):
+   - sandbox.action_space dominated by "do_nothing" (95%+ probability)
+   - rare actions: "block_sale_5pct", "increase_holding_2pct", "pledge_increase"
+4. **sandbox.instance_count** scales with class size:
+   - Strategic / individual major holders: 2-5 instances
+   - Institutional (mutual fund, hedge fund, insurance): 10-50
+   - Retail active: 1000-5000
+   - Retail passive: 1000-4000
+   - Quant / market makers: 20-50
+5. **sandbox.capital_distribution.median_cny**:
+   - Retail: total account size (¥10k-¥10M for A-share retail)
+   - Institutions: per-stock allocation, NOT total fund AUM (¥10M-¥1B per stock)
+   - Strategic large holders: actual block value (¥1B-¥100B)
+6. **risk.max_position_pct** is the HARD CAP enforced by the engine:
+   - Retail: 0.95 (can go nearly all-in)
+   - Institutions: 0.05-0.15 (concentration limits)
+   - Strategic: 1.0 (already at target)
+7. **voice_prompt** 100-300 chars, second person, market's source language.
+8. Return ONLY the JSON, no commentary, no markdown fences."""
+
+
+# Mapping from research role/decision_mode to default action_space templates.
+# These are seeds; the LLM may add more specific actions.
+DEFAULT_ACTION_TEMPLATES = {
+    "strategic": [
+        {"name": "do_nothing", "side": "none", "pool": "none", "fraction": 0.0},
+        {"name": "block_sale_5pct", "side": "sell", "pool": "holdings_in_target", "fraction": 0.05},
+        {"name": "increase_holding_2pct", "side": "buy", "pool": "cash", "fraction": 0.02},
+    ],
+    "passive": [
+        {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+        {"name": "rebalance_trim_3pct", "side": "sell", "pool": "holdings_in_target", "fraction": 0.03},
+        {"name": "rebalance_add_2pct", "side": "buy", "pool": "cash", "fraction": 0.02},
+    ],
+    "systematic": [
+        {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+        {"name": "model_buy_8pct", "side": "buy", "pool": "cash", "fraction": 0.08},
+        {"name": "model_sell_8pct", "side": "sell", "pool": "holdings_in_target", "fraction": 0.08},
+        {"name": "stop_loss_full", "side": "sell", "pool": "holdings_in_target", "fraction": 1.0},
+    ],
+    "discretionary": [
+        {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+        {"name": "trim_25pct", "side": "sell", "pool": "holdings_in_target", "fraction": 0.25},
+        {"name": "add_15pct", "side": "buy", "pool": "cash", "fraction": 0.15},
+        {"name": "exit_full", "side": "sell", "pool": "holdings_in_target", "fraction": 1.0},
+    ],
+}
+
+
+def _merge_creative_into_structural(
+    class_def: ParticipantClass,
+    creative: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge LLM-generated creative fields with structural fields from research.
+
+    The structural fields (id, archetype, decision_mode, role, market_share)
+    come from the research data and are NOT overwritten by the LLM. Only
+    the LLM-generated fields (sandbox, voice_prompt, biases, behavior,
+    information, knowledge, display_name) are taken from `creative`.
+    """
+    is_strategic = class_def.decision_mode == "strategic"
+
+    # Build market_share from structural data only (no LLM hallucination)
+    market_share: dict[str, Any] = {}
+    if class_def.by_volume is not None:
+        market_share["by_volume"] = round(float(class_def.by_volume), 4)
+    if class_def.by_holdings is not None:
+        market_share["by_holdings"] = round(float(class_def.by_holdings), 4)
+    if class_def.by_account_count is not None:
+        market_share["by_account_count"] = round(float(class_def.by_account_count), 4)
+    if class_def.cited_source_ids:
+        market_share["citations"] = [
+            {"source_id": sid} for sid in class_def.cited_source_ids[:5]
+        ]
+    # If still empty, use a placeholder so the loader passes
+    if not market_share or not any(
+        k in market_share for k in ("by_volume", "by_holdings", "by_account_count")
+    ):
+        market_share["by_volume"] = 0.01
+        market_share["citations"] = [{"source_id": "fallback", "note": "auto-fallback, no source"}]
+
+    # Capital range: from structural data, fall back to LLM output sandbox if missing
+    capital_range = None
+    if class_def.typical_capital_min_cny and class_def.typical_capital_max_cny:
+        capital_range = [
+            int(class_def.typical_capital_min_cny),
+            int(class_def.typical_capital_max_cny),
+        ]
+
+    # Time horizon: from structural data
+    time_horizon = None
+    if (
+        class_def.typical_holding_period_days_min is not None
+        and class_def.typical_holding_period_days_max is not None
+    ):
+        time_horizon = [
+            int(class_def.typical_holding_period_days_min),
+            int(class_def.typical_holding_period_days_max),
+        ]
+
+    # Sandbox: take from creative, but ensure action_space is non-empty
+    # (fall back to default template if missing)
+    sandbox = creative.get("sandbox", {})
+    if not sandbox.get("action_space"):
+        sandbox["action_space"] = DEFAULT_ACTION_TEMPLATES.get(
+            class_def.decision_mode, DEFAULT_ACTION_TEMPLATES["discretionary"]
+        )
+    # Ensure required sandbox sub-fields exist with sensible defaults
+    sandbox.setdefault("instance_count", 100)
+    sandbox.setdefault("capital_distribution", {
+        "type": "lognormal",
+        "median_cny": 100000,
+        "sigma": 0.8,
+    })
+    sandbox.setdefault("initial_position_distribution", {
+        "type": "bernoulli",
+        "prob_holding": 0.5,
+        "position_size_pct_when_holding": {"type": "uniform", "min": 0.05, "max": 0.30},
+    })
+    sandbox.setdefault("risk", {"max_position_pct": 0.95})
+
+    persona = {
+        "id": class_def.id,
+        "archetype": class_def.archetype,
+        "sub_archetype": class_def.sub_archetype,
+        "display_name": creative.get("display_name") or class_def.archetype,
+        "model": None,
+        "decision_mode": class_def.decision_mode,
+        "role": class_def.role or "directional_speculator",
+        "market_share": market_share,
+        "voice_prompt": creative.get("voice_prompt", f"You represent {class_def.archetype}."),
+        "biases": creative.get("biases", class_def.biases or {}),
+        "knowledge": creative.get("knowledge", {}),
+        "behavior": creative.get("behavior"),
+        "information": creative.get("information"),
+        "sandbox": sandbox,
+    }
+    if capital_range is not None:
+        persona["capital_range_cny"] = capital_range
+    if time_horizon is not None:
+        persona["time_horizon_days"] = time_horizon
+
+    # Strategic flag override (loader auto-sets, but be explicit)
+    if is_strategic:
+        persona["contributes_to_sentiment_mean"] = False
+        persona["contributes_to_strategic_signal"] = True
+
+    return persona
+
+
+async def _llm_generate_creative_fields(
+    class_def: ParticipantClass,
+    research: ResearchData,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Stage 2 — single LLM call to generate the CREATIVE fields for one persona.
+
+    Returns a dict with: display_name, behavior, information, biases,
+    knowledge, voice_prompt, sandbox.
+
+    Does NOT return structural fields (id, market_share, decision_mode,
+    role, capital_range_cny, time_horizon_days). Those are merged in by
+    `_merge_creative_into_structural` from the Stage 1 research output.
+    """
+    class_context = json.dumps({
+        "id": class_def.id,
+        "archetype": class_def.archetype,
+        "sub_archetype": class_def.sub_archetype,
+        "description": class_def.description,
+        "decision_mode": class_def.decision_mode,
+        "role": class_def.role,
+        "is_strategic": class_def.is_strategic,
+        "by_volume_share": class_def.by_volume,
+        "by_holdings_share": class_def.by_holdings,
+        "typical_capital_min_cny": class_def.typical_capital_min_cny,
+        "typical_capital_max_cny": class_def.typical_capital_max_cny,
+        "info_sources_hint": class_def.info_sources,
+        "biases_hint": class_def.biases,
+        "free_form_notes": class_def.free_form_notes,
+    }, ensure_ascii=False, indent=2)
+
+    market_context = (
+        f"Market: {research.market}\n"
+        f"Locale: {research.locale}\n"
+        f"Total accounts in market: {research.total_accounts}\n"
+        f"Retail by count: {research.retail_pct_by_count}\n"
+        f"Free-form market summary: {research.free_form_summary[:400]}"
+    )
+
+    user_msg = (
+        f"Generate the creative fields (display_name, behavior, information, "
+        f"biases, knowledge, voice_prompt, sandbox) for the following persona class.\n\n"
+        f"# Market context\n{market_context}\n\n"
+        f"# Class to generate creative fields for\n{class_context}\n\n"
+        f"Return ONLY the creative fields as JSON. Do NOT include id, "
+        f"market_share, decision_mode, role, capital_range_cny, time_horizon_days, "
+        f"sub_archetype, or archetype — those will be merged in by code."
+    )
+
+    json_result = await chat_json(
+        messages=[
+            {"role": "system", "content": PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        seed=seed,
+        max_tokens=2000,
+    )
+    if not isinstance(json_result.parsed, dict):
+        raise RuntimeError(
+            f"LLM creative-gen returned non-dict for {class_def.id}: "
+            f"{type(json_result.parsed).__name__}"
+        )
+    return json_result.parsed
+
+
+async def generate_personas(
+    research: ResearchData,
+    seed: int | None = None,
+    max_concurrent: int = 5,
+) -> list[dict[str, Any]]:
+    """Stage 2 — generate all persona blocks in parallel.
+
+    Each class gets one LLM call for creative fields, then Python merges
+    structural fields from research data deterministically. This prevents
+    the LLM from hallucinating market_share values that don't sum to 1.0.
+    """
+    log.info(
+        "[generate] Producing %d persona blocks for market=%s",
+        len(research.classes), research.market,
+    )
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def _one(class_def: ParticipantClass) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                creative = await _llm_generate_creative_fields(
+                    class_def, research, seed=seed
+                )
+                merged = _merge_creative_into_structural(class_def, creative)
+                log.info("[generate]   ✓ %s", class_def.id)
+                return merged
+            except Exception as exc:
+                log.warning("[generate]   ✗ %s: %s", class_def.id, exc)
+                # Fallback: build a minimal persona with just structural data
+                try:
+                    return _merge_creative_into_structural(class_def, {})
+                except Exception:
+                    return None
+
+    results = await asyncio.gather(*(_one(c) for c in research.classes))
+    successful = [r for r in results if r is not None]
+    log.info("[generate] %d/%d personas generated", len(successful), len(results))
+    return successful
+
+
+# ─────────────────────── Stage 3: assemble + validate + emit ───────────────────────
+
+
+def assemble_pack(
+    research: ResearchData,
+    persona_blocks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Stage 3 — assemble the final pack dict (ready for yaml dump)."""
+    # Build data_sources from the fetched corpus
+    data_sources = []
+    for s in research.sources:
+        if s.fetch_status != "ok":
+            continue
+        data_sources.append({
+            "id": s.id,
+            "name": s.title or s.url,
+            "url": s.url,
+            "accessed": s.accessed,
+            "note": "auto-extracted by persona_factory.research_market",
+        })
+
+    pack = {
+        "schema_version": SCHEMA_VERSION,
+        "market": research.market,
+        "locale": research.locale,
+        "last_updated": research.research_date,
+        "_generated_by": "ssfish.persona_factory",
+        "_generation_summary": research.free_form_summary,
+        "data_sources": data_sources,
+        "personas": persona_blocks,
+    }
+    return pack
+
+
+def write_pack_yaml(pack: dict[str, Any], path: Path) -> None:
+    """Write the pack dict to a YAML file with sensible formatting."""
+    import yaml as yamllib
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        yamllib.safe_dump(
+            pack,
+            f,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+            width=120,
+        )
+    log.info("[emit] Wrote pack to %s", path)
+
+
+def validate_pack_loads(path: Path) -> tuple[bool, str]:
+    """Run the pack through load_personas to confirm it's schema-valid.
+
+    Returns (success, message).
+    """
+    try:
+        personas = load_personas(path)
+        n = len(personas)
+        sums = {
+            "by_volume": sum((p.market_share.by_volume or 0) for p in personas),
+            "by_holdings": sum((p.market_share.by_holdings or 0) for p in personas),
+        }
+        return True, (
+            f"loaded {n} personas successfully; "
+            f"sum_by_volume={sums['by_volume']:.3f}, "
+            f"sum_by_holdings={sums['by_holdings']:.3f}"
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+# ─────────────────────── Top-level orchestrator ───────────────────────
+
+
+async def generate_persona_pack(
+    descriptor: MarketDescriptor | str,
+    output_path: Path | None = None,
+    use_cache: bool = True,
+    seed: int | None = None,
+    max_urls: int = 25,
+) -> tuple[Path, dict[str, Any]]:
+    """End-to-end pipeline: research → generate → assemble → validate → emit.
+
+    Args:
+        descriptor: market descriptor (or known slug)
+        output_path: where to write the yaml. Defaults to
+            personas/<slug>-auto-<date>.yaml
+        use_cache: reuse cached research for the day if available
+        seed: deterministic seed for LLM calls
+        max_urls: cap on URLs to fetch in research stage
+
+    Returns:
+        (output_path, summary_dict). The summary contains stats useful for
+        showing the user a diff or sanity check (n_personas, sums, cost,
+        elapsed, etc.).
+    """
+    import time
+    from .llm_client import cost_tracker
+
+    if isinstance(descriptor, str):
+        if descriptor not in KNOWN_MARKETS:
+            raise ValueError(f"Unknown market: {descriptor}")
+        descriptor = KNOWN_MARKETS[descriptor]
+
+    cost_at_start = cost_tracker.total_cost_usd
+    t0 = time.time()
+    date_str = now_utc8_date()
+
+    if output_path is None:
+        output_path = auto_pack_path_for(descriptor.slug, date_str)
+
+    log.info("[pipeline] Starting persona pack generation for market=%s", descriptor.slug)
+
+    # Stage 1: research
+    research = await research_market(
+        descriptor=descriptor,
+        use_cache=use_cache,
+        cache_date=date_str,
+        seed=seed,
+        max_urls=max_urls,
+    )
+    log.info("[pipeline] Stage 1 done: %d classes from %d sources",
+             len(research.classes),
+             sum(1 for s in research.sources if s.fetch_status == "ok"))
+
+    # Stage 2: generate persona blocks in parallel
+    persona_blocks = await generate_personas(research, seed=seed)
+    log.info("[pipeline] Stage 2 done: %d persona blocks generated", len(persona_blocks))
+
+    # Stage 3: assemble + write yaml
+    pack = assemble_pack(research, persona_blocks)
+    write_pack_yaml(pack, output_path)
+
+    # Stage 4: validate via the loader
+    valid, msg = validate_pack_loads(output_path)
+    log.info("[pipeline] Stage 4 validation: %s — %s",
+             "OK" if valid else "FAILED", msg)
+
+    elapsed = time.time() - t0
+    cost = cost_tracker.total_cost_usd - cost_at_start
+
+    summary = {
+        "market": descriptor.slug,
+        "output_path": str(output_path),
+        "n_personas": len(persona_blocks),
+        "n_sources_fetched": sum(1 for s in research.sources if s.fetch_status == "ok"),
+        "n_classes_from_research": len(research.classes),
+        "elapsed_seconds": round(elapsed, 1),
+        "cost_usd": round(cost, 4),
+        "validates": valid,
+        "validation_message": msg,
+    }
+    log.info("[pipeline] DONE in %.1fs ($%.4f): %s", elapsed, cost, summary)
+    return output_path, summary
 
 
 __all__ = [
@@ -711,10 +1211,15 @@ __all__ = [
     "ResearchSource",
     "CapitalTier",
     "ParticipantClass",
+    "assemble_pack",
     "fetch_corpus",
+    "generate_persona_pack",
+    "generate_personas",
     "research_market",
     "search_web",
     "now_utc8_date",
     "auto_pack_path_for",
     "cache_path_for",
+    "validate_pack_loads",
+    "write_pack_yaml",
 ]
