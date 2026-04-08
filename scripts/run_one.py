@@ -125,6 +125,8 @@ async def amain() -> int:
         cost_usd=result.cost_usd,
         elapsed_seconds=result.elapsed_seconds,
         simulation_id=result.simulation_id,
+        round_fingerprints=result.round_fingerprints,
+        llm_seed=result.llm_seed,
     )
 
     print(f"# done in {result.elapsed_seconds:.1f}s, "

@@ -15,6 +15,7 @@ Output: SimulationResult with all rounds' reactions, costs, elapsed time.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import time
 import uuid
@@ -25,6 +26,9 @@ from .config import settings
 from .event import Event
 from .llm_client import chat_json, cost_tracker
 from .persona import Persona
+
+
+log = logging.getLogger(__name__)
 
 
 # ─────────────────────── Data classes ───────────────────────
@@ -40,13 +44,43 @@ class Reaction:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any], fallback_id: str = "unknown") -> "Reaction":
+        """Build a Reaction from a dict, tolerating malformed fields.
+
+        Retrospective finding: the prior version called `float(d.get("sentiment"))`
+        unwrapped, so a misbehaving LLM returning `"sentiment": "-0.3 to +0.1"`
+        would crash the entire round. Now each field has a safe-coerce path
+        with a neutral fallback, and misformatted fields are logged.
+        """
+        persona_id = str(d.get("persona_id") or fallback_id)
+
+        sentiment = _safe_float(d.get("sentiment", 0.0), default=0.0, field="sentiment", persona_id=persona_id)
+        confidence = _safe_float(d.get("confidence", 0.5), default=0.5, field="confidence", persona_id=persona_id)
+
         return cls(
-            persona_id=str(d.get("persona_id") or fallback_id),
-            sentiment=_clamp(float(d.get("sentiment", 0.0)), -1.0, 1.0),
+            persona_id=persona_id,
+            sentiment=_clamp(sentiment, -1.0, 1.0),
             action_intent=str(d.get("action_intent", "observe")),
             comment=str(d.get("comment", "")).strip()[:280],
-            confidence=_clamp(float(d.get("confidence", 0.5)), 0.0, 1.0),
+            confidence=_clamp(confidence, 0.0, 1.0),
         )
+
+
+def _safe_float(value: Any, *, default: float, field: str, persona_id: str) -> float:
+    """Coerce value to float. On failure log a warning and return default."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        log.warning(
+            "Reaction.from_dict: persona=%s field=%s value=%r could not be "
+            "coerced to float, using default=%s",
+            persona_id,
+            field,
+            value,
+            default,
+        )
+        return default
 
 
 @dataclass
@@ -58,6 +92,12 @@ class SimulationResult:
     elapsed_seconds: float
     cost_usd_at_start: float
     cost_usd_at_end: float
+    # Provider metadata captured per round — used for reproducibility hashing.
+    # Each entry is the `system_fingerprint` the provider returned for that
+    # round's LLM call (or None if the provider did not expose one).
+    round_fingerprints: list[str | None] = field(default_factory=list)
+    # The seed that was actually passed to the LLM API (for reproducibility).
+    llm_seed: int | None = None
 
     @property
     def cost_usd(self) -> float:
@@ -192,52 +232,139 @@ def _build_round_n_prompt(
 # ─────────────────────── Round runner ───────────────────────
 
 
-def _coerce_reactions(
-    parsed: dict[str, Any] | list[Any],
-    personas: list[Persona],
-) -> list[Reaction]:
-    """Turn whatever the LLM returned into a list of N reactions, one per persona.
+def _neutral_reaction(persona_id: str) -> Reaction:
+    """A Reaction used when the LLM output had no row for this persona."""
+    return Reaction(
+        persona_id=persona_id,
+        sentiment=0.0,
+        action_intent="observe",
+        comment="(no response, neutral fallback)",
+        confidence=0.0,
+    )
 
-    Tolerates: {'reactions': [...]} or just [...]. Aligns by persona_id when possible,
-    falls back to positional alignment, and fills missing with neutral defaults.
+
+def _normalize_items(parsed: dict[str, Any] | list[Any]) -> list[Any]:
+    """Pull the list of reaction dicts out of whatever shape the LLM returned.
+
+    Accepts:
+      - {"reactions": [...]}
+      - {"data": [...]}
+      - [...]  (bare list)
+      - anything else → []
     """
     if isinstance(parsed, dict):
         items = parsed.get("reactions") or parsed.get("data") or []
     else:
         items = parsed
-
     if not isinstance(items, list):
-        items = []
+        return []
+    return items
+
+
+def _coerce_reactions(
+    parsed: dict[str, Any] | list[Any],
+    personas: list[Persona],
+) -> list[Reaction]:
+    """Turn whatever the LLM returned into exactly N reactions, one per persona.
+
+    Retrospective-refactored alignment logic (both Codex and the independent
+    Claude subagent flagged the prior version for silently corrupting
+    attribution). The new rules:
+
+    1. **Match by id first.** An item is matched to a persona iff the item's
+       `persona_id` field exactly equals that persona's `id`. Unrecognized
+       ids (hallucinated, typo'd) are NOT matched — they go to the unmatched
+       bucket. Duplicate matches keep the first only; later duplicates also
+       go to unmatched.
+
+    2. **Positional fallback only consumes unmatched items.** Any persona
+       that didn't get an id-match takes the next unconsumed item from the
+       unmatched bucket, in the order the LLM returned them. Each unmatched
+       item is consumed at most once. This fixes the prior bug where an
+       id-matched item could be reused via positional fallback.
+
+    3. **Neutral fallback for truly missing personas.** If a persona is not
+       matched by id and the unmatched bucket is exhausted, a neutral
+       `Reaction` is synthesized with `confidence=0`. This lets downstream
+       aggregation code treat missing personas explicitly.
+
+    4. **Every fallback is logged at WARNING level** so operators notice
+       degraded simulation quality in production.
+
+    Coverage of the 6 failure modes named in the eng-review:
+      - 11 reactions: the 11th goes to unmatched, may be dropped if all 10
+        personas get id-matches (no-op, safe)
+      - 5 reactions: 5 personas id-matched, 5 get neutral fallback (logged)
+      - 10 reactions with hallucinated ids: all 10 go to unmatched, then
+        all 10 personas consume them positionally (logged per persona)
+      - `reactions` key is dict-not-list: items=[], all neutral (logged)
+      - Missing `reactions` key: items=[], all neutral (logged)
+      - Malformed sentiment type: Reaction.from_dict handles via _safe_float
+    """
+    items = _normalize_items(parsed)
+    persona_ids = {p.id for p in personas}
 
     by_id: dict[str, dict[str, Any]] = {}
-    positional: list[dict[str, Any]] = []
-    for it in items:
-        if not isinstance(it, dict):
+    unmatched: list[dict[str, Any]] = []
+
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            # Non-dict items (e.g., stray strings) can't be reactions at all.
             continue
-        pid = str(it.get("persona_id", "")).strip()
-        if pid:
-            by_id[pid] = it
-        positional.append(it)
+        pid = str(raw_item.get("persona_id", "")).strip()
+        if pid and pid in persona_ids and pid not in by_id:
+            by_id[pid] = raw_item
+        else:
+            # No id, unrecognized id, or duplicate id → positional fallback pool
+            unmatched.append(raw_item)
 
     reactions: list[Reaction] = []
-    for i, p in enumerate(personas):
-        if p.id in by_id:
-            reactions.append(Reaction.from_dict(by_id[p.id], fallback_id=p.id))
-        elif i < len(positional):
-            d = dict(positional[i])
-            d.setdefault("persona_id", p.id)
-            reactions.append(Reaction.from_dict(d, fallback_id=p.id))
-        else:
-            # Missing persona — neutral fallback
-            reactions.append(
-                Reaction(
-                    persona_id=p.id,
-                    sentiment=0.0,
-                    action_intent="observe",
-                    comment="(no response, neutral fallback)",
-                    confidence=0.0,
-                )
+    unmatched_idx = 0
+    fallback_count = 0
+    neutral_count = 0
+
+    for persona in personas:
+        if persona.id in by_id:
+            reactions.append(Reaction.from_dict(by_id[persona.id], fallback_id=persona.id))
+            continue
+
+        # No id-match — try the unmatched pool in order
+        if unmatched_idx < len(unmatched):
+            raw = dict(unmatched[unmatched_idx])
+            unmatched_idx += 1
+            raw["persona_id"] = persona.id  # overwrite any hallucinated id
+            reactions.append(Reaction.from_dict(raw, fallback_id=persona.id))
+            fallback_count += 1
+            log.warning(
+                "_coerce_reactions: persona %s missing by_id, consumed unmatched item #%d",
+                persona.id,
+                unmatched_idx - 1,
             )
+            continue
+
+        # Out of items — synthesize a neutral fallback
+        reactions.append(_neutral_reaction(persona.id))
+        neutral_count += 1
+        log.warning(
+            "_coerce_reactions: persona %s has no row in LLM output (items=%d, "
+            "by_id=%d, unmatched=%d), using neutral fallback",
+            persona.id,
+            len(items),
+            len(by_id),
+            len(unmatched),
+        )
+
+    if fallback_count or neutral_count:
+        log.warning(
+            "_coerce_reactions: alignment degraded: %d id-matched, "
+            "%d positional-fallback, %d neutral-fallback (of %d personas, %d items in)",
+            len(personas) - fallback_count - neutral_count,
+            fallback_count,
+            neutral_count,
+            len(personas),
+            len(items),
+        )
+
     return reactions
 
 
@@ -280,18 +407,22 @@ async def run_simulation(
     rng = random.Random(settings.seed)
     cost_at_start = cost_tracker.total_cost_usd
     t0 = time.time()
+    llm_seed = settings.seed  # passed through to the LLM API for reproducibility
 
     rounds: list[list[Reaction]] = []
+    round_fingerprints: list[str | None] = []
 
     # ── Round 0 ─────────────────────────────────────────────
     r0_messages = _build_round_zero_prompt(event, personas)
-    r0_parsed = await chat_json(
+    r0_result = await chat_json(
         messages=r0_messages,
         model=settings.default_model,
         temperature=settings.temperature,
         max_tokens=2500,
+        seed=llm_seed,
     )
-    rounds.append(_coerce_reactions(r0_parsed, personas))
+    rounds.append(_coerce_reactions(r0_result.parsed, personas))
+    round_fingerprints.append(r0_result.system_fingerprint)
 
     # ── Rounds 1..N-1 ───────────────────────────────────────
     for round_idx in range(1, n_rounds):
@@ -307,13 +438,15 @@ async def run_simulation(
             prior_round=prior,
             n_rounds_total=n_rounds,
         )
-        rn_parsed = await chat_json(
+        rn_result = await chat_json(
             messages=rn_messages,
             model=settings.default_model,
             temperature=settings.temperature,
             max_tokens=2500,
+            seed=llm_seed,
         )
-        rounds.append(_coerce_reactions(rn_parsed, personas))
+        rounds.append(_coerce_reactions(rn_result.parsed, personas))
+        round_fingerprints.append(rn_result.system_fingerprint)
 
     elapsed = time.time() - t0
     return SimulationResult(
@@ -324,6 +457,8 @@ async def run_simulation(
         elapsed_seconds=elapsed,
         cost_usd_at_start=cost_at_start,
         cost_usd_at_end=cost_tracker.total_cost_usd,
+        round_fingerprints=round_fingerprints,
+        llm_seed=llm_seed,
     )
 
 

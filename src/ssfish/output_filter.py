@@ -156,6 +156,12 @@ REPLACEMENTS: dict[str, str] = {
     "应该": "倾向",
     "必须": "需要",
     "不应": "不倾向",
+    # Imperative prefixes (retrospective finding: 请买/请卖 were the two
+    # genuinely unmapped FORBIDDEN_VOCAB entries — longer phrases like 我建议
+    # are implicitly handled by the 建议→倾向 substring match after longest-
+    # first sort, but 请买/请卖 have no shorter substring in this table).
+    "请买": "可进入",
+    "请卖": "可离场",
     # Trading actions
     "买入": "进入",
     "卖出": "离场",
@@ -202,6 +208,42 @@ def sanitize_text(text: str) -> str:
             pattern = re.compile(re.escape(original), re.IGNORECASE)
         out = pattern.sub(replacement, out)
     return out
+
+
+def _assert_all_forbidden_sanitizable() -> None:
+    """Module-load guarantee: every FORBIDDEN_VOCAB entry gets sanitized to a compliant form.
+
+    Runs once at import time. Catches contributor drift where someone adds a
+    new forbidden vocab entry but forgets to add a corresponding REPLACEMENTS
+    rule (either direct or via substring). The check is the round-trip
+    `is_compliant(sanitize_text(token))` for every token in FORBIDDEN_VOCAB —
+    this handles both direct replacements and implicit substring handling
+    (e.g., `持仓建议` is sanitized via the `建议→倾向` substring rule even
+    though `持仓建议` is not itself a key in REPLACEMENTS).
+
+    This is the retrospective fix for the silent-quarantine failure mode:
+    previously, FORBIDDEN_VOCAB and REPLACEMENTS could drift apart without
+    warning, and the first sign of trouble was a quarantined report at
+    runtime. Now, drift fails at import time with a clear error.
+    """
+    unsanitized: list[str] = []
+    for word in FORBIDDEN_VOCAB:
+        # Use the existing regex_filter_violations path through sanitize_text.
+        if regex_filter_violations(sanitize_text(word)):
+            unsanitized.append(word)
+    if unsanitized:
+        raise RuntimeError(
+            "output_filter.REPLACEMENTS is missing sanitization paths for "
+            f"{len(unsanitized)} FORBIDDEN_VOCAB entries: {unsanitized}. "
+            "Add direct entries to REPLACEMENTS (or ensure a shorter substring "
+            "of each unmapped entry is already mapped). See the retrospective "
+            "for context: this assertion prevents the silent-quarantine bug "
+            "where the LLM emits a forbidden token that has no sanitization "
+            "path and the whole report gets quarantined with no actionable info."
+        )
+
+
+_assert_all_forbidden_sanitizable()
 
 
 # ─────────────────────── LLM semantic layer (Day 2 stub) ───────────────────────

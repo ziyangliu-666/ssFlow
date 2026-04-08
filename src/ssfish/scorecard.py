@@ -22,6 +22,8 @@ from typing import Any, Iterator
 from .config import settings
 
 
+SCHEMA_VERSION = 2
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS simulations (
     simulation_id        TEXT PRIMARY KEY,
@@ -47,7 +49,12 @@ CREATE TABLE IF NOT EXISTS simulations (
     -- For T+5 day comparison (manually updated for now)
     actual_first_day_move    REAL,
     actual_first_week_move   REAL,
-    diff_recorded_at         TEXT
+    diff_recorded_at         TEXT,
+    -- Added in schema v2 (retrospective reproducibility fix): capture provider
+    -- fingerprints and the actual seed passed to the LLM API. Old rows will
+    -- have NULL here; new rows populate these.
+    round_fingerprints_json  TEXT,
+    llm_seed                 INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sim_ticker_date ON simulations(event_ticker, event_date);
@@ -55,18 +62,46 @@ CREATE INDEX IF NOT EXISTS idx_sim_event_hash ON simulations(event_text_hash);
 """
 
 
+# Migration helper for existing scorecard.db files that predate v2.
+# Called from _connect() on every connection (idempotent).
+_V2_MIGRATIONS_SQL = [
+    "ALTER TABLE simulations ADD COLUMN round_fingerprints_json TEXT",
+    "ALTER TABLE simulations ADD COLUMN llm_seed INTEGER",
+]
+
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Idempotently add v2 columns to pre-existing v1 databases."""
+    cur = conn.execute("PRAGMA table_info(simulations)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    for alter_sql in _V2_MIGRATIONS_SQL:
+        col_name = alter_sql.split("ADD COLUMN ")[1].split()[0]
+        if col_name not in existing_cols:
+            try:
+                conn.execute(alter_sql)
+            except sqlite3.OperationalError:
+                # Column already exists from a concurrent migration; safe to ignore.
+                pass
+
+
 # ─────────────────────── Connection helper ───────────────────────
 
 
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
-    """Yield a SQLite connection. Creates parent dir + applies schema on demand."""
+    """Yield a SQLite connection. Creates parent dir + applies schema on demand.
+
+    Runs idempotent v1→v2 column migrations before yielding, so existing
+    databases from the initial MVP commit pick up the new reproducibility
+    columns without data loss.
+    """
     db_path = Path(settings.scorecard_db_path).resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA_SQL)
+        _migrate_to_v2(conn)
         yield conn
         conn.commit()
     finally:
@@ -103,10 +138,22 @@ def insert_simulation(
     cost_usd: float,
     elapsed_seconds: float,
     simulation_id: str | None = None,
+    round_fingerprints: list[str | None] | None = None,
+    llm_seed: int | None = None,
 ) -> str:
-    """Insert one simulation row. Returns the simulation_id."""
+    """Insert one simulation row. Returns the simulation_id.
+
+    round_fingerprints / llm_seed were added in schema v2 (retrospective
+    reproducibility fix). The provider's `system_fingerprint` plus the seed
+    we passed to the LLM API are what let us claim "same config fingerprint"
+    reruns. The old `seed` column is kept for backwards compatibility but
+    only records settings.seed (the shuffle seed), not what reached the LLM.
+    """
     sim_id = simulation_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    fingerprints_json = (
+        json.dumps(round_fingerprints) if round_fingerprints is not None else None
+    )
     with _connect() as conn:
         conn.execute(
             """
@@ -117,8 +164,9 @@ def insert_simulation(
                 sentiment_mean, sentiment_std,
                 implied_move_low, implied_move_high, implied_move_confidence,
                 blind_spots_json, full_report_path, cost_usd, elapsed_seconds,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at,
+                round_fingerprints_json, llm_seed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sim_id, event_ticker, event_date, event_type,
@@ -129,6 +177,7 @@ def insert_simulation(
                 json.dumps(blind_spots, ensure_ascii=False),
                 full_report_path, cost_usd, elapsed_seconds,
                 now,
+                fingerprints_json, llm_seed,
             ),
         )
     return sim_id
@@ -176,6 +225,7 @@ def get_simulation(simulation_id: str) -> dict[str, Any] | None:
 
 __all__ = [
     "SCHEMA_SQL",
+    "SCHEMA_VERSION",
     "get_simulation",
     "init_db",
     "insert_simulation",

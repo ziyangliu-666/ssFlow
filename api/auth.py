@@ -1,6 +1,12 @@
 """Single-password basic auth for the Flask app.
 
 Week 0-2 is single-user. Real auth (multi-tenant + tokens) is Week 5+.
+
+SECURITY (retrospective finding): the prior version also accepted the password
+via `?password=...` query parameter. That was a high-severity security gap
+because query params leak into browser history, reverse-proxy access logs,
+Referer headers, and shell history. Query-param mode is now removed. Only
+the `X-Auth-Password` header is accepted.
 """
 
 from __future__ import annotations
@@ -18,13 +24,18 @@ def _expected_password() -> str:
 
 
 def require_password(view: Callable):
-    """Decorator: require X-Auth-Password header or ?password=... query param."""
+    """Decorator: require the X-Auth-Password header to match settings.flask_password."""
 
     @functools.wraps(view)
     def wrapper(*args, **kwargs):
-        provided = request.headers.get("X-Auth-Password") or request.args.get("password")
+        provided = request.headers.get("X-Auth-Password")
         if not provided or provided != _expected_password():
-            return jsonify({"error": "unauthorized", "hint": "set X-Auth-Password header"}), 401
+            return jsonify(
+                {
+                    "error": "unauthorized",
+                    "hint": "pass the X-Auth-Password header (query-param auth is no longer supported)",
+                }
+            ), 401
         return view(*args, **kwargs)
 
     return wrapper

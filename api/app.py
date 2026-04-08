@@ -88,7 +88,7 @@ def create_app() -> Flask:
         display, ok = render_safe_or_quarantine(result, report)
         report_path = save_report(display, result.simulation_id)
 
-        # Persist to scorecard
+        # Persist to scorecard (includes v2 reproducibility columns)
         sim_id = insert_simulation(
             event_ticker=event.ticker,
             event_date=event.event_date,
@@ -109,6 +109,8 @@ def create_app() -> Flask:
             cost_usd=result.cost_usd,
             elapsed_seconds=result.elapsed_seconds,
             simulation_id=result.simulation_id,
+            round_fingerprints=result.round_fingerprints,
+            llm_seed=result.llm_seed,
         )
 
         return jsonify({

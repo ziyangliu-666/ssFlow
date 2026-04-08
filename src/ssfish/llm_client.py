@@ -159,17 +159,41 @@ def _check_budget() -> None:
         )
 
 
+@dataclass
+class ChatResponse:
+    """Rich response wrapper exposing text + provider metadata for reproducibility.
+
+    Added per the retrospective finding that the bare `chat()` return value
+    dropped the provider's `system_fingerprint`, making the scorecard's
+    reproducibility claim dishonest. The fingerprint is what OpenAI (and any
+    compatible proxy) uses to identify a specific deployed model version —
+    together with `seed`, it's the only way to claim bit-identical reruns.
+    """
+
+    content: str
+    model: str
+    system_fingerprint: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
 async def chat(
     messages: list[dict[str, str]],
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int = 2000,
     json_mode: bool = False,
-) -> str:
-    """Single chat completion. Returns the message text content.
+    seed: int | None = None,
+) -> ChatResponse:
+    """Single chat completion. Returns a ChatResponse with text + provider metadata.
 
     Retries up to 3 times on transient API errors with exponential backoff.
     Records cost after each successful call.
+
+    The `seed` argument is passed through to the provider. On OpenAI and
+    yourapi.cn-proxied backends that honor it, identical (seed, fingerprint,
+    temperature, prompt) tuples should produce bit-identical output. The
+    fingerprint is returned so the caller can persist it for later verification.
     """
     _check_budget()
     model = model or settings.default_model
@@ -184,6 +208,8 @@ async def chat(
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    if seed is not None:
+        kwargs["seed"] = seed
 
     async for attempt in AsyncRetrying(
         retry=retry_if_exception_type((APIError, RateLimitError)),
@@ -195,15 +221,30 @@ async def chat(
             response = await client.chat.completions.create(**kwargs)
 
     usage = response.usage
+    prompt_tokens = (usage.prompt_tokens or 0) if usage is not None else 0
+    completion_tokens = (usage.completion_tokens or 0) if usage is not None else 0
     if usage is not None:
-        cost_tracker.record(
-            model,
-            usage.prompt_tokens or 0,
-            usage.completion_tokens or 0,
-        )
+        cost_tracker.record(model, prompt_tokens, completion_tokens)
 
     content = response.choices[0].message.content or ""
-    return content
+    return ChatResponse(
+        content=content,
+        model=model,
+        system_fingerprint=getattr(response, "system_fingerprint", None),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+@dataclass
+class JsonChatResult:
+    """Parsed JSON payload + the provider metadata from the underlying call."""
+
+    parsed: dict[str, Any] | list[Any]
+    model: str
+    system_fingerprint: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 async def chat_json(
@@ -212,7 +253,8 @@ async def chat_json(
     temperature: float | None = None,
     max_tokens: int = 2000,
     retries: int = 2,
-) -> dict[str, Any] | list[Any]:
+    seed: int | None = None,
+) -> JsonChatResult:
     """Chat with JSON-mode parsing fallback.
 
     Tries response_format=json_object first. If parsing fails, tries:
@@ -221,77 +263,107 @@ async def chat_json(
         3. extract outermost JSON object
         4. raise ValueError if retries exhausted
 
-    Returns the parsed JSON (dict or list).
+    Returns a JsonChatResult carrying both the parsed JSON and the provider
+    metadata (model, system_fingerprint, token counts) so callers can persist
+    reproducibility info.
     """
-    last_raw = ""
+    last_response: ChatResponse | None = None
     for attempt in range(retries + 1):
         # First attempt with json_mode; subsequent attempts toggle off in case
         # the upstream proxy doesn't honor response_format
         try:
-            raw = await chat(
+            response = await chat(
                 messages=messages,
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 json_mode=(attempt == 0),
+                seed=seed,
             )
         except APIError as exc:
             # Some yourapi-routed models reject response_format. Retry without it.
             if attempt == 0 and "response_format" in str(exc).lower():
-                raw = await chat(
+                response = await chat(
                     messages=messages,
                     model=model,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     json_mode=False,
+                    seed=seed,
                 )
             else:
                 raise
 
-        last_raw = raw
+        last_response = response
+        raw = response.content
 
-        # Path 1: direct parse
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            pass
-
-        # Path 2: markdown fence
-        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(1).strip())
-            except json.JSONDecodeError:
-                pass
-
-        # Path 3: outer object
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-
-        # Path 4: outer array
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
+        parsed = _parse_json_with_fallbacks(raw)
+        if parsed is not None:
+            return JsonChatResult(
+                parsed=parsed,
+                model=response.model,
+                system_fingerprint=response.system_fingerprint,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+            )
 
         if attempt < retries:
             continue
 
+    last_raw = last_response.content if last_response else ""
     raise ValueError(
         f"Failed to parse JSON after {retries + 1} attempts. Last raw output (truncated): "
         f"{last_raw[:500]}"
     )
 
 
+def _parse_json_with_fallbacks(raw: str) -> dict[str, Any] | list[Any] | None:
+    """Try a chain of increasingly lenient JSON parsers.
+
+    Returns the parsed result on success, None on total failure. The chain:
+      1. direct json.loads(raw)
+      2. markdown fence extraction (```json ... ```)
+      3. outer object regex {...}
+      4. outer array regex [...]
+    """
+    # Path 1: direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Path 2: markdown fence
+    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Path 3: outer object (greedy, grabs first { to last })
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Path 4: outer array
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 __all__ = [
     "BudgetExceeded",
+    "ChatResponse",
     "CostTracker",
+    "JsonChatResult",
     "PRICING_PER_M",
     "chat",
     "chat_json",

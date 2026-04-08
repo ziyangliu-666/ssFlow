@@ -58,12 +58,27 @@ class Settings(BaseSettings):
 
 
 # Module-level singleton. Import this everywhere.
+#
+# Fail-fast policy (retrospective finding: the old silent fallback to
+# "sk-test-placeholder" was the #1 DX bug — it deferred missing-env-var
+# failures to an opaque 401 from yourapi.cn much later in the call chain).
+#
+# Tests set OPENAI_API_KEY via tests/conftest.py at conftest-import time,
+# BEFORE any `import ssfish.config` happens — so tests keep working.
+# Real runs need a real .env file or exported env vars.
 try:
     settings = Settings()  # type: ignore[call-arg]
-except Exception as exc:  # pragma: no cover - bootstrap failure
-    # Allow imports during testing without a real .env (tests use monkeypatch)
-    import os
-
-    os.environ.setdefault("OPENAI_API_KEY", "sk-test-placeholder")
-    settings = Settings()  # type: ignore[call-arg]
-    del exc
+except Exception as exc:
+    raise RuntimeError(
+        "ssFish could not load configuration. Most likely cause: OPENAI_API_KEY "
+        "is not set.\n"
+        "\n"
+        "To fix:\n"
+        "  1. Copy .env.example to .env:   cp .env.example .env\n"
+        "  2. Edit .env and add your key from https://yourapi.cn (or any "
+        "OpenAI-compatible endpoint).\n"
+        "  3. Make sure OPENAI_BASE_URL points to your provider (default: "
+        "https://yourapi.cn/v1).\n"
+        "\n"
+        f"Underlying error: {exc}"
+    ) from exc

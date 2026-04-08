@@ -22,3 +22,6 @@ predictions/
 .idea/
 .vscode/
 *.swp
+
+# Tool working dirs (browser test artifacts, etc.)
+.playwright-mcp/
