@@ -2,14 +2,14 @@
 
 > **Live Scorecard is the moat.** Both Codex and the independent Claude
 > subagent, in the 2026-04-07 retrospective, agreed that the only realistic
-> moat for ssFish vs 同花顺/Wind/东财 is **prospective public scorecarding
+> moat for ssFlow vs 同花顺/Wind/东财 is **prospective public scorecarding
 > with failures published alongside successes**. This entry is #001 in that
 > scorecard. It is being published *before* we know the actual market
 > reaction, so the commitment is verifiable: on T+5 we will fill in the
 > `actual_first_day_move` and `actual_first_week_move` fields no matter
 > which direction the prediction was wrong in.
 >
-> This entry documents an _already-adverse_ data point: ssFish's initial
+> This entry documents an _already-adverse_ data point: ssFlow's initial
 > smoke test produced a strongly bearish simulated panel that the baseline
 > eval (single-round, same event shape) did NOT reproduce — raising a
 > hypothesis the retrospective did not anticipate.
@@ -38,7 +38,7 @@ is suspect.
 
 ## Predictions (by configuration)
 
-### Prediction A: ssFish default config (multi-round convergence)
+### Prediction A: ssFlow default config (multi-round convergence)
 
 Setup: 10 personas from `personas/ashare-v1.yaml`, all `gpt-4o-mini`, 5 rounds,
 batched JSON mode (all 10 personas in one LLM call per round).
@@ -55,7 +55,7 @@ Simulation IDs:
 | implied_move_confidence | 0.61 | 0.59 |
 | histogram (neg/neu/pos) | 10/0/0 | 10/0/0 |
 
-**ssFish default-config prediction:** strongly bearish. Implied range **-6.3% to -4.1%** (confidence 0.59). Neither run produced a single neutral or positive persona. This is the "correlated hallucination in costumes" signal that triggered the retrospective.
+**ssFlow default-config prediction:** strongly bearish. Implied range **-6.3% to -4.1%** (confidence 0.59). Neither run produced a single neutral or positive persona. This is the "correlated hallucination in costumes" signal that triggered the retrospective.
 
 ### Prediction B: baseline eval (single-round, inline personas, cross-family)
 
@@ -77,7 +77,7 @@ Setup: same event text, inline persona descriptions (not the YAML file), single-
 - **avg_within_family_std:** 0.236 (< 0.30 threshold but > smoke test's 0.17)
 - **total cost:** $0.0103
 
-**Baseline eval prediction:** **mildly bullish across all 3 accessible models**, panel mean ~+0.22. Same event, same prompt structure minus the multi-round convergence step. Implied move (using the same heuristic as ssFish: center = weighted_sentiment × 8%, half-width = 0.5 + std × 3.5): roughly **+0.6% to +2.9%** (direction-opposite from Prediction A).
+**Baseline eval prediction:** **mildly bullish across all 3 accessible models**, panel mean ~+0.22. Same event, same prompt structure minus the multi-round convergence step. Implied move (using the same heuristic as ssFlow: center = weighted_sentiment × 8%, half-width = 0.5 + std × 3.5): roughly **+0.6% to +2.9%** (direction-opposite from Prediction A).
 
 ## The divergence — and the hypothesis it forces
 
@@ -85,7 +85,7 @@ Two simulations of the same event produced **opposite directional predictions**:
 
 | Configuration | mean | direction | std |
 |---|---|---|---|
-| ssFish default (10 personas × 5 rounds × gpt-4o-mini) | -0.665 | bearish | 0.17 |
+| ssFlow default (10 personas × 5 rounds × gpt-4o-mini) | -0.665 | bearish | 0.17 |
 | Baseline eval (10 inline personas × 1 round × gpt-4o-mini) | +0.180 | bullish | 0.248 |
 
 **Delta: 0.845 sentiment points. Opposite signs. Higher variance on the single-round run.**
@@ -124,7 +124,7 @@ Three hypotheses explain this:
   to run a simulation when `context_completeness=0%` and warn the user that
   the panel will be unanchored.**
 
-### Prediction C: ssFish default config WITH FULL CONTEXT
+### Prediction C: ssFlow default config WITH FULL CONTEXT
 
 Setup: same `personas/ashare-v1.yaml`, same `gpt-4o-mini`, same 5 rounds —
 but the user filled in all 3 optional context fields via the Flask web form
@@ -149,7 +149,7 @@ range moved from -6.3% to -4.1% (strongly bearish) to -1.8% to +1.3%
 (approximately neutral with mild downside skew).
 
 **Crucially, the sentiment_mean of -0.07 in Prediction C is the most honest
-prediction ssFish can make given the available information.** Real markets on
+prediction ssFlow can make given the available information.** Real markets on
 ambiguous beat-and-miss events do approximately this — they trade in a tight
 range while waiting for the next print.
 
@@ -176,17 +176,17 @@ Week-1 continuation of the baseline eval, refined by the H3 finding.
 
 ## Verdict (verifiable on 2026-04-14)
 
-**ssFish's publicly committed predictions for BYD 002594 following the
+**ssFlow's publicly committed predictions for BYD 002594 following the
 2026-04-09 Q1 earnings announcement are:**
 
 | Config | Setup | Implied range | Confidence |
 |---|---|---|---|
-| **A** | ssFish default (5 rounds, YAML personas, ctx=0%) | **-6.3% to -4.1%** | 0.59 |
+| **A** | ssFlow default (5 rounds, YAML personas, ctx=0%) | **-6.3% to -4.1%** | 0.59 |
 | **B** | Baseline eval (1 round, inline personas, OpenAI family mean) | **+0.6% to +2.9%** | (cross-family std 0.057) |
-| **C** | ssFish default WITH FULL CONTEXT (5 rounds, YAML personas, ctx=100%) | **-1.8% to +1.3%** | 0.63 |
+| **C** | ssFlow default WITH FULL CONTEXT (5 rounds, YAML personas, ctx=100%) | **-1.8% to +1.3%** | 0.63 |
 
 **The three configurations disagree by 7-9 percentage points on direction and
-magnitude.** ssFish cannot, in its current form, be called a single-answer
+magnitude.** ssFlow cannot, in its current form, be called a single-answer
 prediction tool — but Configuration C (the one with the most complete input)
 is the most defensible because it actually uses the information a real
 researcher would have.
@@ -199,7 +199,7 @@ all of them were:**
 - A followup scorecard entry (`002-byd-2026q1-followup.md`) will document
   the comparison and rank the configurations by accuracy.
 - **The configuration that best predicted the actual move becomes the
-  default for ssFish.** This entry locks in the criterion: actual-vs-predicted
+  default for ssFlow.** This entry locks in the criterion: actual-vs-predicted
   on a real ambiguous event, decided by data, not by retrospective opinion.
 - **No post-hoc rationalization.** The predictions are locked at the
   timestamps above. Anyone reading this entry on 2026-04-15 can verify it

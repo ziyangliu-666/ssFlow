@@ -10,7 +10,7 @@ description of intent). The agent does the rest:
   - Looks up current price + ADV
   - Returns an EventProposal that the user can review + edit + confirm
 
-This is the input-side automation that makes ssFish usable for ANY market
+This is the input-side automation that makes ssFlow usable for ANY market
 without the user having to fill 10 form fields manually.
 
 Architecture (3 stages):
@@ -239,7 +239,7 @@ async def _research_context(
 
 SYNTHESIZE_SYSTEM_PROMPT = """You are a market event synthesis agent. Given a \
 preliminary classification and a corpus of web pages about an instrument, produce \
-a complete EventProposal that ssFish can run through its sandbox simulation.
+a complete EventProposal that ssFlow can run through its sandbox simulation.
 
 Output STRICT JSON matching this schema:
 

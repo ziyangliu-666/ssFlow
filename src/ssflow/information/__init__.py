@@ -1,4 +1,4 @@
-"""ssFish information ecosystem layer.
+"""ssFlow information ecosystem layer.
 
 Phase I — supporting types for the OASIS-based information layer:
 

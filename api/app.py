@@ -1,4 +1,4 @@
-"""Flask API for ssFish — sandbox-only.
+"""Flask API for ssFlow — sandbox-only.
 
 Endpoints:
     GET  /healthz                  — no auth, returns {"status": "ok"}
@@ -23,20 +23,20 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from ssfish.config import settings
-from ssfish.event import VALID_EVENT_TYPES, Event
-from ssfish.event_extractor import extract_event
-from ssfish.llm_client import BudgetExceeded, cost_tracker
-from ssfish.oasis_engine import run_simulation
-from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import render_simulation_safe_or_quarantine, save_report
-from ssfish.scorecard import init_db, insert_sandbox_simulation
+from ssflow.config import settings
+from ssflow.event import VALID_EVENT_TYPES, Event
+from ssflow.event_extractor import extract_event
+from ssflow.llm_client import BudgetExceeded, cost_tracker
+from ssflow.oasis_engine import run_simulation
+from ssflow.persona import load_personas, persona_set_hash
+from ssflow.report import render_simulation_safe_or_quarantine, save_report
+from ssflow.scorecard import init_db, insert_sandbox_simulation
 
 from .auth import require_password
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("ssfish.api")
+log = logging.getLogger("ssflow.api")
 
 
 def create_app() -> Flask:
@@ -118,14 +118,14 @@ def create_app() -> Flask:
         if not event.is_sandbox_ready:
             return jsonify({
                 "error": "sandbox_not_ready",
-                "detail": "ssFish requires current_price and adv_value in the request body",
+                "detail": "ssFlow requires current_price and adv_value in the request body",
             }), 400
 
         personas_path = payload.get("personas_path")
         if not personas_path:
             return jsonify({
                 "error": "personas_path_required",
-                "detail": "personas_path must be specified — ssFish has no default market pack",
+                "detail": "personas_path must be specified — ssFlow has no default market pack",
             }), 400
 
         try:

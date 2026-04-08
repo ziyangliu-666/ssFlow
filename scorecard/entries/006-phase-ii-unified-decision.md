@@ -41,10 +41,10 @@ decisions in the same timeline.
 
 | File | Change | LOC |
 |---|---|---|
-| `src/ssfish/oasis_trading_tool.py` (new) | `OrderCollector` + `make_submit_order_tool` | ~210 |
-| `src/ssfish/trading_layer.py` | Extract `apply_distribution_to_agent_pop` pure-math core | +90 / −5 |
-| `src/ssfish/oasis_persona_adapter.py` | Accept `order_collector`, inject tool per trader, trader-specific profile text, `max_iteration=2` for traders | +60 / −3 |
-| `src/ssfish/oasis_engine.py` | Remove separate `decide_orders` path, drain collector after `env.step()`, hold-fallback for traders that didn't call the tool | +40 / −45 |
+| `src/ssflow/oasis_trading_tool.py` (new) | `OrderCollector` + `make_submit_order_tool` | ~210 |
+| `src/ssflow/trading_layer.py` | Extract `apply_distribution_to_agent_pop` pure-math core | +90 / −5 |
+| `src/ssflow/oasis_persona_adapter.py` | Accept `order_collector`, inject tool per trader, trader-specific profile text, `max_iteration=2` for traders | +60 / −3 |
+| `src/ssflow/oasis_engine.py` | Remove separate `decide_orders` path, drain collector after `env.step()`, hold-fallback for traders that didn't call the tool | +40 / −45 |
 | `tests/test_oasis_trading_tool.py` (new) | 15 tests for OrderCollector + FunctionTool + apply_distribution | ~260 |
 
 ## Key design decisions
@@ -132,7 +132,7 @@ the **same CAMEL agent memory**. Coherence is now a structural property.
 
 1. **No OASIS fork needed.** The `tools` parameter + `ALL_SOCIAL_ACTIONS`
    dispatch bypass in `SocialAgent` is the intended extension mechanism.
-   ssFish adds 0 lines to OASIS source.
+   ssFlow adds 0 lines to OASIS source.
 
 2. **Social + trading are one decision.** The trader's CAMEL ChatAgent
    memory contains both the social actions and the trading decisions in

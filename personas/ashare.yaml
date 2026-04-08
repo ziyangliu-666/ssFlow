@@ -3,7 +3,7 @@ market: ashare
 locale: zh-CN
 last_updated: 2026-04-08
 
-# ssFish A 股 persona pack v2
+# ssFlow A 股 persona pack v2
 #
 # Phase B sandbox-mode persona pack. Replaces the v1 vibes-based panel
 # (deleted) with a panel that:
@@ -890,7 +890,7 @@ personas:
       增持托底维持市值". 你的特征:
         - 几乎不交易 (>95% 时间持有不动)
         - 减持有窗口约束: 业绩披露前 30 天 / 重大资产重组前等不能减持
-        - 质押率超过警戒线时会被动平仓 (但 ssFish v1 不模拟这个 cascade)
+        - 质押率超过警戒线时会被动平仓 (但 ssFlow v1 不模拟这个 cascade)
         - 大额减持需要提前 15 个交易日预披露, 触发即冲击
         - 你说话谨慎, 多用财务+合规术语
     # Per-stock calibration: typically 1 controlling shareholder + a few

@@ -2,7 +2,7 @@ schema_version: 3
 market: ashare
 locale: zh-CN
 last_updated: '2026-04-08'
-_generated_by: ssfish.persona_factory
+_generated_by: ssflow.persona_factory
 _generation_summary: A股市场的投资者结构呈现出散户和机构投资者共存的特征。散户账户数超过2.4亿，持股占比约33.51%。机构投资者中，公募基金、保险资金和外资是主要力量，合计持股超过14万亿元。市场正在向多元化和专业化方向发展，散户的市场影响力虽然在下降，但仍然是重要的参与者。
 data_sources:
 - id: https-finance-sina-com-cn-roll-2024-12-22-doc-in

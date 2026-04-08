@@ -3,7 +3,7 @@ market: crude-oil-wti
 locale: en-US
 last_updated: 2026-04-08
 
-# ssFish WTI Crude Oil persona pack v1 (sketch)
+# ssFlow WTI Crude Oil persona pack v1 (sketch)
 #
 # Validates the persona pack v2 schema works for commodity futures markets,
 # not just equities. The CFTC Disaggregated Commitment of Traders report

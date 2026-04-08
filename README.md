@@ -1,4 +1,7 @@
-# ssFish — 市场事件信息生态推演引擎
+# ssFlow — 市场事件信息生态推演引擎
+
+> `ss` = `$$`. This is a **capital-flow** simulator — information goes in,
+> dollars come out as net order flow.
 
 Market event simulation engine where a cast of ~30 AI agents (traders + media +
 analysts + regulators + policy makers + KOLs) read each other's posts, react,
@@ -7,7 +10,7 @@ in a market event; you get back a round-by-round narrative of who said what
 and what happened to the price.
 
 **这不是投资建议工具。** 所有输出都经过合规过滤器, 严格不含具体的买卖建议或目标价。
-详见 `src/ssfish/output_filter.py` 的合规防火墙。
+详见 `src/ssflow/output_filter.py` 的合规防火墙。
 
 ## What it actually does
 
@@ -101,27 +104,27 @@ The typical output reads like a financial media feed, not a spreadsheet.
           reports/{sim_id}.md + scorecard.db + oasis_dbs/*.db
 ```
 
-- **engine**: `src/ssfish/oasis_engine.py` (main async `run_simulation`)
+- **engine**: `src/ssflow/oasis_engine.py` (main async `run_simulation`)
 - **social layer**: OASIS (`camel-oasis` 0.2.5, pulled from PyPI, unforked)
-- **trading layer**: `src/ssfish/trading_layer.py` (pure-Python,
+- **trading layer**: `src/ssflow/trading_layer.py` (pure-Python,
   framework-agnostic — spawn agents, apply actions, Kyle)
-- **LLM adapter**: `src/ssfish/oasis_lm.py` (CAMEL `OpenAICompatibleModel`
+- **LLM adapter**: `src/ssflow/oasis_lm.py` (CAMEL `OpenAICompatibleModel`
   subclass routing through our `cost_tracker` + `output_filter`)
-- **trading tool**: `src/ssfish/oasis_trading_tool.py` (`OrderCollector` +
+- **trading tool**: `src/ssflow/oasis_trading_tool.py` (`OrderCollector` +
   `submit_order_distribution` FunctionTool injected into each trader's
   `SocialAgent`)
-- **persona adapter**: `src/ssfish/oasis_persona_adapter.py` (YAML → OASIS
+- **persona adapter**: `src/ssflow/oasis_persona_adapter.py` (YAML → OASIS
   `AgentGraph` with follow edges + synthetic `__market__` broadcaster)
-- **feed reader**: `src/ssfish/oasis_feed_reader.py` (queries OASIS's SQLite
+- **feed reader**: `src/ssflow/oasis_feed_reader.py` (queries OASIS's SQLite
   db, filters by follow graph, returns list[Publication])
 - **persona packs**: `personas/ashare.yaml` (30 entities, hand-tuned
   follow graph), `personas/us-equity-v1.yaml`, `personas/crude-oil-wti-v1.yaml`
   (sketches)
-- **report renderer**: `src/ssfish/report.py` (feed-first narrative markdown)
+- **report renderer**: `src/ssflow/report.py` (feed-first narrative markdown)
 - **web UI**: `api/app.py` + `web/index.html` (Flask, password-auth, two-step
   form: free-form input → auto-extract → confirm → run)
 - **CLI**: `scripts/run_one.py`
-- **scorecard**: `src/ssfish/scorecard.py` (SQLite v5, tracks every sim
+- **scorecard**: `src/ssflow/scorecard.py` (SQLite v5, tracks every sim
   run + publication log)
 - **tests**: `tests/` — 217 tests, compliance filter + schema loader are
   launch blockers
@@ -137,20 +140,20 @@ cp .env.example .env
 $EDITOR .env
 #   OPENAI_API_KEY=<yourapi.cn key>
 #   OPENAI_BASE_URL=https://yourapi.cn/v1
-#   SSFISH_DEFAULT_MODEL=gpt-4o-mini
-#   SSFISH_PASSWORD=<flask basic auth password>
-#   SSFISH_BUDGET_USD=5.0
+#   SSFLOW_DEFAULT_MODEL=gpt-4o-mini
+#   SSFLOW_PASSWORD=<flask basic auth password>
+#   SSFLOW_BUDGET_USD=5.0
 
 # 3. Run tests (should be 217 passing)
 uv run pytest -q
 
 # 4a. Run a simulation from the command line (free-form input mode)
-SSFISH_BUDGET_USD=5.0 uv run python scripts/run_one.py \
+SSFLOW_BUDGET_USD=5.0 uv run python scripts/run_one.py \
     --input "BYD Q1 2026 财报: 营收 +18% beat, 毛利率 -2.3pp miss" \
     --confirm
 
 # 4b. Or run the Flask web UI
-SSFISH_BUDGET_USD=5.0 uv run python -c \
+SSFLOW_BUDGET_USD=5.0 uv run python -c \
     "from api.app import app; app.run(host='127.0.0.1', port=5000)"
 # Browser: http://127.0.0.1:5000
 # Paste event text → click "分析事件" → review extracted fields → click "运行"
@@ -159,7 +162,7 @@ SSFISH_BUDGET_USD=5.0 uv run python -c \
 ### Explicit parameter mode (skip Stage 0 extractor)
 
 ```bash
-SSFISH_BUDGET_USD=5.0 uv run python scripts/run_one.py \
+SSFLOW_BUDGET_USD=5.0 uv run python scripts/run_one.py \
     --event /dev/stdin \
     --ticker 002594 \
     --event-type earnings \
@@ -184,7 +187,7 @@ a new pack for a different market:
 ```bash
 cp personas/_template.yaml personas/my-market.yaml
 $EDITOR personas/my-market.yaml
-uv run python -c "from ssfish.persona import load_personas; print(len(load_personas('personas/my-market.yaml')))"
+uv run python -c "from ssflow.persona import load_personas; print(len(load_personas('personas/my-market.yaml')))"
 ```
 
 See `personas/SCHEMA.md` for the full field reference.

@@ -38,15 +38,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ssfish.persona import load_personas
-from ssfish.persona_factory import (
+from ssflow.persona import load_personas
+from ssflow.persona_factory import (
     KNOWN_MARKETS,
     MarketDescriptor,
     generate_persona_pack,
 )
 
 
-log = logging.getLogger("ssfish.generate_pack")
+log = logging.getLogger("ssflow.generate_pack")
 
 
 def parse_args() -> argparse.Namespace:

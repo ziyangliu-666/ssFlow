@@ -3,7 +3,7 @@
 Pattern source: /home/rufus/research/agent-coach/src/coach/llm.py
 Adaptations from the source:
     - AsyncOpenAI instead of OpenAI (so simulation can fan out via asyncio)
-    - Reads from ssfish.config.settings (no hardcoded fallback key)
+    - Reads from ssflow.config.settings (no hardcoded fallback key)
     - Extended PRICING dict for multi-family models
     - Tenacity retry on API errors with exponential backoff
     - JSON parsing fallback chain (direct -> markdown fence -> outer braces -> {})
@@ -173,7 +173,7 @@ def _check_budget() -> None:
     if cost_tracker.total_cost_usd >= settings.budget_usd:
         raise BudgetExceeded(
             f"Session cost ${cost_tracker.total_cost_usd:.4f} >= budget ${settings.budget_usd:.2f}. "
-            f"Increase SSFISH_BUDGET_USD or reset {settings.cost_ledger_path}."
+            f"Increase SSFLOW_BUDGET_USD or reset {settings.cost_ledger_path}."
         )
 
 

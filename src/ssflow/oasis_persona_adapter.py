@@ -1,4 +1,4 @@
-"""ssFish Persona → OASIS AgentGraph adapter.
+"""ssFlow Persona → OASIS AgentGraph adapter.
 
 Phase I — bridges our YAML persona schema (v3) to OASIS's social-agent
 graph. The OASIS environment expects an `AgentGraph` of `SocialAgent`

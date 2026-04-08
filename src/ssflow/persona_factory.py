@@ -121,7 +121,7 @@ class MarketDescriptor:
     locale: str = "en-US"
 
 
-# Pre-defined descriptors for markets ssFish ships with.
+# Pre-defined descriptors for markets ssFlow ships with.
 KNOWN_MARKETS: dict[str, "MarketDescriptor"] = {}
 
 # Sources to skip during fetch (paywalls / login walls / known noise)
@@ -139,7 +139,7 @@ FETCH_TIMEOUT_SECONDS = 15
 FETCH_MAX_BYTES = 500_000  # 500 KB cap on a single page
 FETCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36 ssFish-research/0.1"
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36 ssFlow-research/0.1"
 )
 
 # Cost guard: cap on LLM calls per pipeline run
@@ -720,7 +720,7 @@ KNOWN_MARKETS["crude-oil-wti"] = MarketDescriptor(
 # structural fields (id, market_share, decision_mode, role, capital_range)
 # are passed through verbatim from Stage 1's research output. This prevents
 # the LLM from hallucinating market_share values that don't sum to 1.0.
-PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT = """You are a persona pack designer for ssFish, \
+PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT = """You are a persona pack designer for ssFlow, \
 an agent-based market simulation tool. Given a participant class identified \
 in market research, generate ONLY the creative fields for the persona:
 sandbox config, voice_prompt, behavior, biases, information, knowledge.
@@ -1124,7 +1124,7 @@ def assemble_pack(
         "market": research.market,
         "locale": research.locale,
         "last_updated": research.research_date,
-        "_generated_by": "ssfish.persona_factory",
+        "_generated_by": "ssflow.persona_factory",
         "_generation_summary": research.free_form_summary,
         "data_sources": data_sources,
         "personas": persona_blocks,

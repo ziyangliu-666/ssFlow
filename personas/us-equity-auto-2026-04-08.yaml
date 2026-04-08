@@ -2,7 +2,7 @@ schema_version: 3
 market: us-equity
 locale: en-US
 last_updated: '2026-04-08'
-_generated_by: ssfish.persona_factory
+_generated_by: ssflow.persona_factory
 _generation_summary: The U.S. equity market is characterized by a diverse investor structure, with retail investors accounting
   for approximately 52% of households owning stocks. Retail investors are segmented into short-term active traders, long-term
   passive investors, and high-net-worth individuals. Institutional investors, including mutual funds, ETFs, hedge funds, and

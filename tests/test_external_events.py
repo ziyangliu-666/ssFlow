@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ssfish.information.external_events import ExternalEvent, ExternalEventSchedule
+from ssflow.information.external_events import ExternalEvent, ExternalEventSchedule
 
 
 class TestExternalEventSchedule:

@@ -29,7 +29,7 @@ class ExternalEvent:
 
     Attributes:
         round_idx: zero-indexed round at which the event fires (0 = first round)
-        content_type: one of `ssfish.persona.VALID_CONTENT_TYPES`
+        content_type: one of `ssflow.persona.VALID_CONTENT_TYPES`
         author_persona_id: which agent posts this event. Use `"__market__"`
             for events the synthetic market broadcaster sends; use a specific
             persona id (e.g., `"policy_maker_ndrc"`) to attribute it to a

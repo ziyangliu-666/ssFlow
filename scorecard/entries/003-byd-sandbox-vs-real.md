@@ -7,7 +7,7 @@
 
 ## Purpose
 
-This is **the first sandbox-mode prediction recorded by ssFish**. It is the
+This is **the first sandbox-mode prediction recorded by ssFlow**. It is the
 empirical answer to the central question of the Phase A+B build:
 
 > Can a 14-persona, real-data-calibrated, agent-based market sandbox produce
@@ -196,7 +196,7 @@ class voices) and passed the compliance filter.
 
 ---
 
-_This is the first entry recording a falsifiable, physics-grounded ssFish
+_This is the first entry recording a falsifiable, physics-grounded ssFlow
 prediction. The previous entry (#001) was a sentiment-heuristic output that
 could not be directly compared to real prices. This one can. T+5 will tell
 us whether the engine is right._

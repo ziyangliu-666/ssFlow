@@ -3,7 +3,7 @@ market: us-equity
 locale: en-US
 last_updated: 2026-04-08
 
-# ssFish US Equity persona pack v1 (sketch)
+# ssFlow US Equity persona pack v1 (sketch)
 #
 # Validates that the persona pack v2 schema is market-agnostic by translating
 # the same dataclass into US large-cap equity market participants. Less
@@ -16,7 +16,7 @@ last_updated: 2026-04-08
 #
 # IMPORTANT: λ_us_equity = 0.30 (lower than A-share because deeper liquidity).
 # Pass --lambda-market 0.30 to run_sandbox_simulation, or hardcode in the
-# CLI flag override. ssFish defaults to LAMBDA_LITERATURE['ashare'] (0.5)
+# CLI flag override. ssFlow defaults to LAMBDA_LITERATURE['ashare'] (0.5)
 # unless explicitly overridden.
 
 data_sources:

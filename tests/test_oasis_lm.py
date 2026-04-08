@@ -17,10 +17,10 @@ from typing import Any
 
 import pytest
 
-from ssfish import llm_client
-from ssfish.config import settings
-from ssfish.llm_client import BudgetExceeded, CostTracker
-from ssfish.oasis_lm import SsFishCamelModel
+from ssflow import llm_client
+from ssflow.config import settings
+from ssflow.llm_client import BudgetExceeded, CostTracker
+from ssflow.oasis_lm import SsFishCamelModel
 
 
 # ─────────────────────── Helpers ───────────────────────
@@ -56,7 +56,7 @@ def fresh_cost_tracker(monkeypatch):
     """Replace the module-level cost_tracker with a fresh empty one."""
     fresh = CostTracker()
     monkeypatch.setattr(llm_client, "cost_tracker", fresh)
-    import ssfish.oasis_lm as olm
+    import ssflow.oasis_lm as olm
     monkeypatch.setattr(olm, "cost_tracker", fresh)
     return fresh
 
@@ -68,7 +68,7 @@ def lm_with_fake_parent(fresh_cost_tracker, monkeypatch):
     Also patches `oasis_lm.ChatCompletion` to be `_FakeChatCompletion` so the
     `isinstance(response, ChatCompletion)` branch fires for our fake responses.
     """
-    import ssfish.oasis_lm as olm
+    import ssflow.oasis_lm as olm
     monkeypatch.setattr(olm, "ChatCompletion", _FakeChatCompletion)
 
     lm = SsFishCamelModel(model_type="gpt-4o-mini")
@@ -87,7 +87,7 @@ def _patch_run(lm: SsFishCamelModel, response_text: str) -> list[dict]:
 
     # Bypass the OpenAICompatibleModel's _run by patching it directly on this instance
     from camel.models.openai_compatible_model import OpenAICompatibleModel
-    import ssfish.oasis_lm as olm
+    import ssflow.oasis_lm as olm
 
     def fake_run(self, messages, response_format=None, tools=None):
         calls.append({"messages": messages, "tools": tools})

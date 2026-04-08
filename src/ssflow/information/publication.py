@@ -22,13 +22,13 @@ class Publication:
         publication_id: Stable id for the publication. Phase I uses the OASIS
             post_id (an integer) prefixed with `"post:"` so cross-references
             in `references` are unambiguous strings.
-        author_persona_id: ssFish persona id that authored the publication
+        author_persona_id: ssFlow persona id that authored the publication
             (e.g., `"sellside_analyst_citic"`). For the synthetic market
             broadcaster, this is the literal string `"__market__"`.
         author_archetype: human-readable archetype for display in reports
             (e.g., `"卖方分析师(中信建投)"`).
         content_type: one of the values in
-            `ssfish.persona.VALID_CONTENT_TYPES`, plus the special type
+            `ssflow.persona.VALID_CONTENT_TYPES`, plus the special type
             `"market_event"` used by the synthetic market broadcaster.
         text: the publication's body text. Already sanitized through
             `output_filter.sanitize_text` (the OASIS LM adapter handles this

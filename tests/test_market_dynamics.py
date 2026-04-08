@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from ssfish.market_dynamics import (
+from ssflow.market_dynamics import (
     LAMBDA_LITERATURE,
     MAX_DELTA_PCT_PER_ROUND,
     compute_price_impact,

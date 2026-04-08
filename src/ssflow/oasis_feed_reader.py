@@ -146,7 +146,7 @@ def feed_for(
       6. Sort by (authority_weight × recency), return top N
 
     Args:
-        follower_persona_id: ssFish persona id (NOT the oasis agent_id) of the
+        follower_persona_id: ssFlow persona id (NOT the oasis agent_id) of the
             entity we're building a feed for. Typically a trader.
         persona_id_to_oasis_id: returned from `build_agent_graph`.
         agent_graph: the in-memory AgentGraph (source of truth for static follows).

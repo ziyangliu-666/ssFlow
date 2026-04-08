@@ -16,7 +16,7 @@ from typing import Callable
 
 from flask import jsonify, request
 
-from ssfish.config import settings
+from ssflow.config import settings
 
 
 def _expected_password() -> str:

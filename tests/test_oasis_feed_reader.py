@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from oasis.social_agent.agent_graph import AgentGraph
 
-from ssfish.information import Publication
-from ssfish.oasis_feed_reader import (
+from ssflow.information import Publication
+from ssflow.oasis_feed_reader import (
     PublicationMetadata,
     PublicationRegistry,
     _agent_to_user_id_map,

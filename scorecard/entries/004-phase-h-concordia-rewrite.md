@@ -37,7 +37,7 @@ without crashing.
 
 | File | LOC |
 |---|---|
-| `src/ssfish/sandbox.py` | 1141 |
+| `src/ssflow/sandbox.py` | 1141 |
 | `tests/test_sandbox.py` | 1206 |
 | **Total** | **2347** |
 
@@ -45,14 +45,14 @@ without crashing.
 
 | File | LOC | Purpose |
 |---|---|---|
-| `src/ssfish/market_dynamics.py` | ~100 | Lifted Kyle formula + λ literature table |
-| `src/ssfish/concordia_lm.py` | ~200 | Custom Concordia `LanguageModel` routing through `cost_tracker` + `output_filter` |
-| `src/ssfish/concordia_engine.py` | ~340 | Main `run_simulation` orchestrator |
-| `src/ssfish/concordia_persona_adapter.py` | ~140 | Persona → EntityAgent bridge |
-| `src/ssfish/concordia_components/order_action.py` | ~470 | Privileged ActingComponent (does the structured chat_json call) |
-| `src/ssfish/concordia_components/info_action.py` | ~170 | Cascade event emitter |
-| `src/ssfish/concordia_components/strategic_signal.py` | ~170 | Strategic-layer signal |
-| `src/ssfish/concordia_components/observation_log.py` | ~95 | Bounded FIFO observation memory |
+| `src/ssflow/market_dynamics.py` | ~100 | Lifted Kyle formula + λ literature table |
+| `src/ssflow/concordia_lm.py` | ~200 | Custom Concordia `LanguageModel` routing through `cost_tracker` + `output_filter` |
+| `src/ssflow/concordia_engine.py` | ~340 | Main `run_simulation` orchestrator |
+| `src/ssflow/concordia_persona_adapter.py` | ~140 | Persona → EntityAgent bridge |
+| `src/ssflow/concordia_components/order_action.py` | ~470 | Privileged ActingComponent (does the structured chat_json call) |
+| `src/ssflow/concordia_components/info_action.py` | ~170 | Cascade event emitter |
+| `src/ssflow/concordia_components/strategic_signal.py` | ~170 | Strategic-layer signal |
+| `src/ssflow/concordia_components/observation_log.py` | ~95 | Bounded FIFO observation memory |
 | `tests/test_concordia_engine.py` | ~330 | End-to-end with stubbed LM (12 tests) |
 | `tests/test_concordia_lm.py` | ~225 | LM adapter cost / budget / compliance (11 tests) |
 | `tests/test_market_dynamics.py` | ~110 | Kyle formula tests (16 tests, lifted from test_sandbox.py) |
@@ -143,8 +143,8 @@ in `personas/ashare.yaml` tagged with it for the smoke test).
 ## Files actually deleted (verification)
 
 ```bash
-$ ls src/ssfish/sandbox.py tests/test_sandbox.py
-ls: cannot access 'src/ssfish/sandbox.py': No such file or directory
+$ ls src/ssflow/sandbox.py tests/test_sandbox.py
+ls: cannot access 'src/ssflow/sandbox.py': No such file or directory
 ls: cannot access 'tests/test_sandbox.py': No such file or directory
 ```
 

@@ -14,12 +14,12 @@ from typing import Any
 
 import pytest
 
-from ssfish.oasis_trading_tool import (
+from ssflow.oasis_trading_tool import (
     OrderCollector,
     PendingOrder,
     make_submit_order_tool,
 )
-from ssfish.persona import MarketShare, Persona, SandboxConfig
+from ssflow.persona import MarketShare, Persona, SandboxConfig
 
 
 def _make_trader(pid: str = "test_trader") -> Persona:
@@ -230,7 +230,7 @@ class TestApplyDistributionToAgentPop:
 
     def test_basic_flow(self):
         import random
-        from ssfish.trading_layer import apply_distribution_to_agent_pop, spawn_agents
+        from ssflow.trading_layer import apply_distribution_to_agent_pop, spawn_agents
 
         persona = _make_trader("retail")
         # Give them some initial holdings so selling has an effect

@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from ssfish.persona import MarketShare, Persona, SandboxConfig
-from ssfish.trading_layer import (
+from ssflow.persona import MarketShare, Persona, SandboxConfig
+from ssflow.trading_layer import (
     Agent,
     ClassFlowResult,
     apply_action,

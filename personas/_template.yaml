@@ -3,7 +3,7 @@ market: my-market           # required: short slug for this market (ashare, us-e
 locale: en-US               # required: IETF language tag
 last_updated: 2026-04-08    # required: ISO date when data sources were last refreshed
 
-# ssFish persona pack template — copy this file and customize for a new market.
+# ssFlow persona pack template — copy this file and customize for a new market.
 # See personas/SCHEMA.md for the full field reference.
 # See personas/ashare.yaml for a polished 30-entity example
 # (14 traders + 16 information entities).

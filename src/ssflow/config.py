@@ -1,7 +1,7 @@
 """Settings loader. Reads from .env via pydantic-settings.
 
 Usage:
-    from ssfish.config import settings
+    from ssflow.config import settings
     print(settings.openai_base_url)
 """
 
@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """All ssFish runtime configuration. One singleton."""
+    """All ssFlow runtime configuration. One singleton."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -26,20 +26,20 @@ class Settings(BaseSettings):
     openai_base_url: str = Field(default="https://yourapi.cn/v1", alias="OPENAI_BASE_URL")
 
     # ── Simulation knobs ───────────────────────────────────────────────────
-    default_model: str = Field(default="gpt-4o-mini", alias="SSFISH_DEFAULT_MODEL")
-    n_rounds: int = Field(default=5, alias="SSFISH_N_ROUNDS")
-    temperature: float = Field(default=0.0, alias="SSFISH_TEMPERATURE")
-    seed: int = Field(default=42, alias="SSFISH_SEED")
+    default_model: str = Field(default="gpt-4o-mini", alias="SSFLOW_DEFAULT_MODEL")
+    n_rounds: int = Field(default=5, alias="SSFLOW_N_ROUNDS")
+    temperature: float = Field(default=0.0, alias="SSFLOW_TEMPERATURE")
+    seed: int = Field(default=42, alias="SSFLOW_SEED")
 
     # ── Cost guard ─────────────────────────────────────────────────────────
-    budget_usd: float = Field(default=5.0, alias="SSFISH_BUDGET_USD")
-    cost_ledger_path: str = Field(default="./.cost_ledger.json", alias="SSFISH_COST_LEDGER")
+    budget_usd: float = Field(default=5.0, alias="SSFLOW_BUDGET_USD")
+    cost_ledger_path: str = Field(default="./.cost_ledger.json", alias="SSFLOW_COST_LEDGER")
 
     # ── Local storage ──────────────────────────────────────────────────────
-    scorecard_db_path: str = Field(default="./scorecard.db", alias="SSFISH_SCORECARD_DB")
+    scorecard_db_path: str = Field(default="./scorecard.db", alias="SSFLOW_SCORECARD_DB")
 
     # ── Flask basic auth ───────────────────────────────────────────────────
-    flask_password: SecretStr = Field(default=SecretStr("change-me"), alias="SSFISH_PASSWORD")
+    flask_password: SecretStr = Field(default=SecretStr("change-me"), alias="SSFLOW_PASSWORD")
 
     # ── Project paths ──────────────────────────────────────────────────────
     @property
@@ -64,13 +64,13 @@ class Settings(BaseSettings):
 # failures to an opaque 401 from yourapi.cn much later in the call chain).
 #
 # Tests set OPENAI_API_KEY via tests/conftest.py at conftest-import time,
-# BEFORE any `import ssfish.config` happens — so tests keep working.
+# BEFORE any `import ssflow.config` happens — so tests keep working.
 # Real runs need a real .env file or exported env vars.
 try:
     settings = Settings()  # type: ignore[call-arg]
 except Exception as exc:
     raise RuntimeError(
-        "ssFish could not load configuration. Most likely cause: OPENAI_API_KEY "
+        "ssFlow could not load configuration. Most likely cause: OPENAI_API_KEY "
         "is not set.\n"
         "\n"
         "To fix:\n"

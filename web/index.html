@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ssFish — Market Event Simulation Engine</title>
+  <title>ssFlow — Market Event Simulation Engine</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -110,22 +110,22 @@
   </style>
 </head>
 <body>
-  <h1>ssFish — Market Event Simulation Engine</h1>
+  <h1>ssFlow — Market Event Simulation Engine</h1>
 
   <div class="disclaimer">
-    <strong>Research tool / 研究工具:</strong> ssFish does NOT provide investment advice.
+    <strong>Research tool / 研究工具:</strong> ssFlow does NOT provide investment advice.
     All output is from agent-based market simulations of real-data-calibrated participant
-    classes. For research only. ssFish 不提供投资意见, 所有内容基于多 agent 模拟, 仅供研究参考.
+    classes. For research only. ssFlow 不提供投资意见, 所有内容基于多 agent 模拟, 仅供研究参考.
   </div>
 
   <label>Auth password (X-Auth-Password header)</label>
-  <input type="password" id="auth" placeholder="env: SSFISH_PASSWORD">
+  <input type="password" id="auth" placeholder="env: SSFLOW_PASSWORD">
 
   <!-- ============ Stage 0: Free-form input ============ -->
   <div id="step1" class="step">
     <h2>Step 1 — 描述事件 (一段文本即可)</h2>
     <p class="muted">
-      粘贴新闻 / URL / 简短描述. ssFish 会自动 deep research 提取市场, 标的, 类型, 价格, ADV.
+      粘贴新闻 / URL / 简短描述. ssFlow 会自动 deep research 提取市场, 标的, 类型, 价格, ADV.
       <br>e.g. <em>"NVIDIA Q1 2026 earnings beat, data center revenue +75%"</em> ·
       <em>"OPEC+ surprise production cut announced"</em> · <em>"BYD Q1 财报: 营收 +18% beat 但毛利率 -2.3pp miss"</em>
     </p>

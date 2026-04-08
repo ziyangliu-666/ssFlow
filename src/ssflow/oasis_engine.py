@@ -1,4 +1,4 @@
-"""ssFish OASIS engine — the main `run_simulation` entry point.
+"""ssFlow OASIS engine — the main `run_simulation` entry point.
 
 Wires together:
 

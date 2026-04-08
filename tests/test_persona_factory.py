@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ssfish.persona import load_personas
-from ssfish.persona_factory import (
+from ssflow.persona import load_personas
+from ssflow.persona_factory import (
     DEFAULT_ACTION_TEMPLATES,
     GENERIC_RESEARCH_QUESTIONS,
     KNOWN_MARKETS,
@@ -66,7 +66,7 @@ class TestConstants:
                 )
 
     def test_default_action_templates_cover_all_decision_modes(self):
-        from ssfish.persona import VALID_DECISION_MODES
+        from ssflow.persona import VALID_DECISION_MODES
         for mode in VALID_DECISION_MODES:
             assert mode in DEFAULT_ACTION_TEMPLATES, (
                 f"DEFAULT_ACTION_TEMPLATES missing decision_mode: {mode}"
@@ -363,7 +363,7 @@ class TestAssembleAndEmit:
 class TestNormalizeMarketShareSums:
 
     def test_normalize_holdings_to_one(self):
-        from ssfish.persona_factory import _normalize_market_share_sums
+        from ssflow.persona_factory import _normalize_market_share_sums
         blocks = [
             {"market_share": {"by_holdings": 0.5}},
             {"market_share": {"by_holdings": 0.5}},
@@ -374,7 +374,7 @@ class TestNormalizeMarketShareSums:
         assert abs(s - 1.0) < 1e-3  # allow for round(_, 4) precision
 
     def test_normalize_skips_when_already_close(self):
-        from ssfish.persona_factory import _normalize_market_share_sums
+        from ssflow.persona_factory import _normalize_market_share_sums
         blocks = [
             {"market_share": {"by_holdings": 0.4}},
             {"market_share": {"by_holdings": 0.5}},  # sum = 0.9, within 20%
@@ -385,7 +385,7 @@ class TestNormalizeMarketShareSums:
         assert blocks[1]["market_share"]["by_holdings"] == 0.5
 
     def test_normalize_handles_null_dimensions(self):
-        from ssfish.persona_factory import _normalize_market_share_sums
+        from ssflow.persona_factory import _normalize_market_share_sums
         blocks = [
             {"market_share": {"by_holdings": 0.7}},  # one only
             {"market_share": {"by_volume": 0.3}},     # null holdings
@@ -397,7 +397,7 @@ class TestNormalizeMarketShareSums:
         assert blocks[1]["market_share"]["by_volume"] == pytest.approx(1.5, abs=1e-6)
 
     def test_normalize_by_volume_targets_1_5(self):
-        from ssfish.persona_factory import _normalize_market_share_sums
+        from ssflow.persona_factory import _normalize_market_share_sums
         blocks = [
             {"market_share": {"by_volume": 1.0}},
             {"market_share": {"by_volume": 1.0}},
@@ -435,7 +435,7 @@ class TestGeneratePersonasMocked:
             }
 
         monkeypatch.setattr(
-            "ssfish.persona_factory._llm_generate_creative_fields", fake_creative
+            "ssflow.persona_factory._llm_generate_creative_fields", fake_creative
         )
 
         blocks = await generate_personas(research, seed=42)
@@ -458,7 +458,7 @@ class TestGeneratePersonasMocked:
             return {"voice_prompt": "ok"}
 
         monkeypatch.setattr(
-            "ssfish.persona_factory._llm_generate_creative_fields", fake_creative
+            "ssflow.persona_factory._llm_generate_creative_fields", fake_creative
         )
 
         blocks = await generate_personas(research, seed=42)
@@ -478,7 +478,7 @@ class TestEndToEndPipelineMocked:
         """If research is cached, the pipeline skips Stage 1 and runs Stage 2-4."""
         # Place a cached research file
         research = _make_research(n_classes=3)
-        from ssfish.persona_factory import cache_path_for, now_utc8_date
+        from ssflow.persona_factory import cache_path_for, now_utc8_date
 
         # Monkey-patch cache_path_for + auto_pack_path_for to use tmp_path
         date_str = now_utc8_date()
@@ -489,13 +489,13 @@ class TestEndToEndPipelineMocked:
         )
 
         monkeypatch.setattr(
-            "ssfish.persona_factory.cache_path_for",
+            "ssflow.persona_factory.cache_path_for",
             lambda market, date_str: cache_file,
         )
 
         out_yaml = tmp_path / "test-auto.yaml"
         monkeypatch.setattr(
-            "ssfish.persona_factory.auto_pack_path_for",
+            "ssflow.persona_factory.auto_pack_path_for",
             lambda market, date_str: out_yaml,
         )
 
@@ -507,7 +507,7 @@ class TestEndToEndPipelineMocked:
             }
 
         monkeypatch.setattr(
-            "ssfish.persona_factory._llm_generate_creative_fields", fake_creative
+            "ssflow.persona_factory._llm_generate_creative_fields", fake_creative
         )
 
         # Build a descriptor for the test market

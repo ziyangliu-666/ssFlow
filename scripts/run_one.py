@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""CLI runner for one ssFish sandbox simulation.
+"""CLI runner for one ssFlow sandbox simulation.
 
-ssFish runs an agent-based market model: each persona class spawns N
+ssFlow runs an agent-based market model: each persona class spawns N
 stochastic agents with real capital + holdings, an LLM call per class
 returns an action distribution, the sandbox samples agents and aggregates
 into net order flow, then applies the Kyle square-root price impact
@@ -45,14 +45,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ssfish.config import settings
-from ssfish.event import VALID_EVENT_TYPES, Event
-from ssfish.event_extractor import extract_event
-from ssfish.llm_client import cost_tracker
-from ssfish.oasis_engine import run_simulation
-from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import render_simulation_safe_or_quarantine, save_report
-from ssfish.scorecard import init_db, insert_sandbox_simulation
+from ssflow.config import settings
+from ssflow.event import VALID_EVENT_TYPES, Event
+from ssflow.event_extractor import extract_event
+from ssflow.llm_client import cost_tracker
+from ssflow.oasis_engine import run_simulation
+from ssflow.persona import load_personas, persona_set_hash
+from ssflow.report import render_simulation_safe_or_quarantine, save_report
+from ssflow.scorecard import init_db, insert_sandbox_simulation
 
 
 def _read_or_blank(path: str | None) -> str:
@@ -66,12 +66,12 @@ def _read_or_blank(path: str | None) -> str:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="ssFish — run one market sandbox simulation",
+        description="ssFlow — run one market sandbox simulation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Two ways to invoke:
 
-  1. Free-form input (recommended, ssFish auto-extracts everything):
+  1. Free-form input (recommended, ssFlow auto-extracts everything):
        --input "NVIDIA Q1 2026 earnings beat, data center revenue +75% YoY"
        --confirm                  (skip interactive confirm prompt)
 
@@ -83,7 +83,7 @@ Two ways to invoke:
     p.add_argument(
         "--input",
         default=None,
-        help="Free-form input string. ssFish will run the event extractor "
+        help="Free-form input string. ssFlow will run the event extractor "
              "to identify market / instrument / event_type / current price / "
              "ADV automatically. Mutually exclusive with --event.",
     )
@@ -236,7 +236,7 @@ async def amain() -> int:
     personas = load_personas(Path(personas_path))
     init_db()
 
-    print(f"# ssFish run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
+    print(f"# ssFlow run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
     print(f"#   {len(personas)} personas ({sum(1 for p in personas if p.sandbox is not None)} traders + "
           f"{sum(1 for p in personas if p.sandbox is None)} info entities), "
           f"{args.rounds or settings.n_rounds} rounds, model={settings.default_model}",

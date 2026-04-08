@@ -195,5 +195,5 @@ international research; the short-term chaser has `english_capable: false`.
 - **Whenever** the 中登 monthly report shows a major shift in account distribution
 
 Update this file FIRST, then update `ashare.yaml` to match. Run
-`uv run python -c "from ssfish.persona import load_personas; ps = load_personas('personas/ashare.yaml'); print(sum(p.market_share.by_holdings for p in ps))"`
+`uv run python -c "from ssflow.persona import load_personas; ps = load_personas('personas/ashare.yaml'); print(sum(p.market_share.by_holdings for p in ps))"`
 to verify the holdings sum is still ≈ 1.0.

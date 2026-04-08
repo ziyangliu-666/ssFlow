@@ -2,7 +2,7 @@ schema_version: 3
 market: crude-oil-wti
 locale: en-US
 last_updated: '2026-04-08'
-_generated_by: ssfish.persona_factory
+_generated_by: ssflow.persona_factory
 _generation_summary: The WTI crude oil market features a diverse investor structure, including retail investors who engage
   in both short-term active trading and long-term passive strategies. Institutional investors dominate with various strategies,
   including mutual funds, ETFs, and hedge funds. Foreign investors also play a significant role, alongside strategic holders

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ssfish.persona import (
+from ssflow.persona import (
     MarketShare,
     Persona,
     PersonaSchemaError,

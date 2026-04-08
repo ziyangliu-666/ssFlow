@@ -1,4 +1,4 @@
-# ssFish Persona Pack Schema (v3)
+# ssFlow Persona Pack Schema (v3)
 
 This document defines the YAML schema used by `personas/*.yaml` files.
 The current and only supported version is **schema_version: 3**.
@@ -167,7 +167,7 @@ will remember that post next round when it decides whether to buy or sell.
 
 ## Validation
 
-`src/ssfish/persona.py:load_personas()` enforces these rules at load time:
+`src/ssflow/persona.py:load_personas()` enforces these rules at load time:
 
 1. `schema_version` must be exactly `3`
 2. `market`, `locale`, `last_updated`, `data_sources`, `personas` all required

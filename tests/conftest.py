@@ -1,8 +1,8 @@
-"""Shared pytest fixtures for ssFish tests.
+"""Shared pytest fixtures for ssFlow tests.
 
 IMPORTANT: env vars are set at module-import time (below), BEFORE any
-`import ssfish.*` happens in test files. This is required because
-`ssfish/config.py` now fails fast on missing OPENAI_API_KEY instead of
+`import ssflow.*` happens in test files. This is required because
+`ssflow/config.py` now fails fast on missing OPENAI_API_KEY instead of
 falling back to a placeholder — see the retrospective (config.py silent
 fallback was the #1 DX bug).
 """
@@ -16,11 +16,11 @@ import pytest
 
 # ── Module-level env bootstrap (runs before any test module is imported) ──
 # pytest loads conftest.py before collecting/importing test files, so these
-# assignments happen before `from ssfish.X import Y` in any test file triggers
-# `import ssfish.config` (which instantiates `Settings()` at module scope).
+# assignments happen before `from ssflow.X import Y` in any test file triggers
+# `import ssflow.config` (which instantiates `Settings()` at module scope).
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-fake-key-for-tests")
 os.environ.setdefault("OPENAI_BASE_URL", "https://yourapi.cn/v1")
-os.environ.setdefault("SSFISH_PASSWORD", "test-password")
+os.environ.setdefault("SSFLOW_PASSWORD", "test-password")
 
 
 @pytest.fixture(autouse=True)
@@ -28,12 +28,12 @@ def _isolate_env(monkeypatch, tmp_path):
     """Make sure tests don't accidentally pollute the cost ledger or scorecard db."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key-for-tests")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://yourapi.cn/v1")
-    monkeypatch.setenv("SSFISH_COST_LEDGER", str(tmp_path / "cost.json"))
-    monkeypatch.setenv("SSFISH_SCORECARD_DB", str(tmp_path / "scorecard.db"))
-    monkeypatch.setenv("SSFISH_PASSWORD", "test-password")
+    monkeypatch.setenv("SSFLOW_COST_LEDGER", str(tmp_path / "cost.json"))
+    monkeypatch.setenv("SSFLOW_SCORECARD_DB", str(tmp_path / "scorecard.db"))
+    monkeypatch.setenv("SSFLOW_PASSWORD", "test-password")
     # Force settings re-init so per-test paths take effect
-    import ssfish.config
-    ssfish.config.settings = ssfish.config.Settings()  # type: ignore[call-arg]
+    import ssflow.config
+    ssflow.config.settings = ssflow.config.Settings()  # type: ignore[call-arg]
     yield
 
 

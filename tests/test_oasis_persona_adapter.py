@@ -7,7 +7,7 @@ import pytest
 from oasis.social_platform.channel import Channel
 from oasis.social_platform.typing import ActionType
 
-from ssfish.oasis_persona_adapter import (
+from ssflow.oasis_persona_adapter import (
     INFO_ACTIONS,
     MARKET_AGENT_ACTIONS,
     MARKET_AGENT_ID_NAME,
@@ -16,7 +16,7 @@ from ssfish.oasis_persona_adapter import (
     _resolve_follows,
     build_agent_graph,
 )
-from ssfish.persona import MarketShare, Persona, PublishConfig, SandboxConfig
+from ssflow.persona import MarketShare, Persona, PublishConfig, SandboxConfig
 
 
 # ─────────────────────── Fixtures ───────────────────────

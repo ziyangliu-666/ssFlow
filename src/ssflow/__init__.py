@@ -1,4 +1,4 @@
-"""ssFish — A 股事件舆情推演引擎.
+"""ssFlow — A 股事件舆情推演引擎.
 
 Module layout:
     config        - env-driven settings singleton

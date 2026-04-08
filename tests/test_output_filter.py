@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from ssfish.output_filter import (
+from ssflow.output_filter import (
     ComplianceViolation,
     FORBIDDEN_VOCAB,
     assert_compliant,
@@ -154,7 +154,7 @@ def test_chinese_terms_match_anywhere() -> None:
 def test_full_realistic_compliant_report() -> None:
     """A realistic full report should pass cleanly."""
     report = """
-# ssFish 模拟报告
+# ssFlow 模拟报告
 
 ## 群体反应叙事
 模拟显示 1000 个散户中, 73% 倾向负面解读这次公告。短线游资的反应集中在
@@ -176,7 +176,7 @@ def test_full_realistic_compliant_report() -> None:
 def test_full_realistic_violating_report_caught() -> None:
     """A report that slipped a forbidden phrase MUST be caught."""
     report = """
-# ssFish 模拟报告
+# ssFlow 模拟报告
 模拟显示散户群体倾向负面解读. 综合判断, 我建议明天减仓 30% 以避险.
 目标价: ¥120.
 """
@@ -192,7 +192,7 @@ def test_forbidden_vocab_list_is_nonempty_and_unique() -> None:
 # ─────────────────────── Sanitizer tests ───────────────────────
 
 
-from ssfish.output_filter import sanitize_text  # noqa: E402
+from ssflow.output_filter import sanitize_text  # noqa: E402
 
 
 def test_sanitize_replaces_chinese_forbidden_words() -> None:

@@ -1,4 +1,4 @@
-"""CAMEL/OASIS LanguageModel adapter routing through ssFish guard rails.
+"""CAMEL/OASIS LanguageModel adapter routing through ssFlow guard rails.
 
 This module is non-negotiable: every CAMEL LM call made by an OASIS agent
 must hit our `cost_tracker` (so the budget guard fires) and our
@@ -21,7 +21,7 @@ and override `_run` / `_arun` to:
 
 The same singleton (`cost_tracker`) used by `llm_client.chat_sync` /
 `llm_client.chat` is shared here, so:
-  - ssFish trading layer LLM calls (via chat_json_sync) → cost_tracker
+  - ssFlow trading layer LLM calls (via chat_json_sync) → cost_tracker
   - OASIS social layer LLM calls (via SsFishCamelModel)  → cost_tracker
   ... both contribute to the same cumulative budget guard.
 """
@@ -58,7 +58,7 @@ def _check_budget() -> None:
         raise BudgetExceeded(
             f"Session cost ${cost_tracker.total_cost_usd:.4f} >= "
             f"budget ${settings.budget_usd:.2f}. "
-            f"Increase SSFISH_BUDGET_USD or reset {settings.cost_ledger_path}."
+            f"Increase SSFLOW_BUDGET_USD or reset {settings.cost_ledger_path}."
         )
 
 
@@ -100,7 +100,7 @@ def _sanitize_choices_in_place(response: Any) -> None:
 
 
 class SsFishCamelModel(OpenAICompatibleModel):
-    """CAMEL `OpenAICompatibleModel` subclass routing through ssFish guard rails.
+    """CAMEL `OpenAICompatibleModel` subclass routing through ssFlow guard rails.
 
     Use this anywhere CAMEL/OASIS expects a `BaseModelBackend` instance — typically
     when constructing a `SocialAgent`. It's a drop-in replacement for the stock
@@ -113,7 +113,7 @@ class SsFishCamelModel(OpenAICompatibleModel):
         `choice.message.content` before the response is returned)
 
     Pulls API key + base URL from `settings.openai_api_key` + `settings.openai_base_url`
-    by default, so the same env vars used everywhere else in ssFish apply here.
+    by default, so the same env vars used everywhere else in ssFlow apply here.
     """
 
     def __init__(
@@ -124,7 +124,7 @@ class SsFishCamelModel(OpenAICompatibleModel):
         url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        # Default to ssFish's settings if caller didn't override
+        # Default to ssFlow's settings if caller didn't override
         resolved_model = model_type or settings.default_model
         resolved_api_key = api_key or settings.openai_api_key.get_secret_value()
         resolved_url = url or settings.openai_base_url
@@ -181,7 +181,7 @@ class SsFishCamelModel(OpenAICompatibleModel):
 
 
 def build_default_lm() -> SsFishCamelModel:
-    """Convenience constructor returning an LM wired to the default ssFish model."""
+    """Convenience constructor returning an LM wired to the default ssFlow model."""
     return SsFishCamelModel()
 
 

@@ -11,7 +11,7 @@
 
 Phase H built a Concordia-based market simulator with a 1-bit information cascade
 (`InfoEventComponent` — single-sentence broadcasts). The user clarified that
-ssFish should be a **superset of MiroFish** — an information ecosystem first,
+ssFlow should be a **superset of MiroFish** — an information ecosystem first,
 with the market as a downstream consumer of the social state. Phase H's
 "market simulator with a cascade bolt-on" inverted the causality.
 
@@ -19,7 +19,7 @@ Phase I deletes the entire Phase H Concordia layer and rebuilds the simulation
 on top of CAMEL-AI's **OASIS** framework (the same one MiroFish is built on).
 OASIS provides the social primitives natively: follow graph, feed aggregation,
 21 social actions (post, repost, follow, like, comment, search, refresh), and
-SQLite-backed persistence. ssFish adds a trading layer on top that reads each
+SQLite-backed persistence. ssFlow adds a trading layer on top that reads each
 trader's filtered OASIS feed and produces structured order decisions, applies
 Kyle price impact, and posts the new price back into OASIS as a synthetic
 market-event broadcaster post.
@@ -49,14 +49,14 @@ User directive (2026-04-08, UTC+8):
 
 | File | LOC |
 |---|---|
-| `src/ssfish/concordia_engine.py` | 429 |
-| `src/ssfish/concordia_lm.py` | 200 |
-| `src/ssfish/concordia_persona_adapter.py` | 140 |
-| `src/ssfish/concordia_components/__init__.py` | 42 |
-| `src/ssfish/concordia_components/order_action.py` | 608 |
-| `src/ssfish/concordia_components/info_action.py` | 175 |
-| `src/ssfish/concordia_components/strategic_signal.py` | 190 |
-| `src/ssfish/concordia_components/observation_log.py` | 83 |
+| `src/ssflow/concordia_engine.py` | 429 |
+| `src/ssflow/concordia_lm.py` | 200 |
+| `src/ssflow/concordia_persona_adapter.py` | 140 |
+| `src/ssflow/concordia_components/__init__.py` | 42 |
+| `src/ssflow/concordia_components/order_action.py` | 608 |
+| `src/ssflow/concordia_components/info_action.py` | 175 |
+| `src/ssflow/concordia_components/strategic_signal.py` | 190 |
+| `src/ssflow/concordia_components/observation_log.py` | 83 |
 | `tests/test_concordia_engine.py` | 330 |
 | `tests/test_concordia_lm.py` | 225 |
 | **Total deleted** | **2,422 LOC** |
@@ -67,14 +67,14 @@ Plus dependencies removed: `gdm-concordia==2.4.0`, `sentence-transformers>=3.0.0
 
 | File | LOC | Purpose |
 |---|---|---|
-| `src/ssfish/oasis_lm.py` | 200 | `SsFishCamelModel` — CAMEL `OpenAICompatibleModel` subclass routing through `cost_tracker` + `output_filter` |
-| `src/ssfish/oasis_persona_adapter.py` | 270 | Persona YAML → OASIS `AgentGraph` + follow edges + synthetic `__market__` agent |
-| `src/ssfish/oasis_feed_reader.py` | 270 | Query OASIS SQLite db, filter posts by follow graph, return list[Publication] |
-| `src/ssfish/trading_layer.py` | 470 | Pure-Python trading: spawn_agents, apply_action, normalize, decide_orders. Zero framework dep. |
-| `src/ssfish/oasis_engine.py` | 510 | Main `run_simulation` async loop: OASIS social step → trading step → Kyle → price post |
-| `src/ssfish/information/__init__.py` | 20 | Public API for the information types |
-| `src/ssfish/information/publication.py` | 60 | `Publication` dataclass — canonical Python repr of a sim post |
-| `src/ssfish/information/external_events.py` | 75 | Multi-round event schedule for mid-sim policy/news shocks |
+| `src/ssflow/oasis_lm.py` | 200 | `SsFishCamelModel` — CAMEL `OpenAICompatibleModel` subclass routing through `cost_tracker` + `output_filter` |
+| `src/ssflow/oasis_persona_adapter.py` | 270 | Persona YAML → OASIS `AgentGraph` + follow edges + synthetic `__market__` agent |
+| `src/ssflow/oasis_feed_reader.py` | 270 | Query OASIS SQLite db, filter posts by follow graph, return list[Publication] |
+| `src/ssflow/trading_layer.py` | 470 | Pure-Python trading: spawn_agents, apply_action, normalize, decide_orders. Zero framework dep. |
+| `src/ssflow/oasis_engine.py` | 510 | Main `run_simulation` async loop: OASIS social step → trading step → Kyle → price post |
+| `src/ssflow/information/__init__.py` | 20 | Public API for the information types |
+| `src/ssflow/information/publication.py` | 60 | `Publication` dataclass — canonical Python repr of a sim post |
+| `src/ssflow/information/external_events.py` | 75 | Multi-round event schedule for mid-sim policy/news shocks |
 | `tests/test_oasis_lm.py` | 220 | LM adapter cost / budget / sanitization (10 tests) |
 | `tests/test_oasis_persona_adapter.py` | 240 | Adapter graph build (14 tests) |
 | `tests/test_oasis_feed_reader.py` | 290 | DB-driven feed query (16 tests) |
@@ -82,7 +82,7 @@ Plus dependencies removed: `gdm-concordia==2.4.0`, `sentence-transformers>=3.0.0
 | `tests/test_external_events.py` | 80 | Event schedule (5 tests) |
 | **Total created** | **~3,025 LOC** | |
 
-Plus persona schema v3 additions to `src/ssfish/persona.py` (~120 LOC), report.py
+Plus persona schema v3 additions to `src/ssflow/persona.py` (~120 LOC), report.py
 rewrite (~230 LOC), `personas/ashare.yaml` expansion (14 → 30 entities, ~600 lines
 of YAML for the 16 new info personas + follows lists for the 14 existing traders).
 
@@ -178,7 +178,7 @@ to actually move trader decisions.
 ## Files actually deleted (verification)
 
 ```bash
-$ ls src/ssfish/concordia_*.py src/ssfish/concordia_components/ tests/test_concordia*.py
+$ ls src/ssflow/concordia_*.py src/ssflow/concordia_components/ tests/test_concordia*.py
 ls: cannot access ...: No such file or directory
 
 $ uv pip list | grep -i concordia
