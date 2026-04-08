@@ -301,7 +301,7 @@ def _render_round_voices(result: SandboxResult, max_per_round: int = 3) -> str:
             p = by_id.get(cid)
             if not p:
                 continue
-            sign = "买入" if cf.net_flow_cny > 0 else ("卖出" if cf.net_flow_cny < 0 else "观望")
+            sign = "净买盘" if cf.net_flow_cny > 0 else ("净卖盘" if cf.net_flow_cny < 0 else "观望")
             round_lines.append(
                 f"- **{p.archetype}** ({sign} ¥{abs(cf.net_flow_cny) / 1e8:.2f}億): "
                 f"_{sanitize_text(cf.rationale)[:200]}_"
@@ -327,7 +327,7 @@ def render_sandbox_markdown(result: SandboxResult) -> str:
 
 > 本报告由 ssFish 沙箱执行模式生成. 价格轨迹是从模拟订单流中**emerge**的,
 > 不是 sentiment 启发式映射. λ 系数 = {result.lambda_used:.2f} (literature value),
-> ADV = ¥{result.adv_used / 1e8:.0f}億. 输出可与真实 T+1 / T+5 价格直接对账.
+> ADV = ¥{result.adv_cny_used / 1e8:.0f}億. 输出可与真实 T+1 / T+5 价格直接对账.
 
 ---
 
@@ -373,7 +373,7 @@ sentiment 加权 (因为它们的反应是月级而非日级), 但它们的行�
 - 上下文完整度: {event.context_completeness:.0%}
 - 模式: **sandbox** (agent-based market model with Kyle square-root impact)
 - λ used: {result.lambda_used:.3f}
-- ADV used: ¥{result.adv_used / 1e8:.1f}億
+- ADV used: ¥{result.adv_cny_used / 1e8:.1f}億
 - 价格上下界 (历轮): ¥{min(result.price_trajectory):.2f} – ¥{max(result.price_trajectory):.2f}
 - LLM seed: {result.llm_seed}
 - 总订单流 (∑): ¥{sum(r.net_flow_cny for r in result.rounds) / 1e8:+.2f}億

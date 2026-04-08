@@ -68,7 +68,11 @@ CREATE TABLE IF NOT EXISTS simulations (
     lambda_used              REAL,
     adv_used                 REAL
 );
+"""
 
+# Indexes are created AFTER migrations so they can reference v3 columns
+# (e.g., `mode`) on existing v2 databases without crashing.
+INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_sim_ticker_date ON simulations(event_ticker, event_date);
 CREATE INDEX IF NOT EXISTS idx_sim_event_hash ON simulations(event_text_hash);
 CREATE INDEX IF NOT EXISTS idx_sim_mode ON simulations(mode);
@@ -143,6 +147,8 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.executescript(SCHEMA_SQL)
         _migrate_to_v2(conn)
         _migrate_to_v3(conn)
+        # Indexes created AFTER migrations so the mode-index can find its column
+        conn.executescript(INDEX_SQL)
         yield conn
         conn.commit()
     finally:
