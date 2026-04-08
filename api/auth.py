@@ -16,11 +16,14 @@ from typing import Callable
 
 from flask import jsonify, request
 
-from ssflow.config import settings
+# Import the MODULE not the singleton, so tests can swap
+# `ssflow.config.settings` via `monkeypatch` and we'll read the fresh
+# value on each request.
+from ssflow import config as _config
 
 
 def _expected_password() -> str:
-    return settings.flask_password.get_secret_value()
+    return _config.settings.flask_password.get_secret_value()
 
 
 def require_password(view: Callable):

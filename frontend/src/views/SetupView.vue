@@ -233,6 +233,9 @@ async function onStart () {
   display: flex;
   align-items: stretch;
 }
+@media (max-width: 860px) {
+  .setup { flex-direction: column; }
+}
 
 .main {
   flex: 1;
@@ -404,6 +407,18 @@ async function onStart () {
   align-items: center;
   gap: 16px;
   z-index: 10;
+}
+@media (max-width: 860px) {
+  .bottom-bar {
+    left: 0;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+  .bottom-bar .foot-meta { flex-wrap: wrap; gap: 10px; font-size: 11px; }
+  .bottom-bar .base-pack { display: none; }
+  .main { padding: 24px 16px 140px; }
+  .page-h h1 { font-size: 24px; }
+  .cols { gap: 20px; }
 }
 .foot-meta {
   display: flex;

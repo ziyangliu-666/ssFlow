@@ -15,7 +15,14 @@
       <div v-else-if="errorMsg" class="state bad">
         <h1>Can't load this <span class="accent">report</span>.</h1>
         <p class="mono">{{ errorMsg }}</p>
-        <button class="back" type="button" @click="$router.push('/')">← Back to Seed</button>
+        <p v-if="errorStatus === 401" class="auth-hint">
+          Looks like your auth password isn't set or it's wrong.
+          Click <em>Settings</em> in the sidebar, enter the password, and reload.
+        </p>
+        <div class="state-actions">
+          <button class="back" type="button" @click="load">↻ Retry</button>
+          <button class="back ghost" type="button" @click="$router.push('/')">← Back to Seed</button>
+        </div>
       </div>
 
       <div v-else-if="markdown" class="wrap">
@@ -45,8 +52,12 @@
           </div>
           <div class="cell">
             <div class="k">WINNING CLASS</div>
-            <div class="v winning" v-if="summary.winning_class">
-              {{ truncate(summary.winning_class.archetype, 10) }}
+            <div
+              class="v winning"
+              v-if="summary.winning_class"
+              :title="summary.winning_class.archetype"
+            >
+              {{ truncate(summary.winning_class.archetype, 14) }}
             </div>
             <div class="v" v-else>—</div>
             <div class="sub" v-if="summary.winning_class">
@@ -85,6 +96,7 @@ const summary = ref(null)
 const meta = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
+const errorStatus = ref(0)
 
 const rendered = computed(() => {
   if (!markdown.value) return ''
@@ -146,6 +158,7 @@ function truncate (s, n) {
 async function load () {
   loading.value = true
   errorMsg.value = ''
+  errorStatus.value = 0
   try {
     const r = await http.get(`/report/${encodeURIComponent(props.simulationId)}`)
     // The endpoint returns JSON {markdown, summary, meta, simulation_id}.
@@ -164,6 +177,7 @@ async function load () {
     }
   } catch (err) {
     errorMsg.value = err?.response?.data?.error || err.message
+    errorStatus.value = err?.response?.status || 0
   } finally {
     loading.value = false
   }
@@ -189,6 +203,9 @@ onMounted(load)
   display: flex;
   align-items: stretch;
 }
+@media (max-width: 860px) {
+  .report { flex-direction: column; }
+}
 
 .main {
   flex: 1;
@@ -198,6 +215,11 @@ onMounted(load)
 .wrap {
   max-width: 820px;
   margin: 0 auto;
+}
+@media (max-width: 860px) {
+  .main { padding: 28px 16px 40px; }
+  .report-body :deep(h1) { font-size: 26px; }
+  .report-body :deep(h2) { font-size: 18px; }
 }
 
 .state {
@@ -222,8 +244,27 @@ onMounted(load)
   font-size: 12px;
   color: var(--ss-fg-muted);
 }
-.state .back {
+.state .auth-hint {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--ss-accent);
+  background: var(--ss-accent-soft);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ss-fg);
+}
+.state .auth-hint em {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  color: var(--ss-accent);
+}
+.state-actions {
   margin-top: 18px;
+  display: flex;
+  gap: 10px;
+}
+.state .back {
   background: var(--ss-fg);
   color: #fff;
   border: 0;
@@ -232,7 +273,12 @@ onMounted(load)
   font: 500 13px 'Inter', sans-serif;
   cursor: pointer;
 }
-.state .back:hover { background: var(--ss-accent); }
+.state .back.ghost {
+  background: #fff;
+  color: var(--ss-fg);
+  border: 1px solid var(--ss-line-strong);
+}
+.state .back:hover { background: var(--ss-accent); color: #fff; border-color: var(--ss-accent); }
 
 /* Kicker */
 .kicker {
@@ -267,6 +313,34 @@ onMounted(load)
 }
 .summary .cell:last-child { border-right: 0; }
 .summary .cell:first-child { padding-left: 0; }
+
+@media (max-width: 860px) {
+  .summary {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0;
+  }
+  .summary .cell {
+    padding: 14px 14px;
+    border-right: 1px dashed var(--ss-line);
+    border-bottom: 1px dashed var(--ss-line);
+  }
+  .summary .cell:nth-child(2n),
+  .summary .cell:last-child { border-right: 0; }
+  .summary .cell:nth-last-child(-n+2) { border-bottom: 0; }
+  .summary .cell:first-child,
+  .summary .cell:nth-child(3) { padding-left: 0; }
+  .summary .v { font-size: 20px; }
+  .summary .v.winning { font-size: 16px; }
+}
+@media (max-width: 500px) {
+  .summary { grid-template-columns: 1fr; }
+  .summary .cell {
+    border-right: 0;
+    border-bottom: 1px dashed var(--ss-line);
+    padding: 12px 0;
+  }
+  .summary .cell:last-child { border-bottom: 0; }
+}
 .summary .k {
   font-size: 10px;
   color: var(--ss-fg-faint);

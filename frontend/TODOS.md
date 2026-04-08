@@ -1,140 +1,119 @@
-# Frontend follow-ups from 2026-04-08 design review
+# Frontend follow-ups
 
-Status as of **2026-04-08 23:55** — after the full backend audit, Gap 1-4
-fixes, E2E pipeline test, and live Playwright walk-through on the real
-Flask + Vite stack.
+Status as of **2026-04-09** — after three consecutive autonomous QA passes
+(Pass 1 happy path, Pass 2 edges, Pass 3 responsive 1440/1100/860/500,
+Pass 4 keyboard + a11y) against the real Flask + Vite + yourapi.cn stack.
 
-## ✅ Done in this PR (was deferred, now shipped)
+## ✅ Shipped
 
-### 1. ~~Rewrite `SetupView.vue`~~ — shipped in `feat(frontend)` commit
-### 2. ~~Rewrite `SimulationRunView.vue`~~ — shipped in `feat(frontend)` commit
-### 3. ~~Rewrite `ReportView.vue`~~ — shipped in `feat(frontend)` commit
-### 11. ~~Structured report data for the summary strip~~ — Gap 1 fix
-- `GET /report/<id>` now returns `{markdown, summary, meta}` JSON.
-- `summary` carries `initial_price`, `final_price`, `delta_pct`,
-  `net_flow_total`, `winning_class`, `price_trajectory`, `per_class_pnl`.
-- `?format=md` fallback returns raw markdown for legacy clients.
-- Verified against real sim data via `test_e2e_smoke.py` and live
-  Playwright walk-through: summary cells render ¥210.76 / -3.54% /
-  −¥2798.40万 / retail_pa… with correct color coding.
+### Design review cycle (2026-04-08 → 2026-04-09)
 
-### 12. ~~`runExtract` no longer uses `extraText`~~ — Gap 4 fix
-- Removed from `Home.vue`, `api/extract.js`, `store/session.js`.
-- Removed from backend `/extract` request schema in `api/app.py`.
+- **Editorial redesign** — Home, Setup, Run, Report all use the same
+  typography (Inter + Noto Serif SC + Fraunces italic + JetBrains Mono),
+  shared `<WorkflowRail>`, one orange accent per page.
+- **Gap 1** — `/report/<id>` returns `{markdown, summary, meta}` JSON.
+- **Gap 2** — `oasis_engine` emits `persona_thought` before
+  `trade_submitted` within each round (causal order).
+- **Gap 3** — Run page per-class flow shows `archetype`, not
+  `persona_id`.
+- **Gap 4** — dead `extra_text` field removed from both ends.
+- **#10 ⌘K** — global shortcut focuses the composer from anywhere.
+- **#18 truncate 14** — winning-class archetype on the report summary
+  shows 14 chars instead of 10, and gets a hover title attribute for
+  the full string.
 
-### 13. ~~Run page showed persona_id instead of archetype~~ — Gap 3 fix
-- `SimulationRunView.vue` now reads `payload.archetype` off
-  `class_flow_computed` events and keys the per-class flow panel by
-  `persona_id` while displaying the archetype label. Verified via
-  `test_full_pipeline_byd_earnings` (real sim).
+### Autonomous QA cycle (2026-04-09, after sleep request)
 
-### 14. ~~oasis_engine emitted thoughts AFTER trades~~ — Gap 2 fix
-- `run_simulation` now queries publications + emits `persona_thought`
-  events right after `env.step` and BEFORE draining the OrderCollector.
-  Market-broadcaster posts are filtered out of persona_thought (they're
-  already represented by `price_updated`).
-- Verified by the e2e test assertion: within each round, all
-  `persona_thought` indices must be strictly less than any
-  `trade_submitted` index.
+- **#4 file restoration** — When the user returns to Home from Setup
+  (back nav, router push, or page reload), previously uploaded files
+  are shown as read-only `restored` chips with a `saved` italic badge.
+  Clicking the × drops the file from the session store too.
+- **#5 composer error banner** — Any failure during
+  /session → /upload → /extract now surfaces a bold red alert banner
+  with: title (`Authentication failed` / `Rate limited` / `Server
+  error` / `Network error`), detail, and — for 401 specifically — a
+  hint pointing the user at the sidebar `Settings` button. Status
+  text is cleared on error so there's no ambiguity.
+- **#6 responsive <860px** — `<aside class="rail">` collapses from a
+  220px left sidebar into a 47px sticky top strip with
+  `flex-direction: row`. Workflow step labels hide on narrow; only the
+  dots + the active step's label + cell show. Sidebar footer
+  (settings + auth input) moves to the right side of the strip.
+- **#6 Home layout <860** — Main padding shrinks, `h1` drops to 30px
+  (24px below 560), composer-foot wraps so the `⌘⏎` hint drops to
+  its own line.
+- **#6 Setup layout <860** — Bottom bar anchors to `left: 0` instead
+  of `left: var(--ss-sidebar-w)`. Event-form and persona-grid stack.
+  `base-pack` metadata hides to save space.
+- **#6 Run layout <1100** — Grid collapses to single-column; live
+  state panel caps at 40vh, timeline scrolls below it. At <860 the
+  whole view becomes vertical scroll (no overflow hidden) with
+  shrunken typography.
+- **#6 Report summary strip** — 4-col at ≥860, 2-col (2×2) at 860-500,
+  1-col stacked at <500. Never overflows horizontally.
+- **#7 a11y landmarks** — `<nav aria-label="Workflow steps">` wraps
+  the workflow rail. `<main aria-label="Seed the simulation">` on
+  Home. Brand link has `aria-label="ssFlow home"`. Rail `<ol>` items
+  carry `aria-current="step"` on the active one.
+- **#7 focus indicators** — Every keyboard-tabbable element on Home
+  has a visible `:focus-visible` ring:
+  - `submit` button: orange box-shadow halo (outline: none)
+  - `ta` textarea: inset orange box-shadow (composer border is
+    secondary indicator via `:focus-within`)
+  - `brand` link: orange box-shadow + underline
+  - `paperclip`, `gear`, `example`: default browser outline
+  Verified via a headless Chromium Tab-navigation test — **every
+  tabbable element has a visible focus indicator**.
+- **#7 whole-card click** — `PersonaCard` article now has
+  `role="button"`, `tabindex="0"`, `aria-expanded`, Enter/Space
+  keyboard toggle, and an `onCardClick` handler that bails out only
+  when the click lands on an input/textarea/button/body element.
+  Previously only the `header.p-h` region was clickable.
+- **#15 Report 401 UX** — Report error state now shows a specific
+  "Auth not set" hint with a `Settings` pointer when the error is a
+  401. Added a `Retry` button alongside the existing `← Back to Seed`.
+- **#16 Vite `/report/` proxy regression guard** — The autonomous
+  Playwright tests exercise `/reports/:id` as a deep link, which
+  catches the proxy-prefix bug if it ever regresses.
+- **Non-TODO bug found & fixed**: `api/auth.py` imported
+  `settings` by name (`from ssflow.config import settings`) which
+  bound the reference at import time. Tests that swap
+  `ssflow.config.settings` via re-init still hit the old object, so
+  the fixture's new password was invisible to the auth decorator.
+  Fixed by importing the module (`from ssflow import config as
+  _config`) and dereferencing on every request. Surfaced because the
+  mixed e2e + non-e2e run broke on the /report endpoint tests.
 
-## High — still open
-
-### 4. File restoration when returning from `/setup`
-- **What:** When the user navigates back from `/setup` to `/`, the
-  `files` ref is empty (only `session.uploadedFiles` has the server-side
-  refs). Show already-uploaded files as read-only chips on the Home
-  composer with a small "remove from session" action.
-- **Why:** Right now hitting back from Setup and then tweaking the prompt
-  silently loses the visual of which files were attached.
-- **File:** `src/views/Home.vue:150`
-
-### 5. Composer error states
-- **What:** Specifically design + build: (a) upload failure (one file
-  succeeds, one fails — which chip gets the error?), (b) URL fetch failure
-  inside `/extract`, (c) auth failure distinct from 500.
-- **Why:** Design review Pass 2 flagged this as partial coverage. Happy
-  path ships; the edges need explicit UI.
-- **File:** `src/views/Home.vue:onStart`
-
-### 6. Responsive below 860px
-- **What:** At widths < 860px, the sidebar should collapse into a horizontal
-  top strip (brand + current step + tap-to-expand for history). Right now
-  the sidebar just takes 220px out of the viewport, which kills mobile.
-- **Why:** Design review Pass 6 flagged responsive as the weakest dimension.
-- **File:** `src/components/WorkflowRail.vue`
-
-## Medium — accessibility
-
-### 7. Landmark roles + keyboard nav audit
-- **What:** Add `<main>` / `<aside>` / `<nav>` landmarks where missing.
-  Verify every interactive element is keyboard-reachable. Add visible
-  focus rings (the composer has one; the submit button, paperclip, and
-  sidebar gear don't). Audit touch target sizes against 44×44 minimum.
-- **Why:** a11y was rated 3/10 in review; we said 5/10 after this PR only
-  because the composer focus state was added. Everything else is still
-  owed.
+## Open — lower priority
 
 ### 8. Color contrast audit
 - **What:** Run the new palette through a WCAG AA checker. Specifically
   verify: `--ss-fg-faint` (#a3a3a3) on white for non-essential text,
   `--ss-accent` (#ff6a00) on white for headlines, `--ss-fg-muted`
   (#6b6b6b) on `--ss-bg-soft` (#f7f7f7) for sidebar sub-labels.
-
-## New — surfaced by the real E2E walk-through
-
-### 15. `ReportView` loses the session when navigating back to `/reports/<id>`
-- **What:** Right now `/reports/<id>` is a stateful route — it needs the
-  auth password in `session.password` to fetch the report. A direct
-  navigation from outside the SPA (e.g. a bookmark or a refresh) works
-  only because the password is in localStorage. If localStorage was
-  cleared, the GET fails with 401 and shows the error state.
-- **Why:** Minor UX paper cut. The error page says "Can't load this
-  report" but doesn't tell the user to set the auth password.
-- **Fix:** On the error branch, if the response status was 401, prompt
-  the user to re-enter the password inline (same UI as the sidebar
-  settings toggle) instead of just a "Back to Seed" button.
-
-### 16. Vite proxy `/report` vs `/reports` bug already fixed — but add a test
-- **What:** I already fixed `vite.config.js` to scope the proxy to
-  `/report/` (trailing slash) so it doesn't eat the frontend router
-  path `/reports/<id>`. Add a tiny smoke test that GETs
-  `http://127.0.0.1:5173/reports/abc` during dev and asserts it returns
-  the SPA index.html, not a 500 from the proxy. Prevents regression.
-
-### 17. `content_type` emoji / markdown in thoughts leaks into the timeline
-- **What:** In the real sim I just ran, one persona_thought text was
-  `"BYD earnings超预期! 🚀感觉市场回暖了，可以关注一下。🤔今年要翻身了！ #股市 #短线追涨 #BYD"`
-  (LLM emitted emoji + hashtags). The timeline renders this raw via
-  `v-html="highlightThought(payload.text)"` with HTML-escaping. It looks
-  fine but the hashtags aren't clickable chips. Low-priority cosmetic.
-- **Fix:** Optional — detect `#tag` inside persona_thought text and
-  render as a dim mono chip with a line-height boundary.
-
-### 18. Per-class flow panel shows `retail_pa…` truncated to 10 chars
-- **What:** `truncate(summary.winning_class.archetype, 10)` in
-  `ReportView.vue` is too aggressive for short English archetype
-  prefixes like `retail_passive`. Bump to 14.
-- **File:** `src/views/ReportView.vue` (the `truncate` call on the
-  winning cell).
-
-### 19. Event ordering assertion is stronger than what the engine currently produces
-- **What:** In one of the real runs, Round 0 had 1 persona_thought but
-  0 trade_submitted (the LLM only posted a tweet, didn't call the
-  trading tool). The Gap 2 assertion is guarded against this (it only
-  fires when both exist) but the engine producing zero trades in a
-  round is a UX issue — the per-class flow panel shows "(no orders
-  yet)" which might mislead the user.
-- **Fix:** Either force every trader to call `submit_order_distribution`
-  at least once per round (OASIS agent config change), or add a tooltip
-  explaining "held by default" on the empty per-class panel.
-
-## Low — nice to have
+- **Why:** The new palette is lighter than the old one. Some of these
+  may fail AA. Can be done with a headless axe-core scan.
 
 ### 9. Extract the composer into a reusable component
-- **What:** `Home.vue` has a 200-line `<div class="composer">` block that's
-  likely to be reused if we ever add a "follow-up question" flow after
-  Simulate. Extract to `src/components/Composer.vue` with props for
-  placeholder/examples/onSubmit.
+- **What:** `Home.vue` has a ~250-line `<div class="composer">` block
+  that's likely to be reused if we ever add a "follow-up question"
+  flow after Simulate. Extract to `src/components/Composer.vue` with
+  props for `placeholder`, `examples`, `onSubmit`.
+- **Why:** Not urgent — no second use site exists yet.
 
-### 10. `⌘K` keyboard binding to focus composer
-- **What:** Add ⌘K / Ctrl+K to focus the composer from anywhere on the page.
+### 17. Hashtag / emoji rendering in persona thoughts
+- **What:** LLM sometimes produces `#股市 #短线追涨 #BYD` inside
+  persona_thought text. Currently rendered as plain text. Could
+  detect `#tag` and render as dim mono chips.
+- **Why:** Cosmetic. Low value.
+
+### 19. Engine sometimes produces zero trades in a round
+- **What:** In small-N sims (2 agents × 2 rounds), the LLM may post a
+  social tweet without calling `submit_order_distribution`. The
+  engine treats that as "hold all" but the UI shows
+  "(no orders yet)" which misleads the user.
+- **Fix options:** (a) hard-retry the trader on the second
+  `max_iteration`, (b) show "held by default" tooltip on empty panel,
+  (c) downshift the panel's visual emphasis when the round ended with
+  zero explicit flows.
+- **File:** `src/ssflow/oasis_engine.py` + `src/views/SimulationRunView.vue`

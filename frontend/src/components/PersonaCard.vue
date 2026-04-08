@@ -1,6 +1,15 @@
 <template>
-  <article class="p-card" :class="{ info: !isTrader, expanded }">
-    <header class="p-h" @click="expanded = !expanded">
+  <article
+    class="p-card"
+    :class="{ info: !isTrader, expanded }"
+    tabindex="0"
+    role="button"
+    :aria-expanded="expanded"
+    @click="onCardClick"
+    @keydown.enter.prevent="toggle"
+    @keydown.space.prevent="toggle"
+  >
+    <header class="p-h">
       <span class="glyph">{{ isTrader ? '◆' : '◇' }}</span>
       <div class="title">
         <input
@@ -20,7 +29,12 @@
       </div>
       <span class="count-chip" v-if="isTrader">×{{ local.instance_count || 0 }}</span>
       <span class="count-chip" v-else>info</span>
-      <button class="x" type="button" @click.stop="$emit('remove')">×</button>
+      <button
+        class="x"
+        type="button"
+        :aria-label="`Remove ${local.archetype || 'persona'}`"
+        @click.stop="$emit('remove')"
+      >×</button>
     </header>
 
     <div v-if="!expanded && local.voice_prompt" class="voice-preview">
@@ -70,6 +84,19 @@ const isTrader = computed(() => local.entity_role === 'trader')
 watch(() => props.persona, (v) => Object.assign(local, v), { deep: true })
 watch(local, (v) => emit('update:persona', { ...v }), { deep: true })
 
+function toggle () { expanded.value = !expanded.value }
+
+function onCardClick (e) {
+  // Clicks on inputs / buttons / textareas inside the expanded body must
+  // NOT collapse the card. Only collapse when the click lands on the
+  // card's whitespace or the header row.
+  const t = e.target
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'BUTTON' || t.closest('input') || t.closest('textarea') || t.closest('.body'))) {
+    return
+  }
+  toggle()
+}
+
 function formatCny (n) {
   if (typeof n !== 'number' || !n) return '—'
   if (n >= 1e8) return '¥' + (n / 1e8).toFixed(1) + '亿'
@@ -87,10 +114,14 @@ function formatCny (n) {
   padding: 12px 14px;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
   cursor: pointer;
+  outline: none;
 }
 .p-card:hover { box-shadow: 0 6px 20px -12px rgba(0,0,0,0.15); }
+.p-card:focus-visible {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ss-accent);
+}
 .p-card.info { border-left-color: var(--ss-info); }
-.p-card.expanded { box-shadow: 0 8px 24px -12px rgba(0,0,0,0.18); cursor: default; }
+.p-card.expanded { box-shadow: 0 8px 24px -12px rgba(0,0,0,0.18); }
 
 .p-h {
   display: flex;

@@ -330,6 +330,20 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 1fr; }
+  .live {
+    border-right: 0;
+    border-bottom: 1px solid var(--ss-line);
+    max-height: 40vh;
+  }
+}
+@media (max-width: 860px) {
+  .run { height: auto; min-height: 100vh; flex-direction: column; overflow: visible; }
+  .layout { overflow: visible; }
+  .live { padding: 20px 16px; max-height: none; }
+  .page-h h1 { font-size: 19px; }
+  .price-now { font-size: 26px; }
+  .filter-bar { padding: 10px 16px; }
+  .timeline { padding: 16px 16px 40px; }
 }
 
 /* LIVE PANEL */

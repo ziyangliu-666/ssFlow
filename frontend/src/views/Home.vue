@@ -4,6 +4,7 @@
 
     <main
       class="main"
+      aria-label="Seed the simulation"
       :class="{ 'drag-over': isDragOver }"
       @dragover.prevent="onDragOver"
       @dragleave.prevent="onDragLeave"
@@ -21,7 +22,26 @@
 
         <div class="composer" :class="{ focused: isFocused, 'drag-over': isDragOver }">
           <!-- File + URL chips -->
-          <div v-if="files.length || detectedUrls.length" class="chips">
+          <div v-if="files.length || serverFiles.length || detectedUrls.length" class="chips">
+            <!-- Files already on the server from a prior extract — restored
+                 when returning from /setup so the user keeps context. -->
+            <span
+              v-for="(sf, i) in serverFiles"
+              :key="'sf' + i"
+              class="chip restored"
+              :title="'Already uploaded — ' + sf.name"
+            >
+              <span class="chip-ico">📄</span>
+              <span class="chip-name">{{ sf.name }}</span>
+              <span class="chip-size">{{ formatBytes(sf.size) }}</span>
+              <span class="chip-badge">saved</span>
+              <button
+                class="chip-x"
+                type="button"
+                :aria-label="'Remove saved file ' + sf.name"
+                @click="removeServerFile(i)"
+              >×</button>
+            </span>
             <span
               v-for="(f, i) in files"
               :key="'f' + i"
@@ -30,7 +50,12 @@
               <span class="chip-ico">📄</span>
               <span class="chip-name">{{ f.name }}</span>
               <span class="chip-size">{{ formatBytes(f.size) }}</span>
-              <button class="chip-x" @click="removeFile(i)">×</button>
+              <button
+                class="chip-x"
+                type="button"
+                :aria-label="'Remove file ' + f.name"
+                @click="removeFile(i)"
+              >×</button>
             </span>
             <span
               v-for="(u, i) in detectedUrls"
@@ -73,8 +98,7 @@
               拖文件到任意位置 · 粘 URL 自动识别 · <kbd>⌘</kbd><kbd>⏎</kbd>
             </span>
             <div class="spacer"></div>
-            <span v-if="status" class="status">{{ status }}</span>
-            <span v-if="session.lastError" class="status bad">{{ session.lastError }}</span>
+            <span v-if="status && !errorMessage" class="status">{{ status }}</span>
             <button
               class="submit"
               type="button"
@@ -85,6 +109,27 @@
               <span v-else>EXTRACTING…</span>
             </button>
           </div>
+        </div>
+
+        <!-- Error banner — always visible when something failed, with a
+             specific 401 branch that points the user at the settings
+             gear. -->
+        <div v-if="errorMessage" class="error-banner" role="alert">
+          <div class="err-icon">!</div>
+          <div class="err-body">
+            <div class="err-title">{{ errorTitle }}</div>
+            <div class="err-detail">{{ errorMessage }}</div>
+            <div v-if="errorIs401" class="err-hint">
+              <em>Set your auth password</em> via the <strong>Settings</strong>
+              button at the bottom of the sidebar, then try again.
+            </div>
+          </div>
+          <button
+            class="err-dismiss"
+            type="button"
+            aria-label="Dismiss error"
+            @click="dismissError"
+          >×</button>
         </div>
 
         <div class="examples">
@@ -107,7 +152,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { session } from '../store/session'
 import { ensureSession } from '../api/client'
@@ -118,6 +163,7 @@ import WorkflowRail from '../components/WorkflowRail.vue'
 const router = useRouter()
 
 const files = ref([])
+const serverFiles = ref([])  // files already uploaded from a prior extract
 const prompt = ref(session.prompt || '')
 const fileInput = ref(null)
 const taEl = ref(null)
@@ -125,6 +171,7 @@ const isDragOver = ref(false)
 const isFocused = ref(false)
 const loading = ref(false)
 const status = ref('')
+const errorStatus = ref(0)  // HTTP status of the last failure, 0 if none
 
 const placeholder = '描述你想跟踪的市场走势，或拖入研报 / 新闻 / 财报 PDF…\n\n例：BYD Q1 2026 财报营收 +18% beat 但毛利率 -2.3pp miss，想看市场会怎么反应'
 
@@ -143,21 +190,45 @@ const detectedUrls = computed(() => {
 
 const canSubmit = computed(() => {
   const hasText = prompt.value.trim().length > 0
-  const hasFiles = files.value.length > 0
+  const hasFiles = files.value.length > 0 || serverFiles.value.length > 0
   return hasText || hasFiles
+})
+
+const errorMessage = computed(() => session.lastError || '')
+const errorIs401 = computed(() => errorStatus.value === 401)
+const errorTitle = computed(() => {
+  if (errorIs401.value) return 'Authentication failed'
+  if (errorStatus.value === 429) return 'Rate limited'
+  if (errorStatus.value >= 500) return 'Server error'
+  if (errorStatus.value === 0 && errorMessage.value) return 'Network error'
+  if (errorMessage.value) return 'Request failed'
+  return ''
 })
 
 watch(prompt, (v) => { session.prompt = v })
 
 onMounted(() => {
   session.lastError = ''
-  // If the user came back from /setup, restore their files so they can
-  // edit + resubmit without re-uploading.
-  if (session.uploadedFiles && session.uploadedFiles.length && files.value.length === 0) {
-    // We only have the server-side file refs, not the original File objects.
-    // Leave the files array empty; uploaded state still shows in the rail.
+  // Restore files that are already uploaded on the server from a prior
+  // extract — this fires when the user navigates back to Home from /setup
+  // or refreshes the page mid-session.
+  if (session.uploadedFiles && session.uploadedFiles.length) {
+    serverFiles.value = session.uploadedFiles.map((f) => ({ ...f }))
   }
+  // ⌘K / Ctrl+K from anywhere on the page focuses the composer.
+  window.addEventListener('keydown', onGlobalKeydown)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
+})
+
+function onGlobalKeydown (e) {
+  if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === 'k') {
+    e.preventDefault()
+    taEl.value && taEl.value.focus()
+  }
+}
 
 function onDragOver () { isDragOver.value = true }
 function onDragLeave () { isDragOver.value = false }
@@ -173,6 +244,18 @@ function onFileSelect (e) {
   e.target.value = ''
 }
 function removeFile (i) { files.value.splice(i, 1) }
+function removeServerFile (i) {
+  serverFiles.value.splice(i, 1)
+  // Also drop it from the session store so the next /extract doesn't
+  // still see the stale file.
+  if (session.uploadedFiles && session.uploadedFiles.length > i) {
+    session.uploadedFiles.splice(i, 1)
+  }
+}
+function dismissError () {
+  session.lastError = ''
+  errorStatus.value = 0
+}
 
 function onKeydown (e) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -207,6 +290,7 @@ async function onStart () {
   loading.value = true
   status.value = ''
   session.lastError = ''
+  errorStatus.value = 0
   try {
     // Wipe last extraction so a re-run replaces it cleanly.
     session.eventProposal = null
@@ -234,7 +318,21 @@ async function onStart () {
     router.push({ name: 'Setup' })
   } catch (err) {
     console.error(err)
-    status.value = 'failed: ' + (err?.response?.data?.detail || err.message)
+    // Clear the progress status so the error banner is unambiguous —
+    // leaving "analyzing…" up alongside a 401 error is misleading.
+    status.value = ''
+    // Capture the HTTP status so the error banner can show a 401-specific
+    // hint (point the user at Settings). Fall back to 0 for network errors.
+    errorStatus.value = err?.response?.status || 0
+    // If the interceptor didn't fill session.lastError for some reason,
+    // fall back to a generic message so the banner still appears.
+    if (!session.lastError) {
+      session.lastError =
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'request failed'
+    }
   } finally {
     loading.value = false
   }
@@ -246,6 +344,9 @@ async function onStart () {
   min-height: 100vh;
   display: flex;
   align-items: stretch;
+}
+@media (max-width: 860px) {
+  .home { flex-direction: column; }
 }
 
 .main {
@@ -348,6 +449,18 @@ h1 .period { color: var(--ss-fg-muted); }
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
 }
+.chip.restored {
+  background: var(--ss-accent-soft);
+  border-color: var(--ss-accent);
+}
+.chip.restored .chip-ico { color: var(--ss-accent); }
+.chip-badge {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 10px;
+  color: var(--ss-accent);
+  margin-left: 2px;
+}
 .chip-x {
   background: none;
   border: 0;
@@ -369,6 +482,15 @@ h1 .period { color: var(--ss-fg-muted); }
   padding: 14px 16px 6px;
   min-height: 96px;
   background: transparent;
+}
+/* The .composer:focus-within rule already darkens the container border
+   on textarea focus (visible feedback). For strict a11y tooling that
+   inspects the textarea itself, add a subtle inset box-shadow on direct
+   keyboard focus so automated auditors don't report a missing
+   indicator. */
+.ta:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--ss-accent);
+  border-radius: 8px;
 }
 .ta::placeholder {
   color: var(--ss-fg-faint);
@@ -429,13 +551,82 @@ h1 .period { color: var(--ss-fg-muted); }
   border-radius: 8px;
   font: 500 13px/1 'Inter', sans-serif;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 .submit:hover:not(:disabled) { background: var(--ss-accent); }
+.submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ss-accent);
+}
 .submit:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Error banner — shown when onStart or its subcalls fail */
+.error-banner {
+  margin-top: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--ss-bad);
+  border-left: 3px solid var(--ss-bad);
+  background: #fbecec;
+  border-radius: 8px;
+}
+.err-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ss-bad);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.err-body { flex: 1; min-width: 0; }
+.err-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ss-bad);
+  margin-bottom: 2px;
+}
+.err-detail {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ss-fg);
+  word-break: break-word;
+}
+.err-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ss-fg);
+  line-height: 1.5;
+}
+.err-hint em {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  color: var(--ss-accent);
+}
+.err-hint strong { font-weight: 600; }
+.err-dismiss {
+  background: none;
+  border: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--ss-bad);
+  cursor: pointer;
+  padding: 0 4px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.err-dismiss:hover { color: var(--ss-fg); }
 
 /* Examples */
 .examples { margin-top: 28px; }
@@ -478,6 +669,16 @@ h1 .period { color: var(--ss-fg-muted); }
 
 @media (max-width: 860px) {
   .main { padding: 40px 24px; }
-  h1 { font-size: 32px; }
+  h1 { font-size: 30px; line-height: 1.2; }
+  .wrap { max-width: 100%; }
+  .composer-foot { flex-wrap: wrap; }
+  .hint { order: 3; flex-basis: 100%; margin-left: 0; margin-top: 4px; }
+  .examples { margin-top: 20px; }
+}
+@media (max-width: 560px) {
+  .main { padding: 28px 16px; }
+  h1 { font-size: 24px; }
+  .submit { padding: 9px 12px; font-size: 12px; }
+  .hint { font-size: 10px; }
 }
 </style>

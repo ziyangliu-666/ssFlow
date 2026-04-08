@@ -1,21 +1,28 @@
 <template>
-  <aside class="rail">
-    <router-link to="/" class="brand">ss<em>Flow</em></router-link>
+  <aside class="rail" aria-label="ssFlow sidebar">
+    <router-link
+      to="/"
+      class="brand"
+      aria-label="ssFlow home"
+    >ss<em>Flow</em></router-link>
 
-    <div class="rail-title">WORKFLOW</div>
-    <ul class="rail-list">
-      <li
-        v-for="s in steps"
-        :key="s.num"
-        :class="statusClass(s)"
-      >
-        <span class="dot">{{ s.num }}</span>
-        <div class="cell">
-          <span class="label">{{ s.label }}</span>
-          <span class="sub">{{ s.sub }}</span>
-        </div>
-      </li>
-    </ul>
+    <nav class="rail-nav" aria-label="Workflow steps">
+      <div class="rail-title">WORKFLOW</div>
+      <ol class="rail-list">
+        <li
+          v-for="s in steps"
+          :key="s.num"
+          :class="statusClass(s)"
+          :aria-current="s.active ? 'step' : undefined"
+        >
+          <span class="dot" aria-hidden="true">{{ s.num }}</span>
+          <div class="cell">
+            <span class="label">{{ s.label }}</span>
+            <span class="sub">{{ s.sub }}</span>
+          </div>
+        </li>
+      </ol>
+    </nav>
 
     <div class="rail-foot">
       <slot name="foot-extra" />
@@ -120,6 +127,28 @@ function statusClass (s) {
   min-height: 100vh;
 }
 
+/* ── Narrow viewport: sidebar collapses to a horizontal top strip ──
+   At < 860px, the 220px sidebar eats half the screen. Collapse the
+   whole <aside> into a 56px-tall strip with brand + horizontal rail
+   + gear button. The workflow steps become a compact dot row with
+   only the current step's label showing. */
+@media (max-width: 860px) {
+  .rail {
+    width: 100%;
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--ss-line);
+    padding: 10px 16px;
+    flex-direction: row;
+    align-items: center;
+    gap: 18px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: #fff;
+  }
+}
+
 .brand {
   display: block;
   font-family: 'Fraunces', serif;
@@ -128,11 +157,28 @@ function statusClass (s) {
   letter-spacing: -0.01em;
   color: var(--ss-fg);
   margin-bottom: 42px;
+  outline: none;
+  border-radius: 4px;
+}
+.brand:focus-visible {
+  box-shadow: 0 0 0 2px var(--ss-accent);
+  text-decoration: underline;
+  text-decoration-color: var(--ss-accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
 }
 .brand em {
   font-style: italic;
   color: var(--ss-accent);
   font-weight: 500;
+}
+
+@media (max-width: 860px) {
+  .brand {
+    margin-bottom: 0;
+    font-size: 17px;
+    flex-shrink: 0;
+  }
 }
 
 .rail-title {
@@ -143,11 +189,15 @@ function statusClass (s) {
   margin-bottom: 14px;
 }
 
+.rail-nav { display: contents; }
+
 .rail-list {
   list-style: none;
   display: flex;
   flex-direction: column;
   position: relative;
+  padding: 0;
+  margin: 0;
 }
 .rail-list::before {
   content: '';
@@ -164,6 +214,31 @@ function statusClass (s) {
   gap: 12px;
   padding: 8px 0;
   position: relative;
+}
+
+@media (max-width: 860px) {
+  .rail-title { display: none; }
+  .rail-list {
+    flex-direction: row;
+    gap: 6px;
+    flex: 1;
+  }
+  .rail-list::before {
+    left: 14px;
+    right: 14px;
+    top: 50%;
+    bottom: auto;
+    height: 1px;
+    width: auto;
+  }
+  .rail-list li {
+    padding: 0;
+    gap: 6px;
+  }
+  /* Hide step text/sub on narrow; show only dots + active step label */
+  .rail-list li .cell { display: none; }
+  .rail-list li.active .cell { display: flex; }
+  .rail-list li.active .sub { display: none; }
 }
 .dot {
   width: 18px;
@@ -223,6 +298,17 @@ function statusClass (s) {
   gap: 8px;
   font-size: 11px;
   color: var(--ss-fg-faint);
+}
+@media (max-width: 860px) {
+  .rail-foot {
+    margin-top: 0;
+    margin-left: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  .rail-foot .disclaimer { display: none; }
+  .rail-foot .auth-input { width: 140px; }
 }
 .gear {
   display: inline-flex;
