@@ -1,31 +1,100 @@
-"""Tests for sandbox.py — Kyle price impact + action distribution wrapper.
+"""Tests for sandbox.py — sandbox primitives.
 
-This file covers the Phase B foundational pieces (B1c + B2):
-    - compute_price_impact()       — square-root formula + edge cases
-    - normalize_action_distribution() — Gotcha 2 lock-in (clip + rescale)
-    - chat_action_distribution()   — LLM wrapper, mocked
-
-The Agent + OrderBook tests live in a separate test_sandbox_agents.py
-file once those classes ship in B1a + B1b.
+This file covers the Phase B foundational pieces:
+    - B1c: compute_price_impact() — Kyle square-root formula
+    - B2:  normalize_action_distribution() (Gotcha 2 lock-in)
+    - B2:  chat_action_distribution() — LLM wrapper, mocked
+    - B1a: Agent dataclass + spawn_agents()
+    - B1b: apply_action_to_agent + sample_actions + aggregate_class_flow
 """
 
 from __future__ import annotations
 
 import math
+import random
+import statistics
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from ssfish.persona import MarketShare, Persona, SandboxConfig
 from ssfish.sandbox import (
     ActionDistributionParseError,
     ActionDistributionResult,
+    Agent,
+    ClassFlowResult,
     LAMBDA_LITERATURE,
     NORMALIZATION_TOLERANCE,
+    aggregate_class_flow,
+    apply_action_to_agent,
     chat_action_distribution,
     compute_price_impact,
     normalize_action_distribution,
+    sample_actions,
+    spawn_agents,
+    update_holdings_for_price,
 )
+
+
+# ─────────────────────── Test fixtures ───────────────────────
+
+
+def _make_sandbox_persona(
+    pid: str = "test_retail",
+    instance_count: int = 100,
+    median_capital: float = 120000,
+    sigma: float = 0.6,
+    prob_holding: float = 0.6,
+    pos_min: float = 0.10,
+    pos_max: float = 0.40,
+    action_space: list[dict[str, Any]] | None = None,
+) -> Persona:
+    """Build a minimal Persona with a sandbox config for spawn/aggregate tests."""
+    if action_space is None:
+        action_space = [
+            {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+            {
+                "name": "panic_sell_50pct",
+                "side": "sell",
+                "pool": "holdings_in_target",
+                "fraction": 0.5,
+            },
+            {
+                "name": "fomo_buy_30pct",
+                "side": "buy",
+                "pool": "cash",
+                "fraction": 0.3,
+            },
+        ]
+    return Persona(
+        id=pid,
+        archetype="test_archetype",
+        display_name=f"{pid} display",
+        voice_prompt="x",
+        decision_mode="discretionary",
+        role="directional_speculator",
+        market_share=MarketShare(by_volume=0.10),
+        sandbox=SandboxConfig(
+            instance_count=instance_count,
+            capital_distribution={
+                "type": "lognormal",
+                "median_cny": median_capital,
+                "sigma": sigma,
+            },
+            initial_position_distribution={
+                "type": "bernoulli",
+                "prob_holding": prob_holding,
+                "position_size_pct_when_holding": {
+                    "type": "uniform",
+                    "min": pos_min,
+                    "max": pos_max,
+                },
+            },
+            risk={"max_position_pct": 0.95},
+            action_space=action_space,
+        ),
+    )
 
 
 # ─────────────────────── compute_price_impact (B1c) ───────────────────────
@@ -391,3 +460,318 @@ class TestChatActionDistribution:
             expects_strategic_signal=False,
         )
         assert result.strategic_signal is None
+
+
+# ─────────────────────── spawn_agents (B1a) ───────────────────────
+
+
+class TestSpawnAgents:
+
+    def test_spawn_count_matches_instance_count(self):
+        persona = _make_sandbox_persona(instance_count=200)
+        rng = random.Random(42)
+        agents = spawn_agents(persona, current_price=100.0, rng=rng)
+        assert len(agents) == 200
+        assert all(isinstance(a, Agent) for a in agents)
+        assert all(a.persona_id == persona.id for a in agents)
+
+    def test_spawn_reproducible_with_same_seed(self):
+        """Same seed → identical agents (critical for reproducibility)."""
+        persona = _make_sandbox_persona(instance_count=50)
+        rng1 = random.Random(123)
+        rng2 = random.Random(123)
+        agents1 = spawn_agents(persona, current_price=100.0, rng=rng1)
+        agents2 = spawn_agents(persona, current_price=100.0, rng=rng2)
+        assert len(agents1) == len(agents2)
+        for a1, a2 in zip(agents1, agents2):
+            assert a1.capital_cny == pytest.approx(a2.capital_cny)
+            assert a1.cash_cny == pytest.approx(a2.cash_cny)
+            assert a1.holdings_shares == pytest.approx(a2.holdings_shares)
+
+    def test_spawn_different_seeds_diverge(self):
+        """Different seeds → different agent samples."""
+        persona = _make_sandbox_persona(instance_count=20)
+        agents1 = spawn_agents(persona, 100.0, rng=random.Random(1))
+        agents2 = spawn_agents(persona, 100.0, rng=random.Random(2))
+        # Not all the same
+        diff = sum(
+            1 for a, b in zip(agents1, agents2)
+            if abs(a.capital_cny - b.capital_cny) > 1
+        )
+        assert diff > 0
+
+    def test_spawn_capital_distribution_centered_on_median(self):
+        """Median of sampled capital should be close to spec.median_cny."""
+        persona = _make_sandbox_persona(
+            instance_count=2000, median_capital=120000, sigma=0.6
+        )
+        agents = spawn_agents(persona, 100.0, rng=random.Random(7))
+        capitals = [a.capital_cny for a in agents]
+        median = statistics.median(capitals)
+        # Lognormal sample median converges to spec median
+        assert 90000 < median < 150000  # rough ±25% tolerance
+
+    def test_spawn_initial_position_bernoulli_holding_ratio(self):
+        """About 60% of agents should hold (prob_holding=0.6)."""
+        persona = _make_sandbox_persona(
+            instance_count=2000, prob_holding=0.60
+        )
+        agents = spawn_agents(persona, 100.0, rng=random.Random(11))
+        holding_count = sum(1 for a in agents if a.holdings_shares > 0)
+        ratio = holding_count / len(agents)
+        # ±5% tolerance
+        assert 0.55 < ratio < 0.65
+
+    def test_spawn_holdings_value_matches_position_pct(self):
+        """For agents that hold, holdings_value/capital should be in [pos_min, pos_max]."""
+        persona = _make_sandbox_persona(
+            instance_count=500, prob_holding=1.0, pos_min=0.10, pos_max=0.40
+        )
+        agents = spawn_agents(persona, current_price=100.0, rng=random.Random(13))
+        for a in agents:
+            holdings_value = a.holdings_shares * 100.0
+            position_pct = holdings_value / a.capital_cny
+            assert 0.099 < position_pct < 0.401  # tiny float tolerance
+
+    def test_spawn_cash_plus_holdings_equals_capital(self):
+        """At spawn time (current_price = price agents are valued at), nav == capital."""
+        persona = _make_sandbox_persona(instance_count=100)
+        agents = spawn_agents(persona, current_price=100.0, rng=random.Random(17))
+        for a in agents:
+            assert a.nav_at(100.0) == pytest.approx(a.capital_cny, rel=1e-9)
+            # pnl is 0 modulo float precision (CNY-scale values, so 1e-3 is plenty)
+            assert abs(a.pnl_at(100.0)) < 1e-3
+
+    def test_spawn_no_sandbox_raises(self):
+        persona = Persona(
+            id="x",
+            archetype="x",
+            display_name="x",
+            voice_prompt="x",
+            decision_mode="discretionary",
+            role="x",
+            market_share=MarketShare(by_volume=0.1),
+        )
+        with pytest.raises(ValueError, match="no sandbox config"):
+            spawn_agents(persona, 100.0, rng=random.Random())
+
+    def test_spawn_zero_price_raises(self):
+        persona = _make_sandbox_persona()
+        with pytest.raises(ValueError, match="current_price must be > 0"):
+            spawn_agents(persona, 0.0, rng=random.Random())
+
+    def test_spawn_zero_instance_count_raises(self):
+        persona = _make_sandbox_persona(instance_count=0)
+        with pytest.raises(ValueError, match="instance_count must be > 0"):
+            spawn_agents(persona, 100.0, rng=random.Random())
+
+
+# ─────────────────────── apply_action_to_agent (B1b) ───────────────────────
+
+
+class TestApplyActionToAgent:
+
+    def _agent_with_holdings(self) -> Agent:
+        return Agent(
+            persona_id="test",
+            capital_cny=100000.0,
+            cash_cny=40000.0,           # 40k cash
+            holdings_shares=600.0,       # 600 shares × 100 = 60k holdings
+        )
+
+    def test_sell_action_reduces_holdings_increases_cash(self):
+        agent = self._agent_with_holdings()
+        action = {"side": "sell", "pool": "holdings_in_target", "fraction": 0.5}
+        order = apply_action_to_agent(agent, action, current_price=100.0)
+        # Sold 50% of 600 shares = 300 shares × 100 = 30,000 CNY
+        assert order == pytest.approx(-30000)
+        assert agent.holdings_shares == pytest.approx(300.0)
+        assert agent.cash_cny == pytest.approx(70000.0)
+        # NAV preserved
+        assert agent.nav_at(100.0) == pytest.approx(100000.0)
+
+    def test_buy_action_increases_holdings_decreases_cash(self):
+        agent = self._agent_with_holdings()
+        action = {"side": "buy", "pool": "cash", "fraction": 0.5}
+        order = apply_action_to_agent(agent, action, current_price=100.0)
+        # Spent 50% of 40,000 = 20,000 CNY → 200 shares
+        assert order == pytest.approx(+20000)
+        assert agent.holdings_shares == pytest.approx(800.0)
+        assert agent.cash_cny == pytest.approx(20000.0)
+
+    def test_hold_action_returns_zero(self):
+        agent = self._agent_with_holdings()
+        action = {"side": "none", "pool": "none", "fraction": 0.0}
+        order = apply_action_to_agent(agent, action, current_price=100.0)
+        assert order == 0.0
+        assert agent.holdings_shares == 600.0
+        assert agent.cash_cny == 40000.0
+
+    def test_sell_with_no_holdings_returns_zero(self):
+        agent = Agent(
+            persona_id="t", capital_cny=10000, cash_cny=10000, holdings_shares=0
+        )
+        action = {"side": "sell", "pool": "holdings_in_target", "fraction": 0.5}
+        assert apply_action_to_agent(agent, action, 100.0) == 0.0
+
+    def test_buy_with_no_cash_returns_zero(self):
+        agent = Agent(
+            persona_id="t", capital_cny=10000, cash_cny=0, holdings_shares=100
+        )
+        action = {"side": "buy", "pool": "cash", "fraction": 0.5}
+        assert apply_action_to_agent(agent, action, 100.0) == 0.0
+
+    def test_zero_fraction_returns_zero(self):
+        agent = self._agent_with_holdings()
+        action = {"side": "sell", "pool": "holdings_in_target", "fraction": 0.0}
+        assert apply_action_to_agent(agent, action, 100.0) == 0.0
+
+    def test_unknown_pool_returns_zero(self):
+        agent = self._agent_with_holdings()
+        action = {"side": "sell", "pool": "magic_pool", "fraction": 0.5}
+        assert apply_action_to_agent(agent, action, 100.0) == 0.0
+
+    def test_price_change_does_not_affect_shares(self):
+        """Selling 50% of shares should sell the same SHARE count regardless of price.
+        The CNY amount of the order will scale with price."""
+        agent1 = self._agent_with_holdings()
+        agent2 = self._agent_with_holdings()
+        action = {"side": "sell", "pool": "holdings_in_target", "fraction": 0.5}
+        order1 = apply_action_to_agent(agent1, action, current_price=100.0)
+        order2 = apply_action_to_agent(agent2, action, current_price=110.0)
+        # Same share count sold (300), different CNY (30k vs 33k)
+        assert agent1.holdings_shares == pytest.approx(agent2.holdings_shares)
+        assert order2 == pytest.approx(order1 * 1.10)
+
+
+# ─────────────────────── sample_actions ───────────────────────
+
+
+class TestSampleActions:
+
+    def test_returns_correct_count(self):
+        rng = random.Random(0)
+        out = sample_actions({"a": 0.5, "b": 0.5}, n=100, rng=rng)
+        assert len(out) == 100
+
+    def test_distribution_faithful(self):
+        """Monte Carlo: sampled ratios should converge to the distribution."""
+        rng = random.Random(42)
+        out = sample_actions({"a": 0.7, "b": 0.2, "c": 0.1}, n=5000, rng=rng)
+        ratio_a = out.count("a") / 5000
+        ratio_b = out.count("b") / 5000
+        ratio_c = out.count("c") / 5000
+        assert 0.66 < ratio_a < 0.74
+        assert 0.17 < ratio_b < 0.23
+        assert 0.07 < ratio_c < 0.13
+
+    def test_zero_n_returns_empty(self):
+        assert sample_actions({"a": 1.0}, n=0, rng=random.Random()) == []
+
+    def test_empty_distribution_raises(self):
+        with pytest.raises(ValueError, match="empty distribution"):
+            sample_actions({}, n=10, rng=random.Random())
+
+
+# ─────────────────────── aggregate_class_flow ───────────────────────
+
+
+class TestAggregateClassFlow:
+
+    def test_basic_aggregation_sums_orders(self):
+        """1000 agents, 100% panic_sell_50pct → net flow = -sum(holdings_value/2)."""
+        persona = _make_sandbox_persona(
+            instance_count=1000, prob_holding=1.0, pos_min=0.30, pos_max=0.30
+        )
+        rng = random.Random(99)
+        agents = spawn_agents(persona, current_price=100.0, rng=rng)
+        # Force 100% panic sell
+        distribution = {"hold": 0.0, "panic_sell_50pct": 1.0, "fomo_buy_30pct": 0.0}
+        result = aggregate_class_flow(
+            persona_id=persona.id,
+            agents=agents,
+            action_distribution=distribution,
+            action_specs=persona.sandbox.action_space,
+            current_price=100.0,
+            rng=rng,
+        )
+        assert isinstance(result, ClassFlowResult)
+        # All 1000 agents sold 50% of their holdings (30% of capital)
+        # Total holdings before: sum(capital × 0.30)
+        # Total sold: that × 0.5
+        total_holdings_before = sum(a.capital_cny * 0.30 for a in agents)
+        # But spawn already happened so capitals are set; let's check via direct sum
+        expected_flow = -total_holdings_before * 0.5
+        assert result.net_flow_cny == pytest.approx(expected_flow, rel=1e-3)
+        assert result.action_histogram.get("panic_sell_50pct", 0) == 1000
+        assert result.n_agents == 1000
+
+    def test_histogram_counts_match_distribution_at_high_n(self):
+        persona = _make_sandbox_persona(instance_count=2000, prob_holding=0.5)
+        rng = random.Random(7)
+        agents = spawn_agents(persona, 100.0, rng=rng)
+        distribution = {
+            "hold": 0.6,
+            "panic_sell_50pct": 0.3,
+            "fomo_buy_30pct": 0.1,
+        }
+        result = aggregate_class_flow(
+            persona_id=persona.id,
+            agents=agents,
+            action_distribution=distribution,
+            action_specs=persona.sandbox.action_space,
+            current_price=100.0,
+            rng=rng,
+        )
+        # Histograms should track distribution within ~5%
+        n = sum(result.action_histogram.values())
+        assert 0.55 < result.action_histogram.get("hold", 0) / n < 0.65
+        assert 0.25 < result.action_histogram.get("panic_sell_50pct", 0) / n < 0.35
+
+    def test_hold_distribution_yields_zero_flow(self):
+        persona = _make_sandbox_persona(instance_count=200, prob_holding=0.8)
+        rng = random.Random(0)
+        agents = spawn_agents(persona, 100.0, rng=rng)
+        distribution = {"hold": 1.0, "panic_sell_50pct": 0.0, "fomo_buy_30pct": 0.0}
+        result = aggregate_class_flow(
+            persona_id=persona.id,
+            agents=agents,
+            action_distribution=distribution,
+            action_specs=persona.sandbox.action_space,
+            current_price=100.0,
+            rng=rng,
+        )
+        assert result.net_flow_cny == 0.0
+        assert result.action_histogram == {"hold": 200}
+
+    def test_rationale_and_strategic_signal_passed_through(self):
+        persona = _make_sandbox_persona(instance_count=10)
+        rng = random.Random(0)
+        agents = spawn_agents(persona, 100.0, rng=rng)
+        result = aggregate_class_flow(
+            persona_id=persona.id,
+            agents=agents,
+            action_distribution={"hold": 1.0},
+            action_specs=persona.sandbox.action_space,
+            current_price=100.0,
+            rng=rng,
+            rationale="agents are observant but indecisive",
+            strategic_signal={"direction": "neutral"},
+        )
+        assert result.rationale == "agents are observant but indecisive"
+        assert result.strategic_signal == {"direction": "neutral"}
+
+
+# ─────────────────────── update_holdings_for_price ───────────────────────
+
+
+def test_update_holdings_for_price_is_noop():
+    """The function exists for documentation but does nothing — agent
+    holdings are tracked in shares, not value, so price moves don't
+    require state mutation."""
+    a = Agent(persona_id="t", capital_cny=10000, cash_cny=4000, holdings_shares=60.0)
+    update_holdings_for_price([a], price_delta_pct=-0.05)
+    assert a.cash_cny == 4000
+    assert a.holdings_shares == 60.0
+    # But the *value* at the new price IS lower
+    assert a.holdings_value_cny(95.0) < a.holdings_value_cny(100.0)

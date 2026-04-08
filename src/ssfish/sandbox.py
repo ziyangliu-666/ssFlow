@@ -30,10 +30,12 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
 from .llm_client import JsonChatResult, chat_json
+from .persona import Persona, SandboxConfig
 
 
 log = logging.getLogger(__name__)
@@ -312,12 +314,303 @@ async def chat_action_distribution(
     )
 
 
+# ─────────────────────── Agents (B1a) ───────────────────────
+
+
+@dataclass
+class Agent:
+    """A single simulated trader instance.
+
+    State is mutable across rounds: holdings_shares mutates when the agent
+    buys/sells, cash_cny tracks unspent capital. Holdings VALUE in CNY is
+    derived from holdings_shares × current_price (computed on demand).
+
+    capital_cny is the immutable initial NAV at spawn time. The agent's
+    nav_at(price) method returns the current NAV given an external price.
+    """
+
+    persona_id: str
+    capital_cny: float                # immutable: NAV at spawn time
+    cash_cny: float                   # mutable: shrinks on buy, grows on sell
+    holdings_shares: float            # mutable: in shares of the target ticker
+
+    def holdings_value_cny(self, current_price: float) -> float:
+        return self.holdings_shares * current_price
+
+    def nav_at(self, current_price: float) -> float:
+        return self.cash_cny + self.holdings_value_cny(current_price)
+
+    def pnl_at(self, current_price: float) -> float:
+        return self.nav_at(current_price) - self.capital_cny
+
+
+def _sample_capital(spec: dict[str, Any], rng: random.Random) -> float:
+    """Sample a single capital value from a distribution spec.
+
+    Supported types:
+        - lognormal: {type: lognormal, median_cny, sigma, floor_cny?, ceiling_cny?}
+        - uniform:   {type: uniform, min_cny, max_cny}
+        - fixed:     {type: fixed, value_cny}
+    """
+    dtype = spec.get("type", "fixed")
+    if dtype == "lognormal":
+        median = float(spec["median_cny"])
+        sigma = float(spec["sigma"])
+        if median <= 0 or sigma <= 0:
+            raise ValueError(
+                f"lognormal median_cny and sigma must be > 0, got {median}, {sigma}"
+            )
+        # Median of lognormal(mu, sigma) is e^mu, so mu = ln(median)
+        mu = math.log(median)
+        val = rng.lognormvariate(mu, sigma)
+        floor = float(spec.get("floor_cny", 0.0))
+        ceiling = float(spec.get("ceiling_cny", float("inf")))
+        return max(floor, min(ceiling, val))
+    if dtype == "uniform":
+        return rng.uniform(float(spec["min_cny"]), float(spec["max_cny"]))
+    if dtype == "fixed":
+        return float(spec["value_cny"])
+    raise ValueError(f"Unknown capital_distribution type: {dtype!r}")
+
+
+def _sample_position_pct(spec: dict[str, Any], rng: random.Random) -> float:
+    """Sample initial position as a fraction of capital. Returns 0.0 if not holding.
+
+    Supported types:
+        - bernoulli: {type: bernoulli, prob_holding,
+                      position_size_pct_when_holding: {type: uniform, min, max}}
+        - fixed:     {type: fixed, value: 0.0-1.0}
+        - none:      missing or {type: none} → always 0.0 (no holdings)
+    """
+    if not spec:
+        return 0.0
+    dtype = spec.get("type", "none")
+    if dtype == "none":
+        return 0.0
+    if dtype == "fixed":
+        return float(spec.get("value", 0.0))
+    if dtype == "bernoulli":
+        prob = float(spec.get("prob_holding", 0.5))
+        if rng.random() > prob:
+            return 0.0
+        size_spec = spec.get(
+            "position_size_pct_when_holding",
+            {"type": "uniform", "min": 0.05, "max": 0.30},
+        )
+        size_type = size_spec.get("type", "uniform")
+        if size_type == "uniform":
+            return rng.uniform(float(size_spec["min"]), float(size_spec["max"]))
+        if size_type == "fixed":
+            return float(size_spec["value"])
+        raise ValueError(f"Unknown position size spec type: {size_type!r}")
+    raise ValueError(f"Unknown initial_position_distribution type: {dtype!r}")
+
+
+def spawn_agents(
+    persona: Persona,
+    current_price: float,
+    rng: random.Random,
+) -> list[Agent]:
+    """Sample N agent instances from the persona's sandbox distributions.
+
+    Each agent gets:
+        - capital_cny sampled from sandbox.capital_distribution
+        - cash_cny + holdings_shares derived from
+          sandbox.initial_position_distribution and current_price
+
+    The same `rng` instance, seeded identically, will produce identical
+    output across runs (reproducibility for the scorecard).
+
+    Raises:
+        ValueError: if persona.sandbox is None or current_price <= 0.
+    """
+    sandbox = persona.sandbox
+    if sandbox is None:
+        raise ValueError(
+            f"persona '{persona.id}' has no sandbox config; "
+            f"cannot spawn agents for sandbox-mode simulation"
+        )
+    if current_price <= 0:
+        raise ValueError(f"current_price must be > 0, got {current_price}")
+    if sandbox.instance_count <= 0:
+        raise ValueError(
+            f"persona '{persona.id}' sandbox.instance_count must be > 0, "
+            f"got {sandbox.instance_count}"
+        )
+
+    agents: list[Agent] = []
+    for _ in range(sandbox.instance_count):
+        capital = _sample_capital(sandbox.capital_distribution, rng)
+        position_pct = _sample_position_pct(sandbox.initial_position_distribution, rng)
+        position_pct = max(0.0, min(1.0, position_pct))  # clamp to [0,1]
+        holdings_value_cny = capital * position_pct
+        holdings_shares = holdings_value_cny / current_price
+        cash_cny = capital - holdings_value_cny
+        agents.append(
+            Agent(
+                persona_id=persona.id,
+                capital_cny=capital,
+                cash_cny=cash_cny,
+                holdings_shares=holdings_shares,
+            )
+        )
+    return agents
+
+
+# ─────────────────────── OrderBook (B1b) ───────────────────────
+
+
+def apply_action_to_agent(
+    agent: Agent,
+    action_spec: dict[str, Any],
+    current_price: float,
+) -> float:
+    """Apply one action to one agent. Mutates agent state.
+
+    Returns the order amount in CNY (positive = buy, negative = sell).
+
+    action_spec shape (Gotcha 1 lock-in: dicts not strings):
+        {name: str, side: 'none'|'buy'|'sell', pool: 'none'|'cash'|'holdings_in_target',
+         fraction: 0.0-1.0}
+    """
+    side = action_spec.get("side", "none")
+    pool = action_spec.get("pool", "none")
+    try:
+        fraction = float(action_spec.get("fraction", 0.0))
+    except (TypeError, ValueError):
+        fraction = 0.0
+
+    if side == "none" or fraction <= 0:
+        return 0.0
+
+    if pool == "holdings_in_target":
+        if agent.holdings_shares <= 0:
+            return 0.0
+        shares_to_act = agent.holdings_shares * fraction
+        cny_amount = shares_to_act * current_price
+    elif pool == "cash":
+        if agent.cash_cny <= 0:
+            return 0.0
+        cny_amount = agent.cash_cny * fraction
+        shares_to_act = cny_amount / current_price
+    else:
+        return 0.0
+
+    if side == "sell":
+        agent.holdings_shares -= shares_to_act
+        agent.cash_cny += cny_amount
+        return -cny_amount
+    if side == "buy":
+        agent.holdings_shares += shares_to_act
+        agent.cash_cny -= cny_amount
+        return +cny_amount
+    return 0.0
+
+
+def sample_actions(
+    distribution: dict[str, float],
+    n: int,
+    rng: random.Random,
+) -> list[str]:
+    """Sample n action names from a probability distribution.
+
+    The distribution is assumed to be normalized (sum to 1.0). Use
+    normalize_action_distribution() upstream if you got it from an LLM.
+    """
+    if not distribution:
+        raise ValueError("cannot sample from empty distribution")
+    if n <= 0:
+        return []
+    actions = list(distribution.keys())
+    weights = list(distribution.values())
+    return rng.choices(actions, weights=weights, k=n)
+
+
+@dataclass
+class ClassFlowResult:
+    """Aggregated order flow for one persona class in one round."""
+
+    persona_id: str
+    net_flow_cny: float
+    action_histogram: dict[str, int]
+    n_agents: int
+    rationale: str = ""
+    strategic_signal: dict[str, Any] | None = None
+
+
+def aggregate_class_flow(
+    persona_id: str,
+    agents: list[Agent],
+    action_distribution: dict[str, float],
+    action_specs: list[dict[str, Any]],
+    current_price: float,
+    rng: random.Random,
+    rationale: str = "",
+    strategic_signal: dict[str, Any] | None = None,
+) -> ClassFlowResult:
+    """Sample one action per agent, apply each, return the net CNY flow.
+
+    Mutates agent state in place. Each agent gets exactly one action drawn
+    from `action_distribution`. The flow is summed across all agents in
+    this class. Per Gotcha 5, the SUMMED total flow (across all classes)
+    feeds into compute_price_impact() — not per-class flows individually.
+    """
+    spec_by_name = {s["name"]: s for s in action_specs}
+    sampled_actions = sample_actions(action_distribution, len(agents), rng)
+
+    net_flow = 0.0
+    histogram: dict[str, int] = {}
+    for agent, action_name in zip(agents, sampled_actions):
+        spec = spec_by_name.get(action_name)
+        if spec is None:
+            # Action sampled but no spec found — skip silently (this shouldn't
+            # happen if the upstream normalize_action_distribution dropped
+            # unknown names, but defend in depth)
+            histogram[action_name] = histogram.get(action_name, 0) + 1
+            continue
+        order = apply_action_to_agent(agent, spec, current_price)
+        net_flow += order
+        histogram[action_name] = histogram.get(action_name, 0) + 1
+
+    return ClassFlowResult(
+        persona_id=persona_id,
+        net_flow_cny=net_flow,
+        action_histogram=histogram,
+        n_agents=len(agents),
+        rationale=rationale,
+        strategic_signal=strategic_signal,
+    )
+
+
+def update_holdings_for_price(agents: list[Agent], price_delta_pct: float) -> None:
+    """No-op: agent holdings track shares (not value), so no update needed
+    when price moves. This function exists as documentation of the design
+    choice — call it after each round if you want to be explicit, but it's
+    a noop.
+
+    Why: holdings_value_cny is derived from holdings_shares × current_price.
+    A price move changes the derived value but not the underlying shares.
+    Cash is also unaffected by price moves (only by buy/sell actions).
+
+    The only state that DOES change between rounds is what the agent did
+    in apply_action_to_agent() — that's where mutation happens.
+    """
+    return
+
+
 __all__ = [
+    "Agent",
+    "ClassFlowResult",
     "LAMBDA_LITERATURE",
     "NORMALIZATION_TOLERANCE",
     "ActionDistributionParseError",
     "ActionDistributionResult",
+    "aggregate_class_flow",
+    "apply_action_to_agent",
     "chat_action_distribution",
     "compute_price_impact",
     "normalize_action_distribution",
+    "sample_actions",
+    "spawn_agents",
+    "update_holdings_for_price",
 ]
