@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Local data
+.env
+*.db
+*.db-journal
+.cost_ledger.json
+reports/
+predictions/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

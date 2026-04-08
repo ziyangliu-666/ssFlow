@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ssFish — A 股事件舆情推演引擎</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      max-width: 920px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #1a1a1a;
+      line-height: 1.6;
+    }
+    h1 { font-size: 22px; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+    h2 { font-size: 16px; margin-top: 30px; color: #444; }
+    .disclaimer {
+      background: #fef9e7;
+      border-left: 3px solid #d4a017;
+      padding: 10px 15px;
+      font-size: 13px;
+      margin: 15px 0;
+    }
+    label { display: block; margin-top: 15px; font-size: 13px; color: #555; }
+    input[type=text], input[type=date], input[type=password], textarea, select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    textarea { min-height: 100px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    button {
+      margin-top: 20px;
+      background: #1a1a1a;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 3px;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    #report {
+      margin-top: 30px;
+      padding: 20px;
+      background: #fafafa;
+      border: 1px solid #e0e0e0;
+      border-radius: 3px;
+      white-space: pre-wrap;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 13px;
+      display: none;
+    }
+    .muted { color: #888; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>ssFish — A 股事件舆情推演引擎</h1>
+
+  <div class="disclaimer">
+    <strong>研究工具声明:</strong> 本工具不提供投资意见, 不构成任何证券投资咨询业务。
+    所有生成的内容基于假设性多 agent 模拟, 仅供研究参考。使用本工具即表示您同意此声明。
+  </div>
+
+  <h2>事件输入</h2>
+
+  <label>访问密码 (X-Auth-Password)</label>
+  <input type="password" id="auth" placeholder="env: SSFISH_PASSWORD">
+
+  <div class="row">
+    <div>
+      <label>股票代码</label>
+      <input type="text" id="ticker" placeholder="002594" required>
+    </div>
+    <div>
+      <label>事件类型</label>
+      <select id="event_type">
+        <option value="earnings">earnings (财报)</option>
+        <option value="policy">policy (政策)</option>
+        <option value="m_a">m_a (并购)</option>
+        <option value="management_change">management_change</option>
+        <option value="ipo">ipo</option>
+        <option value="dividend">dividend</option>
+        <option value="shareholder_action">shareholder_action</option>
+        <option value="lawsuit">lawsuit</option>
+        <option value="regulatory">regulatory</option>
+        <option value="other">other</option>
+      </select>
+    </div>
+    <div>
+      <label>事件日期</label>
+      <input type="date" id="event_date" required>
+    </div>
+  </div>
+
+  <label>事件正文 *</label>
+  <textarea id="event_text" placeholder="粘贴公告 / 新闻 / 政策原文..." required></textarea>
+
+  <label>(可选) 事前共识 / 已被定价的预期</label>
+  <textarea id="prior_consensus" placeholder="例: 卖方一致预期净利润 +15%, 雪球热议..."></textarea>
+
+  <label>(可选) 近期价格行为</label>
+  <textarea id="recent_price_action" placeholder="例: 过去 30 天上涨 8%, 突破 200 日均线..."></textarea>
+
+  <label>(可选) 行业上下文</label>
+  <textarea id="sector_context" placeholder="例: 新能源板块整体情绪平稳, 上游价格..."></textarea>
+
+  <button id="run">运行模拟 (大约 30-60 秒)</button>
+  <span class="muted" id="status"></span>
+
+  <div id="report"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    document.getElementById('event_date').valueAsDate = new Date();
+
+    document.getElementById('run').addEventListener('click', async () => {
+      const btn = $('run');
+      const status = $('status');
+      const out = $('report');
+      btn.disabled = true;
+      status.textContent = '  运行中...';
+      out.style.display = 'none';
+
+      const payload = {
+        ticker: $('ticker').value.trim(),
+        event_text: $('event_text').value.trim(),
+        event_type: $('event_type').value,
+        event_date: $('event_date').value,
+        prior_consensus: $('prior_consensus').value.trim(),
+        recent_price_action: $('recent_price_action').value.trim(),
+        sector_context: $('sector_context').value.trim(),
+      };
+
+      try {
+        const res = await fetch('/simulate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Password': $('auth').value,
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          out.textContent = 'ERROR: ' + JSON.stringify(data, null, 2);
+        } else {
+          out.textContent = data.report_markdown;
+          status.textContent = `  成本 $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s · sim_id ${data.simulation_id.slice(0,8)}`;
+        }
+        out.style.display = 'block';
+      } catch (err) {
+        out.textContent = 'NETWORK ERROR: ' + err.message;
+        out.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
