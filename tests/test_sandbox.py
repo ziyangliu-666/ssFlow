@@ -168,6 +168,27 @@ class TestComputePriceImpact:
         """A股 λ should be higher than US equity λ (less liquid market)."""
         assert LAMBDA_LITERATURE["ashare"] > LAMBDA_LITERATURE["us-equity"]
 
+    def test_extreme_flow_clipped_to_max_delta(self):
+        """Extreme flows (>> ADV) clip to ±10% (modeling A-share 涨停板)."""
+        # Sell pressure 100x ADV → raw Kyle = 0.5 × -1 × sqrt(100) = -5.0
+        # Should clip to -0.10
+        result = compute_price_impact(net_flow_cny=-1e12, adv_cny=1e10, lambda_market=0.5)
+        assert result == pytest.approx(-0.10, abs=1e-9)
+
+    def test_extreme_buy_pressure_clipped_to_positive_max(self):
+        result = compute_price_impact(net_flow_cny=+1e12, adv_cny=1e10, lambda_market=0.5)
+        assert result == pytest.approx(+0.10, abs=1e-9)
+
+    def test_max_delta_pct_override(self):
+        """Caller can pass a different cap (e.g., for crypto/HK markets)."""
+        result = compute_price_impact(
+            net_flow_cny=-1e12,
+            adv_cny=1e10,
+            lambda_market=0.5,
+            max_delta_pct=0.30,
+        )
+        assert result == pytest.approx(-0.30, abs=1e-9)
+
 
 # ─────────────────────── normalize_action_distribution (B2 helper) ───────────────────────
 
@@ -577,6 +598,7 @@ class TestApplyActionToAgent:
             capital_cny=100000.0,
             cash_cny=40000.0,           # 40k cash
             holdings_shares=600.0,       # 600 shares × 100 = 60k holdings
+            max_holdings_value_cny=100000.0,  # 100% cap (retail can go all-in)
         )
 
     def test_sell_action_reduces_holdings_increases_cash(self):
@@ -595,9 +617,42 @@ class TestApplyActionToAgent:
         action = {"side": "buy", "pool": "cash", "fraction": 0.5}
         order = apply_action_to_agent(agent, action, current_price=100.0)
         # Spent 50% of 40,000 = 20,000 CNY → 200 shares
+        # (max_holdings_value=100k, headroom=100k-60k=40k, request=20k OK)
         assert order == pytest.approx(+20000)
         assert agent.holdings_shares == pytest.approx(800.0)
         assert agent.cash_cny == pytest.approx(20000.0)
+
+    def test_buy_clamped_to_max_position_pct_headroom(self):
+        """Buy is capped by (max_holdings_value - current_holdings_value)."""
+        # Capital 100k, max_position_pct → max_holdings_value 50k
+        # Current holdings = 30k → headroom = 20k
+        # Cash = 70k, fraction 0.5 → wants to spend 35k
+        # Should be clamped to 20k (the headroom)
+        agent = Agent(
+            persona_id="t",
+            capital_cny=100000,
+            cash_cny=70000,
+            holdings_shares=300,  # 300 × 100 = 30k
+            max_holdings_value_cny=50000,  # 50% cap
+        )
+        action = {"side": "buy", "pool": "cash", "fraction": 0.5}
+        order = apply_action_to_agent(agent, action, 100.0)
+        assert order == pytest.approx(+20000)
+        assert agent.holdings_shares == pytest.approx(500.0)  # 300 + 200
+        assert agent.cash_cny == pytest.approx(50000)
+
+    def test_buy_returns_zero_at_max_position_cap(self):
+        """If already at max_position_pct, buy returns 0."""
+        agent = Agent(
+            persona_id="t",
+            capital_cny=100000,
+            cash_cny=50000,
+            holdings_shares=500,  # 500 × 100 = 50k
+            max_holdings_value_cny=50000,  # exactly at cap
+        )
+        action = {"side": "buy", "pool": "cash", "fraction": 0.5}
+        order = apply_action_to_agent(agent, action, 100.0)
+        assert order == 0.0
 
     def test_hold_action_returns_zero(self):
         agent = self._agent_with_holdings()
@@ -609,14 +664,16 @@ class TestApplyActionToAgent:
 
     def test_sell_with_no_holdings_returns_zero(self):
         agent = Agent(
-            persona_id="t", capital_cny=10000, cash_cny=10000, holdings_shares=0
+            persona_id="t", capital_cny=10000, cash_cny=10000, holdings_shares=0,
+            max_holdings_value_cny=10000,
         )
         action = {"side": "sell", "pool": "holdings_in_target", "fraction": 0.5}
         assert apply_action_to_agent(agent, action, 100.0) == 0.0
 
     def test_buy_with_no_cash_returns_zero(self):
         agent = Agent(
-            persona_id="t", capital_cny=10000, cash_cny=0, holdings_shares=100
+            persona_id="t", capital_cny=10000, cash_cny=0, holdings_shares=100,
+            max_holdings_value_cny=10000,
         )
         action = {"side": "buy", "pool": "cash", "fraction": 0.5}
         assert apply_action_to_agent(agent, action, 100.0) == 0.0
@@ -769,7 +826,10 @@ def test_update_holdings_for_price_is_noop():
     """The function exists for documentation but does nothing — agent
     holdings are tracked in shares, not value, so price moves don't
     require state mutation."""
-    a = Agent(persona_id="t", capital_cny=10000, cash_cny=4000, holdings_shares=60.0)
+    a = Agent(
+        persona_id="t", capital_cny=10000, cash_cny=4000, holdings_shares=60.0,
+        max_holdings_value_cny=10000,
+    )
     update_holdings_for_price([a], price_delta_pct=-0.05)
     assert a.cash_cny == 4000
     assert a.holdings_shares == 60.0

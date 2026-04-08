@@ -64,6 +64,14 @@ LAMBDA_LITERATURE = {
 # Outside this band, we still normalize but log a warning.
 NORMALIZATION_TOLERANCE = 0.05
 
+# Per-round price impact cap. Models A-share daily 涨停/跌停 limit (±10%).
+# Without this cap, the unbounded Kyle formula produces nonsense at very
+# large net flows (e.g., ¥3000億 flow into a stock with ¥80億 ADV would
+# yield ΔP = +325% per round, which is physically impossible). The cap is
+# applied AFTER the Kyle formula computes the raw delta, so the formula's
+# sign + magnitude ranking is preserved up to the cap.
+MAX_DELTA_PCT_PER_ROUND = 0.10
+
 
 # ─────────────────────── Pure functions ───────────────────────
 
@@ -72,10 +80,15 @@ def compute_price_impact(
     net_flow_cny: float,
     adv_cny: float,
     lambda_market: float = LAMBDA_LITERATURE["default"],
+    max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
 ) -> float:
     """Square-root market impact (Kyle 1985 / Almgren-Chriss 2001).
 
-        ΔP/P = λ × sign(net_flow) × sqrt(|net_flow| / ADV)
+        ΔP/P = clip(λ × sign(net_flow) × sqrt(|net_flow| / ADV), ±max_delta_pct)
+
+    The result is clipped to ±max_delta_pct (default ±10%, modeling A-share
+    daily 涨停板 limit). Without the cap, unbounded Kyle output produces
+    nonsense at extreme net flows.
 
     Args:
         net_flow_cny: Net order flow this round in CNY (positive = net buy,
@@ -85,6 +98,7 @@ def compute_price_impact(
             30 days is the conventional window. Must be > 0.
         lambda_market: Market impact coefficient (dimensionless). See
             LAMBDA_LITERATURE for default values per market.
+        max_delta_pct: Per-round absolute price-change cap (default ±0.10).
 
     Returns:
         Fractional price change as a float (e.g., -0.097 means -9.7%).
@@ -95,7 +109,7 @@ def compute_price_impact(
 
     Example (spec §9.3 BYD case):
         >>> compute_price_impact(net_flow_cny=-3e8, adv_cny=8e9, lambda_market=0.5)
-        -0.0968...  # ≈ -9.7%
+        -0.0968...  # ≈ -9.7% (within the ±10% cap)
     """
     if adv_cny <= 0:
         raise ValueError(f"adv_cny must be > 0, got {adv_cny}")
@@ -104,7 +118,8 @@ def compute_price_impact(
 
     sign = 1.0 if net_flow_cny > 0 else -1.0
     magnitude = math.sqrt(abs(net_flow_cny) / adv_cny)
-    return lambda_market * sign * magnitude
+    raw = lambda_market * sign * magnitude
+    return max(-max_delta_pct, min(max_delta_pct, raw))
 
 
 def normalize_action_distribution(
@@ -330,14 +345,19 @@ class Agent:
     buys/sells, cash_cny tracks unspent capital. Holdings VALUE in CNY is
     derived from holdings_shares × current_price (computed on demand).
 
-    capital_cny is the immutable initial NAV at spawn time. The agent's
-    nav_at(price) method returns the current NAV given an external price.
+    capital_cny is the immutable initial NAV at spawn time.
+    max_holdings_value_cny is the immutable hard cap on this agent's
+    exposure to the target ticker (= capital × persona.sandbox.risk.max_position_pct).
+    Buy actions are automatically clamped to respect this cap — this is
+    how we model the constraint that an institutional fund won't put 100%
+    of its AUM into one stock even though it has the cash to do so.
     """
 
     persona_id: str
     capital_cny: float                # immutable: NAV at spawn time
     cash_cny: float                   # mutable: shrinks on buy, grows on sell
     holdings_shares: float            # mutable: in shares of the target ticker
+    max_holdings_value_cny: float     # immutable: capital × max_position_pct
 
     def holdings_value_cny(self, current_price: float) -> float:
         return self.holdings_shares * current_price
@@ -347,6 +367,12 @@ class Agent:
 
     def pnl_at(self, current_price: float) -> float:
         return self.nav_at(current_price) - self.capital_cny
+
+    def buy_headroom_cny(self, current_price: float) -> float:
+        """How much MORE the agent can put into the target stock given the
+        max_position_pct cap. Returns 0 if already at or above the cap.
+        """
+        return max(0.0, self.max_holdings_value_cny - self.holdings_value_cny(current_price))
 
 
 def _sample_capital(spec: dict[str, Any], rng: random.Random) -> float:
@@ -422,6 +448,7 @@ def spawn_agents(
         - capital_cny sampled from sandbox.capital_distribution
         - cash_cny + holdings_shares derived from
           sandbox.initial_position_distribution and current_price
+        - max_holdings_value_cny = capital × sandbox.risk.max_position_pct
 
     The same `rng` instance, seeded identically, will produce identical
     output across runs (reproducibility for the scorecard).
@@ -443,6 +470,9 @@ def spawn_agents(
             f"got {sandbox.instance_count}"
         )
 
+    max_position_pct = float(sandbox.risk.get("max_position_pct", 1.0))
+    max_position_pct = max(0.0, min(1.0, max_position_pct))
+
     agents: list[Agent] = []
     for _ in range(sandbox.instance_count):
         capital = _sample_capital(sandbox.capital_distribution, rng)
@@ -457,6 +487,7 @@ def spawn_agents(
                 capital_cny=capital,
                 cash_cny=cash_cny,
                 holdings_shares=holdings_shares,
+                max_holdings_value_cny=capital * max_position_pct,
             )
         )
     return agents
@@ -506,6 +537,16 @@ def apply_action_to_agent(
         agent.cash_cny += cny_amount
         return -cny_amount
     if side == "buy":
+        # Enforce max_holdings_value_cny: cap the buy at the agent's headroom.
+        # This is how we model "an institutional fund can't put 100% of AUM
+        # in one stock" — even though it has the cash, max_position_pct
+        # limits its exposure.
+        headroom = agent.buy_headroom_cny(current_price)
+        if headroom <= 0:
+            return 0.0
+        if cny_amount > headroom:
+            cny_amount = headroom
+            shares_to_act = cny_amount / current_price
         agent.holdings_shares += shares_to_act
         agent.cash_cny -= cny_amount
         return +cny_amount
