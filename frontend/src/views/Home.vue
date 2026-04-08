@@ -228,7 +228,6 @@ async function onStart () {
 
     await runExtract({
       prompt: strippedPrompt,
-      extraText: '',
       urls,
     })
     status.value = 'done. opening setup…'

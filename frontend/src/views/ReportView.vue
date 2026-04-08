@@ -22,7 +22,37 @@
         <div class="kicker">
           Simulation report
           <code>{{ shortId }}</code>
-          · {{ loadedAtLabel }}
+          <span v-if="meta?.event_ticker"> · {{ meta.event_ticker }}</span>
+          <span v-if="meta?.event_date"> · {{ meta.event_date }}</span>
+        </div>
+
+        <!-- Summary strip: 4 cells driven by the structured summary JSON -->
+        <div v-if="summary" class="summary">
+          <div class="cell">
+            <div class="k">FINAL PRICE</div>
+            <div class="v mono" :class="deltaClass">{{ formatPrice(summary.final_price) }}</div>
+            <div class="sub">from {{ formatPrice(summary.initial_price) }} open</div>
+          </div>
+          <div class="cell">
+            <div class="k">Δ %</div>
+            <div class="v mono" :class="deltaClass">{{ formatPct(summary.delta_pct) }}</div>
+            <div class="sub">{{ meta?.n_rounds || 0 }} rounds</div>
+          </div>
+          <div class="cell">
+            <div class="k">NET P&amp;L</div>
+            <div class="v mono" :class="netFlowClass">{{ formatMoney(summary.net_flow_total) }}</div>
+            <div class="sub">across all classes</div>
+          </div>
+          <div class="cell">
+            <div class="k">WINNING CLASS</div>
+            <div class="v winning" v-if="summary.winning_class">
+              {{ truncate(summary.winning_class.archetype, 10) }}
+            </div>
+            <div class="v" v-else>—</div>
+            <div class="sub" v-if="summary.winning_class">
+              {{ formatMoney(summary.winning_class.pnl) }} realized
+            </div>
+          </div>
         </div>
 
         <article class="report-body" v-html="rendered"></article>
@@ -30,6 +60,12 @@
         <div class="footnote">
           <em>Research tool only.</em> This report describes a simulation, not a forecast.
           Actual market behaviour may differ. ssFlow does not provide investment advice.
+          <span v-if="meta?.cost_usd !== undefined" class="cost-tag">
+            · cost ${{ meta.cost_usd?.toFixed(4) }}
+          </span>
+          <span v-if="meta?.elapsed_seconds !== undefined" class="cost-tag">
+            · {{ meta.elapsed_seconds?.toFixed(1) }}s
+          </span>
         </div>
       </div>
     </main>
@@ -45,9 +81,10 @@ import WorkflowRail from '../components/WorkflowRail.vue'
 const props = defineProps({ simulationId: { type: String, required: true } })
 
 const markdown = ref('')
+const summary = ref(null)
+const meta = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
-const loadedAt = ref(null)
 
 const rendered = computed(() => {
   if (!markdown.value) return ''
@@ -60,20 +97,71 @@ const shortId = computed(() => {
   return id
 })
 
-const loadedAtLabel = computed(() => {
-  if (!loadedAt.value) return ''
-  const d = loadedAt.value
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+const deltaClass = computed(() => {
+  const d = summary.value?.delta_pct
+  if (typeof d !== 'number') return ''
+  if (d > 0) return 'good'
+  if (d < 0) return 'bad'
+  return ''
 })
+
+const netFlowClass = computed(() => {
+  const n = summary.value?.net_flow_total
+  if (typeof n !== 'number') return ''
+  if (n > 0) return 'good'
+  if (n < 0) return 'bad'
+  return ''
+})
+
+function formatPrice (v) {
+  if (typeof v !== 'number') return '—'
+  const sym = currencySymbol(meta.value?.price_currency || 'CNY')
+  return sym + v.toFixed(2)
+}
+
+function formatPct (v) {
+  if (typeof v !== 'number') return '—'
+  return (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%'
+}
+
+function formatMoney (v) {
+  if (typeof v !== 'number') return '—'
+  const sym = currencySymbol(meta.value?.price_currency || 'CNY')
+  const sign = v >= 0 ? '+' : '−'
+  const absV = Math.abs(v)
+  if (absV >= 1e8) return sign + sym + (absV / 1e8).toFixed(2) + '亿'
+  if (absV >= 1e4) return sign + sym + (absV / 1e4).toFixed(2) + '万'
+  return sign + sym + absV.toFixed(0)
+}
+
+function currencySymbol (cur) {
+  return { CNY: '¥', USD: '$', EUR: '€', JPY: '¥', HKD: 'HK$', BTC: '₿' }[cur] || '$'
+}
+
+function truncate (s, n) {
+  if (!s) return ''
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
 
 async function load () {
   loading.value = true
   errorMsg.value = ''
   try {
     const r = await http.get(`/report/${encodeURIComponent(props.simulationId)}`)
-    markdown.value = typeof r.data === 'string' ? r.data : JSON.stringify(r.data)
-    loadedAt.value = new Date()
+    // The endpoint returns JSON {markdown, summary, meta, simulation_id}.
+    // For backwards-compat, if the server sends raw markdown (e.g. a
+    // legacy deployment), fall back to the string branch.
+    if (typeof r.data === 'string') {
+      markdown.value = r.data
+      summary.value = null
+      meta.value = null
+    } else if (r.data && typeof r.data === 'object') {
+      markdown.value = r.data.markdown || ''
+      summary.value = r.data.summary || null
+      meta.value = r.data.meta || null
+    } else {
+      markdown.value = JSON.stringify(r.data)
+    }
   } catch (err) {
     errorMsg.value = err?.response?.data?.error || err.message
   } finally {
@@ -163,6 +251,55 @@ onMounted(load)
   border-radius: 3px;
   margin-left: 6px;
   color: var(--ss-fg);
+}
+
+/* Summary strip — 4 cells above the report body */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--ss-line-strong);
+  border-bottom: 1px solid var(--ss-line-strong);
+  margin: 28px 0 44px;
+}
+.summary .cell {
+  padding: 18px 20px 18px 0;
+  border-right: 1px dashed var(--ss-line);
+}
+.summary .cell:last-child { border-right: 0; }
+.summary .cell:first-child { padding-left: 0; }
+.summary .k {
+  font-size: 10px;
+  color: var(--ss-fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.summary .v {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--ss-fg);
+}
+.summary .v.good { color: var(--ss-good); }
+.summary .v.bad  { color: var(--ss-bad); }
+.summary .v.winning {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 18px;
+  color: var(--ss-good);
+}
+.summary .v.mono {
+  font-variant-numeric: tabular-nums;
+}
+.summary .sub {
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  margin-top: 4px;
+}
+
+.cost-tag {
+  color: var(--ss-fg-faint);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  margin-left: 4px;
 }
 
 /* Sidebar slot buttons — these render inside WorkflowRail's slot,

@@ -60,7 +60,7 @@
           <span class="r mono">last round</span>
         </div>
         <div v-if="flowEntries.length" class="flow-list">
-          <div v-for="f in flowEntries" :key="f.persona" class="flow">
+          <div v-for="f in flowEntries" :key="f.personaId" class="flow">
             <span class="name">{{ f.persona }}</span>
             <span class="bar" :class="f.cls">
               <div :style="{ width: f.w }"></div>
@@ -187,11 +187,18 @@ const flowEntries = computed(() => {
   const entries = Object.entries(latestFlows.value || {})
   if (!entries.length) return []
   const max = Math.max(...entries.map(([, v]) => Math.abs(v.net_flow || 0))) || 1
-  return entries.map(([persona, v]) => {
+  return entries.map(([personaId, v]) => {
     const net = v.net_flow || 0
     const cls = net > 0 ? 'good' : net < 0 ? 'bad' : ''
     const w = ((Math.abs(net) / max) * 100).toFixed(0) + '%'
-    return { persona: shorten(persona, 14), cls, w, display: formatFlow(net) }
+    const label = v.archetype || personaId
+    return {
+      persona: shorten(label, 14),
+      personaId,
+      cls,
+      w,
+      display: formatFlow(net),
+    }
   })
 })
 
@@ -228,6 +235,7 @@ function handleEvent (type, payload) {
       latestFlows.value = {
         ...latestFlows.value,
         [payload.persona_id]: {
+          archetype: payload.archetype || payload.persona_id,
           net_flow: payload.net_flow,
           held: payload.held,
         },

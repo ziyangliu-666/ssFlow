@@ -1,12 +1,11 @@
 import { http, ensureSession } from './client'
 import { session } from '../store/session'
 
-export async function runExtract ({ prompt, extraText, urls }) {
+export async function runExtract ({ prompt, urls }) {
   await ensureSession()
   const r = await http.post('/extract', {
     session_id: session.sessionId,
     prompt: prompt || '',
-    extra_text: extraText || '',
     urls: urls || [],
   })
   session.sessionId = r.data.session_id

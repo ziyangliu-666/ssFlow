@@ -58,7 +58,7 @@ from ssflow.persona_proposer import (
     propose_personas,
 )
 from ssflow.report import render_simulation_safe_or_quarantine, save_report
-from ssflow.scorecard import init_db, insert_sandbox_simulation
+from ssflow.scorecard import get_simulation, init_db, insert_sandbox_simulation
 from ssflow.session_store import get_default_store
 
 from .auth import require_password
@@ -220,8 +220,7 @@ def create_app() -> Flask:
             {
                 "session_id": "<uuid>",
                 "prompt":     "free-form description of what to predict",
-                "urls":       ["https://example.com/article", ...],
-                "extra_text": "optional pasted context"
+                "urls":       ["https://example.com/article", ...]
             }
 
         The endpoint:
@@ -245,7 +244,6 @@ def create_app() -> Flask:
             session_id = state.session_id
 
         prompt = (payload.get("prompt") or "").strip()
-        extra_text = (payload.get("extra_text") or "").strip()
         urls = payload.get("urls") or []
         if not isinstance(urls, list):
             urls = []
@@ -268,19 +266,18 @@ def create_app() -> Flask:
 
         corpus = build_corpus(ingested)
 
-        # Build the raw_input passed to the extractor: prompt + extra_text.
-        raw_input_parts = []
+        # The raw_input passed to the extractor is just the user's prompt.
+        # Files and URLs become the corpus (above); the prompt carries the
+        # user's intent. When the user only uploaded files with no prompt,
+        # derive a stub from the first source title.
         if prompt:
-            raw_input_parts.append(prompt)
-        if extra_text:
-            raw_input_parts.append(extra_text)
-        if not raw_input_parts and corpus:
-            # When the user only uploaded files, derive a stub raw_input
-            # from the first source title.
-            raw_input_parts.append(
+            raw_input = prompt
+        elif corpus:
+            raw_input = (
                 f"Analyze the uploaded documents about {corpus[0].get('title', 'an event')}"
             )
-        raw_input = "\n\n".join(raw_input_parts)
+        else:
+            raw_input = ""
 
         try:
             proposal = asyncio.run(
@@ -758,14 +755,150 @@ def create_app() -> Flask:
     @app.get("/report/<simulation_id>")
     @require_password
     def get_report(simulation_id: str):
-        path = settings.reports_dir / f"{simulation_id}.md"
-        if not path.exists():
-            return jsonify({"error": "not_found"}), 404
-        return (
-            path.read_text(encoding="utf-8"),
-            200,
-            {"Content-Type": "text/markdown; charset=utf-8"},
+        """Return a simulation's report as structured JSON.
+
+        Response shape:
+            {
+              "simulation_id": str,
+              "markdown": str,                # full rendered report
+              "summary": {                    # top-line numbers for the 4-cell strip
+                "initial_price": float,
+                "final_price": float,
+                "delta_pct": float,          # cumulative delta as a fraction
+                "net_flow_total": float,      # sum of per-class P&L
+                "winning_class": {            # class with the highest P&L
+                  "archetype": str,
+                  "pnl": float,
+                } | null,
+                "price_trajectory": [float],
+                "per_class_pnl": [            # sorted desc by P&L
+                  {"persona_id": str, "archetype": str, "pnl": float}
+                ],
+              },
+              "meta": {
+                "event_ticker": str,
+                "event_date": str,
+                "event_type": str,
+                "n_personas": int,
+                "n_rounds": int,
+                "lambda_used": float,
+                "adv_used": float,
+                "elapsed_seconds": float,
+                "cost_usd": float,
+                "created_at": str,
+                "price_currency": str,       # inferred from the scorecard row
+              },
+            }
+
+        Raw markdown can still be fetched by passing `?format=md` if a
+        client wants the compact form for copy-paste or download.
+        """
+        fmt = (request.args.get("format") or "").strip().lower()
+
+        md_path = settings.reports_dir / f"{simulation_id}.md"
+        if not md_path.exists():
+            return jsonify({"error": "not_found", "simulation_id": simulation_id}), 404
+
+        markdown = md_path.read_text(encoding="utf-8")
+
+        if fmt == "md":
+            return (
+                markdown,
+                200,
+                {"Content-Type": "text/markdown; charset=utf-8"},
+            )
+
+        # JSON response — merge in the scorecard row for the structured fields
+        row = get_simulation(simulation_id)
+        if row is None:
+            # Report file exists but scorecard row is missing (e.g. legacy
+            # file or manual placement). Return the markdown + empty summary
+            # rather than a 404.
+            return jsonify({
+                "simulation_id": simulation_id,
+                "markdown": markdown,
+                "summary": None,
+                "meta": None,
+                "warning": "scorecard row not found for this simulation_id",
+            })
+
+        # Decode the JSON blobs stored in the scorecard
+        try:
+            price_trajectory = json.loads(row.get("price_trajectory_json") or "[]")
+        except Exception:
+            price_trajectory = []
+        try:
+            class_pnl = json.loads(row.get("class_pnl_json") or "{}")
+        except Exception:
+            class_pnl = {}
+
+        # Resolve persona_id → archetype labels. The scorecard only stores
+        # persona ids, but the UI wants the archetype (e.g. "散户动量派")
+        # for display. Try to rehydrate via the most recently matched
+        # personas pack stored in publications, falling back to the id itself.
+        archetype_by_id: dict[str, str] = {}
+        try:
+            pub_log = json.loads(row.get("publication_log_json") or "[]")
+            for pub in pub_log:
+                pid = pub.get("author_persona_id")
+                atype = pub.get("author_archetype")
+                if pid and atype:
+                    archetype_by_id.setdefault(pid, atype)
+        except Exception:
+            pass
+
+        per_class_pnl = sorted(
+            [
+                {
+                    "persona_id": pid,
+                    "archetype": archetype_by_id.get(pid, pid),
+                    "pnl": float(pnl),
+                }
+                for pid, pnl in class_pnl.items()
+            ],
+            key=lambda entry: entry["pnl"],
+            reverse=True,
         )
+
+        net_flow_total = sum(entry["pnl"] for entry in per_class_pnl)
+        winning = per_class_pnl[0] if per_class_pnl else None
+
+        # Currency: look up from the scorecard row if present; otherwise
+        # fall back to CNY (A-share default).
+        price_currency = "CNY"
+
+        summary = {
+            "initial_price": row.get("initial_price"),
+            "final_price": row.get("final_price"),
+            "delta_pct": row.get("cumulative_delta_pct"),
+            "net_flow_total": net_flow_total,
+            "winning_class": (
+                {"archetype": winning["archetype"], "pnl": winning["pnl"]}
+                if winning is not None else None
+            ),
+            "price_trajectory": price_trajectory,
+            "per_class_pnl": per_class_pnl,
+        }
+        meta = {
+            "event_ticker": row.get("event_ticker"),
+            "event_date": row.get("event_date"),
+            "event_type": row.get("event_type"),
+            "n_personas": row.get("n_personas"),
+            "n_rounds": row.get("n_rounds"),
+            "lambda_used": row.get("lambda_used"),
+            "adv_used": row.get("adv_used"),
+            "elapsed_seconds": row.get("elapsed_seconds"),
+            "cost_usd": row.get("cost_usd"),
+            "created_at": row.get("created_at"),
+            "price_currency": price_currency,
+        }
+
+        return jsonify({
+            "simulation_id": simulation_id,
+            "markdown": markdown,
+            "summary": summary,
+            "meta": meta,
+        })
 
     @app.get("/cost")
     @require_password

@@ -5,6 +5,10 @@ IMPORTANT: env vars are set at module-import time (below), BEFORE any
 `ssflow/config.py` now fails fast on missing OPENAI_API_KEY instead of
 falling back to a placeholder — see the retrospective (config.py silent
 fallback was the #1 DX bug).
+
+e2e tests (marked with `@pytest.mark.e2e`) bypass the fake key and talk
+to a real LLM endpoint. They only run when SSFLOW_RUN_E2E=1 is set in
+the environment.
 """
 
 from __future__ import annotations
@@ -18,14 +22,61 @@ import pytest
 # pytest loads conftest.py before collecting/importing test files, so these
 # assignments happen before `from ssflow.X import Y` in any test file triggers
 # `import ssflow.config` (which instantiates `Settings()` at module scope).
+#
+# For the e2e lane, load the real .env values from disk BEFORE importing
+# ssflow.config — this way `Settings()` reads the production key, not the
+# placeholder. The autouse fixture below leaves them alone for e2e tests.
+_RUN_E2E = os.environ.get("SSFLOW_RUN_E2E") == "1"
+
+if _RUN_E2E:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
+        ))
+    except ImportError:
+        pass
+
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-fake-key-for-tests")
 os.environ.setdefault("OPENAI_BASE_URL", "https://yourapi.cn/v1")
 os.environ.setdefault("SSFLOW_PASSWORD", "test-password")
 
 
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers",
+        "e2e: end-to-end test that hits a real LLM (runs only when "
+        "SSFLOW_RUN_E2E=1 is set).",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip e2e-marked tests unless SSFLOW_RUN_E2E=1."""
+    if _RUN_E2E:
+        return
+    skip_e2e = pytest.mark.skip(reason="set SSFLOW_RUN_E2E=1 to run e2e tests")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip_e2e)
+
+
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch, tmp_path):
-    """Make sure tests don't accidentally pollute the cost ledger or scorecard db."""
+def _isolate_env(request, monkeypatch, tmp_path):
+    """Make sure tests don't accidentally pollute the cost ledger or scorecard db.
+
+    e2e tests bypass the OPENAI_API_KEY override so they can hit a real
+    LLM — the key was loaded from .env at conftest module import time.
+    """
+    if request.node.get_closest_marker("e2e"):
+        # Isolate cost / scorecard paths, but keep the real API key.
+        monkeypatch.setenv("SSFLOW_COST_LEDGER", str(tmp_path / "cost.json"))
+        monkeypatch.setenv("SSFLOW_SCORECARD_DB", str(tmp_path / "scorecard.db"))
+        import ssflow.config
+        ssflow.config.settings = ssflow.config.Settings()  # type: ignore[call-arg]
+        yield
+        return
+
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key-for-tests")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://yourapi.cn/v1")
     monkeypatch.setenv("SSFLOW_COST_LEDGER", str(tmp_path / "cost.json"))

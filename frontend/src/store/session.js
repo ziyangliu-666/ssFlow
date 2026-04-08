@@ -13,7 +13,6 @@ const initial = {
   sessionId: '',
   uploadedFiles: [],     // [{tmp_path, name, size, kind}]
   prompt: '',
-  extraText: '',
   urls: [],              // string[]
   eventProposal: null,   // dict or null
   personasProposed: [],  // partial dicts
@@ -48,7 +47,6 @@ export function resetSession () {
   session.sessionId = ''
   session.uploadedFiles = []
   session.prompt = ''
-  session.extraText = ''
   session.urls = []
   session.eventProposal = null
   session.personasProposed = []

@@ -522,6 +522,41 @@ async def run_simulation(
                     simulation_id, round_idx, exc,
                 )
 
+            # 2.5. Query publications created during the social step and
+            #      emit them as persona_thought events BEFORE the trade
+            #      events. Thoughts chronologically precede trades because
+            #      they come from the same LLM decision that triggered the
+            #      submit_order_distribution tool call. Emitting in that
+            #      order lets the frontend timeline read as cause → effect
+            #      (thought → trade → flow → price), not the reverse.
+            post_social_post_id = _max_post_id(str(db_path_obj))
+            social_publications = _query_round_publications(
+                db_path=str(db_path_obj),
+                registry=publication_registry,
+                persona_id_to_oasis_id=persona_id_to_oasis_id,
+                since_post_id=pre_round_post_id,
+            )
+            for pub in social_publications:
+                # Skip market broadcaster posts — they're not persona thoughts.
+                if pub.author_persona_id == MARKET_AGENT_ID_NAME:
+                    continue
+                safe_emit(
+                    event_sink,
+                    EVENT_PERSONA_THOUGHT,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    publication_id=pub.publication_id,
+                    oasis_post_id=pub.oasis_post_id,
+                    persona_id=pub.author_persona_id,
+                    archetype=pub.author_archetype,
+                    content_type=pub.content_type,
+                    text=pub.text,
+                    authority_weight=float(pub.authority_weight),
+                    likes=int(pub.likes),
+                    reposts=int(pub.reposts),
+                    references=list(pub.references),
+                )
+
             # 3. Drain the OrderCollector: all trading intents submitted via
             #    the submit_order_distribution tool during the social step.
             pending_orders = order_collector.drain()
@@ -662,30 +697,21 @@ async def run_simulation(
                     simulation_id, round_idx, exc,
                 )
 
-            # 6. Collect all publications created this round
-            publications_this_round = _query_round_publications(
+            # 6. Collect publications created AFTER the social step
+            #    (these are the market broadcaster's price post + anything
+            #    else emitted by env.step(market_agent) above). Combined
+            #    with social_publications above, this forms the full
+            #    per-round publication list that the markdown report uses.
+            #    We don't emit these as persona_thought events — the price
+            #    post is already represented by EVENT_PRICE_UPDATED, and
+            #    the timeline would double-count it.
+            market_publications = _query_round_publications(
                 db_path=str(db_path_obj),
                 registry=publication_registry,
                 persona_id_to_oasis_id=persona_id_to_oasis_id,
-                since_post_id=pre_round_post_id,
+                since_post_id=post_social_post_id,
             )
-            for pub in publications_this_round:
-                safe_emit(
-                    event_sink,
-                    EVENT_PERSONA_THOUGHT,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    publication_id=pub.publication_id,
-                    oasis_post_id=pub.oasis_post_id,
-                    persona_id=pub.author_persona_id,
-                    archetype=pub.author_archetype,
-                    content_type=pub.content_type,
-                    text=pub.text,
-                    authority_weight=float(pub.authority_weight),
-                    likes=int(pub.likes),
-                    reposts=int(pub.reposts),
-                    references=list(pub.references),
-                )
+            publications_this_round = social_publications + market_publications
 
             rounds.append(
                 RoundRecord(
