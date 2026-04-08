@@ -164,6 +164,36 @@ calibrations are still slightly too aggressive. To investigate after T+5:
 - [ ] **2026-05-04:** Update `personas/ashare.yaml` voice prompts if specific
   classes had wildly mismatched LLM responses
 
+## Web UI walk-through (C5 verification)
+
+Per the original plan, the C5 milestone required walking through the full
+flow via the browser. Done on 2026-04-08 via Playwright MCP:
+
+1. Navigated to `http://127.0.0.1:5000/`
+2. Filled the event form (ticker / event_text / event_type / event_date /
+   prior_consensus / recent_price_action / sector_context)
+3. Selected the new "执行模式" → `sandbox (agent-based market 推演)` dropdown
+4. Filled `当前价格 ¥` = 218.50 and `日均成交额 ¥億` = 80
+5. Submitted with the X-Auth-Password header
+6. After 17.9 seconds got back a fully rendered sandbox report
+
+Screenshot: `scorecard/screenshots/003-byd-sandbox-walkthrough.png`
+
+Web run details (separate from the CLI run above):
+  - Simulation ID: `sandbox_e9d643182ccc`
+  - Initial: ¥218.50  →  Final: ¥192.74
+  - Cumulative: -11.79%
+  - Cost: $0.0197 (slightly less than CLI run because shorter rationales)
+
+The web run produced a different stochastic outcome than the CLI run
+(-11.79% vs +7.81%) — same engine, same persona pack, same LLM, but
+the LLM responses are nondeterministic. This is expected. Both runs
+demonstrate that the engine produces non-trivial multi-round dynamics.
+
+Both stack layers (CLI direct + Flask HTTP) produced consistent reports
+with all four sections (price trajectory, class P&L, strategic layer,
+class voices) and passed the compliance filter.
+
 ---
 
 _This is the first entry recording a falsifiable, physics-grounded ssFish
