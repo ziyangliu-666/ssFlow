@@ -231,26 +231,71 @@ def test_sanitize_real_persona_output() -> None:
 # advice" disclaimer that contained the word "建议".
 
 
-def test_render_module_disclaimer_is_compliant() -> None:
+def test_render_sandbox_disclaimer_is_compliant() -> None:
     """Catch the infinite-loop bug where the system's own disclaimer
-    contains a forbidden word."""
-    from ssfish.report import _render_implied_move
-    from ssfish.aggregation import AggregatedReport
+    contains a forbidden word.
 
-    fake_report = AggregatedReport(
-        simulation_id="test",
-        sentiment_mean=-0.5,
-        sentiment_std=0.2,
-        sentiment_histogram={"strongly_negative": 1, "negative": 0, "neutral": 0,
-                             "positive": 0, "strongly_positive": 0},
-        action_intent_breakdown={"observe": 1.0},
-        implied_move_low=-3.0,
-        implied_move_high=-1.0,
-        implied_move_confidence=0.6,
-        dispersion=0.2,
-        blind_spots=[],
-        standout_reactions=[],
-        persona_summary=[{"persona_id": "x"}],
+    The sandbox report's footer text is checked against the compliance
+    filter to make sure ssFish doesn't quarantine its own boilerplate.
+    """
+    from ssfish.report import render_sandbox_markdown
+    from ssfish.event import Event
+    from ssfish.persona import MarketShare, Persona, SandboxConfig
+    from ssfish.sandbox import (
+        Agent, ClassFlowResult, SandboxResult, SandboxRoundRecord,
     )
-    text = _render_implied_move(fake_report)
-    assert is_compliant(text), f"Boilerplate disclaimer trips own filter: {text}"
+
+    persona = Persona(
+        id="test_class",
+        archetype="test archetype",
+        display_name="test",
+        voice_prompt="x",
+        decision_mode="discretionary",
+        role="directional_speculator",
+        market_share=MarketShare(by_volume=0.10),
+        sandbox=SandboxConfig(
+            instance_count=1,
+            capital_distribution={"type": "lognormal", "median_cny": 100000, "sigma": 0.5},
+            initial_position_distribution={"type": "fixed", "value": 0.5},
+            risk={"max_position_pct": 0.95},
+            action_space=[{"name": "hold", "side": "none", "pool": "none", "fraction": 0.0}],
+        ),
+    )
+    event = Event(
+        ticker="TEST",
+        event_text="test event",
+        event_type="other",
+        event_date="2026-04-08",
+        current_price=100.0,
+        adv_cny=1e9,
+    )
+    round_rec = SandboxRoundRecord(
+        round_idx=0, price_before=100.0, price_after=98.0, delta_pct=-0.02,
+        net_flow_cny=-1e7,
+        class_flows={"test_class": ClassFlowResult(
+            persona_id="test_class", net_flow_cny=-1e7,
+            action_histogram={"hold": 1}, n_agents=1,
+            rationale="测试 rationale", strategic_signal=None,
+        )},
+        fingerprints=["fp_test"],
+    )
+    result = SandboxResult(
+        simulation_id="test",
+        event=event,
+        personas=[persona],
+        initial_price=100.0,
+        final_price=98.0,
+        rounds=[round_rec],
+        elapsed_seconds=1.0,
+        cost_usd_at_start=0.0,
+        cost_usd_at_end=0.01,
+        llm_seed=42,
+        lambda_used=0.5,
+        adv_cny_used=1e9,
+        final_agents_by_class={"test_class": [Agent(
+            persona_id="test_class", capital_cny=100000,
+            cash_cny=50000, holdings_shares=500, max_holdings_value_cny=95000,
+        )]},
+    )
+    text = render_sandbox_markdown(result)
+    assert is_compliant(text), f"Sandbox boilerplate trips own filter: {text[:500]}"

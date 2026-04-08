@@ -1,246 +1,135 @@
-"""Markdown report renderer.
-
-Three sections per the design doc P1:
-    1. 群体反应叙事 (group reaction narrative)
-    2. 盲点清单 (blind spot list)
-    3. 模拟群体的 implied price move (descriptive)
+"""Markdown report renderer for sandbox-mode simulations.
 
 The full report is run through the compliance output_filter before display.
 If a violation is found, the report is replaced with a generic
-"verification in progress" message and the raw report is logged for review.
+"verification in progress" placeholder and the raw report is logged.
+
+This module is currency-agnostic. The Event provides `current_price` +
+`adv_value` + `price_currency` (or defaults via the Event init); the
+renderer formats them with the appropriate symbol and unit per market.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
-from .aggregation import AggregatedReport
 from .config import settings
 from .output_filter import ComplianceViolation, assert_compliant, sanitize_text
 from .sandbox import SandboxResult
-from .simulation import SimulationResult
 
 
 log = logging.getLogger(__name__)
 
 
-# ─────────────────────── Renderers ───────────────────────
+# ─────────────────────── Currency / unit formatting ───────────────────────
 
 
-def _render_narrative(result: SimulationResult, report: AggregatedReport) -> str:
-    """Compose the group-reaction narrative section."""
-    by_archetype: dict[str, list[str]] = {}
-    by_id = {p.id: p for p in result.personas}
-    for r in result.final_reactions:
-        p = by_id.get(r.persona_id)
-        if not p:
-            continue
-        by_archetype.setdefault(p.archetype, []).append(sanitize_text(r.comment))
-
-    lines = []
-    for archetype, comments in by_archetype.items():
-        if not comments:
-            continue
-        comment = comments[0]  # one rep per archetype for compactness
-        lines.append(f"- **{archetype}**: {comment}")
-
-    histogram = report.sentiment_histogram
-    total = sum(histogram.values())
-    if total:
-        neg_share = (histogram["strongly_negative"] + histogram["negative"]) / total
-        pos_share = (histogram["positive"] + histogram["strongly_positive"]) / total
-        neutral_share = histogram["neutral"] / total
-        summary = (
-            f"模拟群体情绪分布: {neg_share:.0%} 偏负面, {neutral_share:.0%} 中性, "
-            f"{pos_share:.0%} 偏正面 (n={total})"
-        )
-    else:
-        summary = "模拟群体: 无样本"
-
-    return summary + "\n\n" + "\n".join(lines)
+# Currency display preferences. The renderer picks the symbol and unit
+# multiplier based on the Event's currency. Add new currencies here.
+CURRENCY_FORMATS: dict[str, dict[str, object]] = {
+    "CNY": {"symbol": "¥",  "big_unit": "億", "big_divisor": 1e8, "small_unit": "M",  "small_divisor": 1e6},
+    "USD": {"symbol": "$",  "big_unit": "B",  "big_divisor": 1e9, "small_unit": "M",  "small_divisor": 1e6},
+    "EUR": {"symbol": "€",  "big_unit": "B",  "big_divisor": 1e9, "small_unit": "M",  "small_divisor": 1e6},
+    "JPY": {"symbol": "¥",  "big_unit": "B",  "big_divisor": 1e9, "small_unit": "M",  "small_divisor": 1e6},
+    "HKD": {"symbol": "HK$","big_unit": "B",  "big_divisor": 1e9, "small_unit": "M",  "small_divisor": 1e6},
+    "BTC": {"symbol": "₿",  "big_unit": "K",  "big_divisor": 1e3, "small_unit": "",   "small_divisor": 1.0},
+}
 
 
-def _render_blind_spots(report: AggregatedReport) -> str:
-    if not report.blind_spots:
-        return "(本次模拟未识别出明显的盲点)"
-    return "\n".join(f"{i+1}. {sanitize_text(bs)}" for i, bs in enumerate(report.blind_spots))
+def _fmt_price(value: float, currency: str = "CNY") -> str:
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    return f"{fmt['symbol']}{value:.2f}"
 
 
-def _render_implied_move(report: AggregatedReport) -> str:
-    confidence_label = (
-        "高" if report.implied_move_confidence > 0.65 else
-        ("中" if report.implied_move_confidence > 0.4 else "低")
-    )
-    return (
-        f"模拟群体的 implied price move (描述性, 非预测): "
-        f"**{report.implied_move_low:+.1f}% ~ {report.implied_move_high:+.1f}%**\n\n"
-        f"模型置信度: {confidence_label} ({report.implied_move_confidence:.2f}) | "
-        f"群体分歧度 (dispersion): {report.dispersion:.2f}\n\n"
-        f"_注: 此区间是 {len(report.persona_summary)} 个模拟 persona 群体行为聚合后的衍生信号, "
-        f"不构成对真实股价的预测, 也不作为任何投资决策依据。_"
-    )
+def _fmt_big(value: float, currency: str = "CNY") -> str:
+    """Format a large CNY/USD/etc. value with the appropriate unit."""
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    return f"{fmt['symbol']}{value / fmt['big_divisor']:.2f}{fmt['big_unit']}"
 
 
-def _render_action_intent(report: AggregatedReport) -> str:
-    if not report.action_intent_breakdown:
-        return ""
-    rows = "\n".join(
-        f"- {intent}: {share:.0%}"
-        for intent, share in report.action_intent_breakdown.items()
-    )
-    return f"### 行动倾向分布 (action intent)\n\n{rows}"
+def _fmt_small(value: float, currency: str = "CNY") -> str:
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    return f"{fmt['symbol']}{value / fmt['small_divisor']:.2f}{fmt['small_unit']}"
 
 
-def render_markdown(result: SimulationResult, report: AggregatedReport) -> str:
-    """Compose the full markdown report. Call assert_compliant before display."""
-    event = result.event
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    md = f"""# ssFish 模拟报告
-
-**事件**: `{event.ticker}` · {event.event_type} · {event.event_date}
-**Simulation ID**: `{result.simulation_id}`
-**模拟规模**: {result.n_personas} personas × {result.n_rounds} rounds
-**耗时**: {result.elapsed_seconds:.1f}s · **成本**: ${result.cost_usd:.4f}
-**生成时间**: {now}
-
----
-
-## 1. 群体反应叙事
-
-{_render_narrative(result, report)}
-
-{_render_action_intent(report)}
-
----
-
-## 2. 盲点清单
-
-{_render_blind_spots(report)}
-
----
-
-## 3. 模拟群体的 implied price move
-
-{_render_implied_move(report)}
-
----
-
-## 模拟元信息
-
-- 事件文本 hash: `{event.text_hash}`
-- 上下文完整度: {event.context_completeness:.0%} (prior_consensus + recent_price + sector_context)
-- 情绪均值 / 标准差: {report.sentiment_mean:+.3f} / {report.sentiment_std:.3f}
-- 情绪直方图: {report.sentiment_histogram}
-"""
-    return md.strip()
+def _event_currency(result: SandboxResult) -> str:
+    """Best-effort currency detection from the Event."""
+    return getattr(result.event, "price_currency", None) or "CNY"
 
 
-def render_safe_or_quarantine(
-    result: SimulationResult, report: AggregatedReport
-) -> tuple[str, bool]:
-    """Render the report and run it through the compliance filter.
-
-    Returns:
-        (display_text, is_compliant): display_text is either the real report
-        (if it passed the filter) or a placeholder message (if it failed).
-        is_compliant tells the caller which one happened.
-    """
-    full_md = render_markdown(result, report)
-    try:
-        assert_compliant(full_md)
-        return full_md, True
-    except ComplianceViolation as exc:
-        # Persist the offending report to a quarantine folder
-        quarantine_dir = Path(settings.project_root) / "reports" / "quarantine"
-        quarantine_dir.mkdir(parents=True, exist_ok=True)
-        path = quarantine_dir / f"{result.simulation_id}.md"
-        path.write_text(full_md, encoding="utf-8")
-        log.warning(
-            "Report %s quarantined due to compliance filter. Violations: %s. Saved to %s",
-            result.simulation_id,
-            exc.violations,
-            path,
-        )
-        placeholder = (
-            f"# ssFish 模拟报告 - 验证中\n\n"
-            f"Simulation ID: `{result.simulation_id}`\n\n"
-            f"本次模拟的输出正在进行合规验证, 暂时无法显示。\n"
-            f"如果您是工具的开发者, 请检查 `reports/quarantine/{result.simulation_id}.md`。\n"
-        )
-        return placeholder, False
-
-
-def save_report(text: str, simulation_id: str) -> Path:
-    """Persist a report to the reports/ dir, return its path."""
-    reports_dir = settings.reports_dir
-    path = reports_dir / f"{simulation_id}.md"
-    path.write_text(text, encoding="utf-8")
-    return path
-
-
-# ─────────────────────── Sandbox-mode renderers ───────────────────────
+# ─────────────────────── Sandbox renderers ───────────────────────
 
 
 def _render_price_trajectory_ascii(result: SandboxResult, width: int = 50) -> str:
-    """A small ASCII chart of the price trajectory across rounds.
-
-    Looks like:
-        R0  ¥218.50  ████████████████████████░░░░░  +0.00%
-        R1  ¥213.27  ████████████████████░░░░░░░░░  -2.39%
-        ...
-    """
+    """Compact ASCII chart of the price trajectory across rounds."""
     traj = result.price_trajectory
     if not traj:
         return "(no trajectory)"
     p_min = min(traj)
     p_max = max(traj)
     spread = p_max - p_min if p_max > p_min else 1.0
+    currency = _event_currency(result)
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
 
     lines = []
     for i, p in enumerate(traj):
         pct = (p / traj[0] - 1.0) * 100 if traj[0] else 0.0
         bar_len = int((p - p_min) / spread * width)
         bar = "█" * bar_len + "░" * (width - bar_len)
-        lines.append(f"  R{i}  ¥{p:7.2f}  {bar}  {pct:+6.2f}%")
+        lines.append(f"  R{i}  {sym}{p:8.2f}  {bar}  {pct:+6.2f}%")
     return "\n".join(lines)
 
 
 def _render_sandbox_round_table(result: SandboxResult) -> str:
     """Markdown table summarizing each round's net flow + price update."""
-    lines = ["| Round | Price before | Price after | ΔP | Net flow (¥億) |",
-             "|---|---|---|---|---|"]
+    currency = _event_currency(result)
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+    big_unit = fmt["big_unit"]
+    big_div = fmt["big_divisor"]
+
+    lines = [
+        f"| Round | Price before | Price after | ΔP | Net flow ({sym}{big_unit}) |",
+        "|---|---|---|---|---|",
+    ]
     for r in result.rounds:
         lines.append(
-            f"| R{r.round_idx} | ¥{r.price_before:.2f} | ¥{r.price_after:.2f} | "
-            f"{r.delta_pct * 100:+.2f}% | {r.net_flow_cny / 1e8:+.2f} |"
+            f"| R{r.round_idx} | {sym}{r.price_before:.2f} | {sym}{r.price_after:.2f} | "
+            f"{r.delta_pct * 100:+.2f}% | {r.net_flow_cny / big_div:+.2f} |"
         )
     return "\n".join(lines)
 
 
 def _render_class_pnl_table(result: SandboxResult) -> str:
     """Markdown table of per-class P&L at the final price, sorted descending."""
+    currency = _event_currency(result)
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+    sm_div = fmt["small_divisor"]
+    sm_unit = fmt["small_unit"]
+
     by_id = {p.id: p for p in result.personas}
     pnl = result.compute_class_pnl()
     if not pnl:
         return "(no agents)"
     rows_data = sorted(pnl.items(), key=lambda kv: kv[1], reverse=True)
 
-    lines = ["| Persona class | Archetype | Final P&L (¥M) | Per-agent (¥k) | Agents |",
-             "|---|---|---|---|---|"]
+    lines = [
+        f"| Persona class | Archetype | Final P&L ({sym}{sm_unit}) | Per-agent ({sym}k) | Agents |",
+        "|---|---|---|---|---|",
+    ]
     for cid, total_pnl in rows_data:
         p = by_id.get(cid)
         if p is None:
             continue
-        n_agents = (
-            p.sandbox.instance_count if p.sandbox else 0
-        )
+        n_agents = p.sandbox.instance_count if p.sandbox else 0
         per_agent = (total_pnl / n_agents / 1e3) if n_agents else 0.0
         lines.append(
             f"| `{cid}` | {p.archetype} | "
-            f"{total_pnl / 1e6:+.2f} | {per_agent:+.1f} | {n_agents} |"
+            f"{total_pnl / sm_div:+.2f} | {per_agent:+.1f} | {n_agents} |"
         )
     return "\n".join(lines)
 
@@ -254,7 +143,6 @@ def _render_strategic_signals(result: SandboxResult) -> str:
     aggregation — they're a parallel signal track per spec §11 Q3.
     """
     by_id = {p.id: p for p in result.personas}
-    # Pull strategic signals from the LAST round (most settled state)
     if not result.rounds:
         return "(no rounds)"
     last_round = result.rounds[-1]
@@ -267,7 +155,7 @@ def _render_strategic_signals(result: SandboxResult) -> str:
         signals.append((p.archetype, cid, sig, cf.rationale))
 
     if not signals:
-        return "_本次模拟未触发战略层信号_"
+        return "_No strategic-layer signals triggered in this run_"
 
     lines = []
     for archetype, cid, sig, rationale in signals:
@@ -276,7 +164,7 @@ def _render_strategic_signals(result: SandboxResult) -> str:
         horizon = sig.get("time_horizon_days", "?")
         lines.append(
             f"- **{archetype}** (`{cid}`): direction={direction}, "
-            f"magnitude={magnitude}, time_horizon={horizon}天"
+            f"magnitude={magnitude}, time_horizon={horizon}d"
         )
         if rationale:
             lines.append(f"  - _{sanitize_text(rationale)[:200]}_")
@@ -287,11 +175,18 @@ def _render_round_voices(result: SandboxResult, max_per_round: int = 3) -> str:
     """Pull a few class rationales from each round so the qualitative voice
     isn't lost behind the price chart.
     """
+    currency = _event_currency(result)
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+    big_div = fmt["big_divisor"]
+    big_unit = fmt["big_unit"]
+
     by_id = {p.id: p for p in result.personas}
     sections = []
     for r in result.rounds:
-        round_lines = [f"### R{r.round_idx} (¥{r.price_before:.2f} → ¥{r.price_after:.2f}, {r.delta_pct * 100:+.2f}%)"]
-        # Sort classes by absolute flow contribution (most active first)
+        round_lines = [
+            f"### R{r.round_idx} ({sym}{r.price_before:.2f} → {sym}{r.price_after:.2f}, {r.delta_pct * 100:+.2f}%)"
+        ]
         sorted_classes = sorted(
             r.class_flows.items(),
             key=lambda kv: abs(kv[1].net_flow_cny),
@@ -303,7 +198,7 @@ def _render_round_voices(result: SandboxResult, max_per_round: int = 3) -> str:
                 continue
             sign = "净买盘" if cf.net_flow_cny > 0 else ("净卖盘" if cf.net_flow_cny < 0 else "观望")
             round_lines.append(
-                f"- **{p.archetype}** ({sign} ¥{abs(cf.net_flow_cny) / 1e8:.2f}億): "
+                f"- **{p.archetype}** ({sign} {sym}{abs(cf.net_flow_cny) / big_div:.2f}{big_unit}): "
                 f"_{sanitize_text(cf.rationale)[:200]}_"
             )
         sections.append("\n".join(round_lines))
@@ -311,27 +206,34 @@ def _render_round_voices(result: SandboxResult, max_per_round: int = 3) -> str:
 
 
 def render_sandbox_markdown(result: SandboxResult) -> str:
-    """Compose the full markdown report for a sandbox-mode simulation."""
+    """Compose the full markdown report for a sandbox-mode simulation.
+
+    Currency-aware: pulls the currency from `result.event.price_currency`
+    and formats prices/units accordingly. Defaults to CNY for backward compat.
+    """
     event = result.event
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    currency = _event_currency(result)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    instrument = getattr(event, "instrument", None) or event.ticker
 
-    md = f"""# ssFish 沙箱推演报告
+    md = f"""# ssFish Market Simulation Report
 
-**事件**: `{event.ticker}` · {event.event_type} · {event.event_date}
+**Event**: `{instrument}` · {event.event_type} · {event.event_date}
 **Simulation ID**: `{result.simulation_id}`
-**模拟规模**: {result.n_personas} persona 类别 × {result.n_rounds} rounds (agent-based market model)
-**初始价格**: ¥{result.initial_price:.2f} · **终值**: ¥{result.final_price:.2f}
-**累计变动**: **{result.cumulative_delta_pct * 100:+.2f}%**
-**耗时**: {result.elapsed_seconds:.1f}s · **成本**: ${result.cost_usd:.4f}
-**生成时间**: {now}
+**Scale**: {result.n_personas} persona classes × {result.n_rounds} rounds (agent-based market model)
+**Initial price**: {_fmt_price(result.initial_price, currency)} · **Final**: {_fmt_price(result.final_price, currency)}
+**Cumulative**: **{result.cumulative_delta_pct * 100:+.2f}%**
+**Wall clock**: {result.elapsed_seconds:.1f}s · **Cost**: ${result.cost_usd:.4f}
+**Generated**: {now}
 
-> 本报告由 ssFish 沙箱执行模式生成. 价格轨迹是从模拟订单流中**emerge**的,
-> 不是 sentiment 启发式映射. λ 系数 = {result.lambda_used:.2f} (literature value),
-> ADV = ¥{result.adv_cny_used / 1e8:.0f}億. 输出可与真实 T+1 / T+5 价格直接对账.
+> Report generated by ssFish sandbox mode. Price trajectory **emerges** from
+> simulated order flow, not from a heuristic mapping. λ = {result.lambda_used:.2f}
+> (literature value), ADV = {_fmt_big(result.adv_cny_used, currency)}. Output
+> can be directly compared against real T+1 / T+5 prices.
 
 ---
 
-## 1. 价格轨迹 (Price Trajectory)
+## 1. Price Trajectory
 
 ```
 {_render_price_trajectory_ascii(result)}
@@ -341,46 +243,50 @@ def render_sandbox_markdown(result: SandboxResult) -> str:
 
 ---
 
-## 2. 类别盈亏 (Class P&L)
+## 2. Class P&L
 
-按最终价格 ¥{result.final_price:.2f} 计算的每类 persona 累计盈亏:
+Per-class cumulative P&L at final price {_fmt_price(result.final_price, currency)}:
 
 {_render_class_pnl_table(result)}
 
 ---
 
-## 3. 战略层信号 (Strategic Layer)
+## 3. Strategic Layer
 
-这一节是产业资本/政府队/大股东类 persona 的**行为意图信号**, 它们不参与
-sentiment 加权 (因为它们的反应是月级而非日级), 但它们的行为意图对中期
-价格有强约束.
+This section shows behavioral intent signals from strategic personas
+(controlling shareholders / state holders / large individual holders).
+They do NOT participate in sentiment aggregation — their reactions are
+month-scale, not day-scale — but their action intent constrains the
+medium-term price.
 
 {_render_strategic_signals(result)}
 
 ---
 
-## 4. 各轮反应 (Class Voices)
+## 4. Class Voices (per round)
 
-每轮取流量贡献最大的 3 个 persona 类别, 显示它们的 LLM 推理:
+Top 3 classes by absolute net flow per round, with their LLM reasoning:
 
 {_render_round_voices(result)}
 
 ---
 
-## 模拟元信息
+## Simulation Metadata
 
-- 事件文本 hash: `{event.text_hash}`
-- 上下文完整度: {event.context_completeness:.0%}
-- 模式: **sandbox** (agent-based market model with Kyle square-root impact)
+- Event text hash: `{event.text_hash}`
+- Context completeness: {event.context_completeness:.0%}
+- Mode: **sandbox** (agent-based market model with Kyle square-root impact)
 - λ used: {result.lambda_used:.3f}
-- ADV used: ¥{result.adv_cny_used / 1e8:.1f}億
-- 价格上下界 (历轮): ¥{min(result.price_trajectory):.2f} – ¥{max(result.price_trajectory):.2f}
+- ADV used: {_fmt_big(result.adv_cny_used, currency)}
+- Price range (across rounds): {_fmt_price(min(result.price_trajectory), currency)} – {_fmt_price(max(result.price_trajectory), currency)}
 - LLM seed: {result.llm_seed}
-- 总订单流 (∑): ¥{sum(r.net_flow_cny for r in result.rounds) / 1e8:+.2f}億
+- Total order flow (Σ): {_fmt_big(sum(r.net_flow_cny for r in result.rounds), currency)}
 
-_注: 此输出是 14 个真实数据校准的 persona 类别推演出的结果. 价格不是预测, 是
-模拟出的市场反应. 请把它当成一个"假设这个事件触发了真实分布的市场参与者反应"
-的思想实验, 不构成任何投资决策依据._
+_Note: This output is the result of {result.n_personas} real-data-calibrated
+persona classes simulating their reactions to the event. The price is NOT
+a prediction; it is a simulated market reaction. Treat this as a thought
+experiment of "what if real-distribution market participants reacted to
+this event" — not as investment advice._
 """
     return md.strip()
 
@@ -401,17 +307,24 @@ def render_sandbox_safe_or_quarantine(result: SandboxResult) -> tuple[str, bool]
             result.simulation_id, exc.violations, path,
         )
         placeholder = (
-            f"# ssFish 沙箱报告 - 验证中\n\n"
+            f"# ssFish Simulation Report - Verification in progress\n\n"
             f"Simulation ID: `{result.simulation_id}`\n\n"
-            f"本次沙箱模拟的输出正在进行合规验证, 暂时无法显示.\n"
-            f"开发者请检查 `reports/quarantine/{result.simulation_id}.md`.\n"
+            f"The output is undergoing compliance verification.\n"
+            f"Developers: see `reports/quarantine/{result.simulation_id}.md`.\n"
         )
         return placeholder, False
 
 
+def save_report(text: str, simulation_id: str) -> Path:
+    """Persist a report to the reports/ dir, return its path."""
+    reports_dir = settings.reports_dir
+    path = reports_dir / f"{simulation_id}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 __all__ = [
-    "render_markdown",
-    "render_safe_or_quarantine",
+    "CURRENCY_FORMATS",
     "render_sandbox_markdown",
     "render_sandbox_safe_or_quarantine",
     "save_report",

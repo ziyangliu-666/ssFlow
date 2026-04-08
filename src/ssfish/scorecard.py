@@ -164,76 +164,6 @@ def init_db() -> None:
 # ─────────────────────── Insert ───────────────────────
 
 
-def insert_simulation(
-    *,
-    event_ticker: str,
-    event_date: str,
-    event_type: str,
-    event_text_hash: str,
-    persona_set_hash: str,
-    model_default: str,
-    seed: int,
-    n_personas: int,
-    n_rounds: int,
-    sentiment_mean: float,
-    sentiment_std: float,
-    implied_move_low: float,
-    implied_move_high: float,
-    implied_move_confidence: float,
-    blind_spots: list[str],
-    full_report_path: str | None,
-    cost_usd: float,
-    elapsed_seconds: float,
-    simulation_id: str | None = None,
-    round_fingerprints: list[str | None] | None = None,
-    llm_seed: int | None = None,
-) -> str:
-    """Insert one sentiment-mode simulation row. Returns the simulation_id.
-
-    round_fingerprints / llm_seed were added in schema v2 (retrospective
-    reproducibility fix). The provider's `system_fingerprint` plus the seed
-    we passed to the LLM API are what let us claim "same config fingerprint"
-    reruns. The old `seed` column is kept for backwards compatibility but
-    only records settings.seed (the shuffle seed), not what reached the LLM.
-
-    For sandbox-mode runs, use insert_sandbox_simulation() instead.
-    """
-    sim_id = simulation_id or str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    fingerprints_json = (
-        json.dumps(round_fingerprints) if round_fingerprints is not None else None
-    )
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO simulations (
-                simulation_id, event_ticker, event_date, event_type,
-                event_text_hash, persona_set_hash, model_default,
-                seed, n_personas, n_rounds,
-                sentiment_mean, sentiment_std,
-                implied_move_low, implied_move_high, implied_move_confidence,
-                blind_spots_json, full_report_path, cost_usd, elapsed_seconds,
-                created_at,
-                round_fingerprints_json, llm_seed,
-                mode
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                sim_id, event_ticker, event_date, event_type,
-                event_text_hash, persona_set_hash, model_default,
-                seed, n_personas, n_rounds,
-                sentiment_mean, sentiment_std,
-                implied_move_low, implied_move_high, implied_move_confidence,
-                json.dumps(blind_spots, ensure_ascii=False),
-                full_report_path, cost_usd, elapsed_seconds,
-                now,
-                fingerprints_json, llm_seed,
-                'sentiment',
-            ),
-        )
-    return sim_id
-
-
 def insert_sandbox_simulation(
     *,
     event_ticker: str,
@@ -351,7 +281,6 @@ __all__ = [
     "get_simulation",
     "init_db",
     "insert_sandbox_simulation",
-    "insert_simulation",
     "query_recent",
     "update_actual_move",
 ]

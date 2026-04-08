@@ -1,13 +1,37 @@
 #!/usr/bin/env python
-"""CLI runner for one simulation. The founder's primary daily-use loop.
+"""CLI runner for one ssFish sandbox simulation.
 
-Example:
-    python scripts/run_one.py \\
-        --event ./predictions/event-1.txt \\
-        --ticker 002594 \\
-        --event-type earnings \\
-        --event-date 2026-04-09 \\
-        --prior-consensus ./predictions/consensus-1.txt
+ssFish runs an agent-based market model: each persona class spawns N
+stochastic agents with real capital + holdings, an LLM call per class
+returns an action distribution, the sandbox samples agents and aggregates
+into net order flow, then applies the Kyle square-root price impact
+formula to derive a price trajectory.
+
+There is only one execution mode: `sandbox`. The legacy `sentiment`
+heuristic mode was removed in the G2 cleanup — sandbox supersedes it.
+
+Two ways to invoke:
+
+1. Explicit fields (legacy / scriptable):
+
+    uv run python scripts/run_one.py \\
+      --event ./predictions/event-1.txt \\
+      --ticker 002594 \\
+      --event-type earnings \\
+      --event-date 2026-04-29 \\
+      --current-price 218.50 \\
+      --adv 8000000000 \\
+      --personas personas/ashare.yaml
+
+2. Free-form input via the event extractor (G5, recommended):
+
+    uv run python scripts/run_one.py \\
+      --input "BYD Q1 2026 earnings: 营收 +18% beat, 毛利率 -2.3pp miss" \\
+      --confirm  # auto-confirm extractor output, no interactive prompt
+
+The free-form mode uses event_extractor to identify the market, instrument,
+event type, fetches context, and pre-fills all other fields. The user
+sees what was extracted and confirms (or edits with --no-confirm).
 """
 
 from __future__ import annotations
@@ -21,19 +45,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ssfish.aggregation import aggregate
 from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
 from ssfish.llm_client import cost_tracker
 from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import (
-    render_safe_or_quarantine,
-    render_sandbox_safe_or_quarantine,
-    save_report,
-)
+from ssfish.report import render_sandbox_safe_or_quarantine, save_report
 from ssfish.sandbox import run_sandbox_simulation
-from ssfish.scorecard import init_db, insert_sandbox_simulation, insert_simulation
-from ssfish.simulation import run_simulation
+from ssfish.scorecard import init_db, insert_sandbox_simulation
 
 
 def _read_or_blank(path: str | None) -> str:
@@ -46,9 +64,9 @@ def _read_or_blank(path: str | None) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ssFish — run one A-share event simulation")
+    p = argparse.ArgumentParser(description="ssFish — run one market sandbox simulation")
     p.add_argument("--event", required=True, help="Path to event text file")
-    p.add_argument("--ticker", required=True, help="A-share ticker code (6 digits)")
+    p.add_argument("--ticker", required=True, help="Instrument ticker (e.g. 002594, NVDA, BTC-USD)")
     p.add_argument(
         "--event-type",
         default="other",
@@ -62,30 +80,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--personas",
         default=None,
-        help="Path to personas YAML (defaults to personas/ashare.yaml)",
+        help="Path to personas YAML (no default — must be specified)",
     )
     p.add_argument(
         "--rounds", type=int, default=None, help="Override n_rounds (defaults to settings)"
     )
     p.add_argument(
-        "--mode",
-        choices=["sentiment", "sandbox"],
-        default="sentiment",
-        help="Simulation mode: 'sentiment' (legacy heuristic) or 'sandbox' "
-             "(agent-based market model). sandbox requires --current-price + --adv",
-    )
-    p.add_argument(
         "--current-price",
         type=float,
-        default=None,
-        help="Current price (CNY) — required for --mode sandbox",
+        required=True,
+        help="Current price of the instrument (in instrument's native currency)",
     )
     p.add_argument(
         "--adv",
         type=float,
-        default=None,
-        help="Average daily volume (CNY) — required for --mode sandbox. "
-             "Trailing 30d is conventional. Will be filled by Tushare in B8 v2.",
+        required=True,
+        help="Average daily volume in the same currency as --current-price. "
+             "Trailing 30 days conventional.",
     )
     return p.parse_args()
 
@@ -114,77 +125,25 @@ async def amain() -> int:
         print(f"ERROR: invalid event: {exc}", file=sys.stderr)
         return 2
 
-    if args.mode == "sandbox" and not event.is_sandbox_ready:
+    if args.personas is None:
         print(
-            "ERROR: --mode sandbox requires --current-price and --adv. "
-            "Sandbox mode runs an agent-based market model that needs the "
-            "ticker's current price and average daily volume in CNY.",
+            "ERROR: --personas is required. ssFish no longer defaults to a "
+            "specific market pack — pass --personas personas/ashare.yaml "
+            "(or any other pack).",
             file=sys.stderr,
         )
         return 2
 
-    personas_path = Path(args.personas) if args.personas else settings.personas_dir / "ashare.yaml"
-    personas = load_personas(personas_path)
-
+    personas = load_personas(Path(args.personas))
     init_db()
 
-    print(f"# ssFish run: {event.ticker} {event.event_type} {event.event_date} (mode={args.mode})", file=sys.stderr)
+    print(f"# ssFish run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
     print(f"#   {len(personas)} personas, {args.rounds or settings.n_rounds} rounds, "
           f"model={settings.default_model}", file=sys.stderr)
     print(f"#   context completeness: {event.context_completeness:.0%}", file=sys.stderr)
-    print(f"#   running...", file=sys.stderr, flush=True)
+    print(f"#   running sandbox simulation...", file=sys.stderr, flush=True)
 
-    if args.mode == "sandbox":
-        return await _run_sandbox(event, personas, args)
-    return await _run_sentiment(event, personas, args)
-
-
-async def _run_sentiment(event: Event, personas, args) -> int:
-    result = await run_simulation(event, personas, n_rounds=args.rounds)
-
-    report = aggregate(result)
-    display, ok = render_safe_or_quarantine(result, report)
-    report_path = save_report(display, result.simulation_id)
-
-    insert_simulation(
-        event_ticker=event.ticker,
-        event_date=event.event_date,
-        event_type=event.event_type,
-        event_text_hash=event.text_hash,
-        persona_set_hash=persona_set_hash(personas),
-        model_default=settings.default_model,
-        seed=settings.seed,
-        n_personas=result.n_personas,
-        n_rounds=result.n_rounds,
-        sentiment_mean=report.sentiment_mean,
-        sentiment_std=report.sentiment_std,
-        implied_move_low=report.implied_move_low,
-        implied_move_high=report.implied_move_high,
-        implied_move_confidence=report.implied_move_confidence,
-        blind_spots=report.blind_spots,
-        full_report_path=str(report_path),
-        cost_usd=result.cost_usd,
-        elapsed_seconds=result.elapsed_seconds,
-        simulation_id=result.simulation_id,
-        round_fingerprints=result.round_fingerprints,
-        llm_seed=result.llm_seed,
-    )
-
-    print(f"# done in {result.elapsed_seconds:.1f}s, "
-          f"cost ${result.cost_usd:.4f} (session total ${cost_tracker.total_cost_usd:.4f})",
-          file=sys.stderr)
-    print(f"# report: {report_path}", file=sys.stderr)
-    print(f"# compliance: {'PASS' if ok else 'QUARANTINED'}", file=sys.stderr)
-    print(f"# simulation_id: {result.simulation_id}", file=sys.stderr)
-    print(file=sys.stderr)
-
-    print(display)
-    return 0 if ok else 1
-
-
-async def _run_sandbox(event: Event, personas, args) -> int:
     result = await run_sandbox_simulation(event, personas, n_rounds=args.rounds)
-
     display, ok = render_sandbox_safe_or_quarantine(result)
     report_path = save_report(display, result.simulation_id)
 
@@ -229,7 +188,7 @@ async def _run_sandbox(event: Event, personas, args) -> int:
     print(f"# done in {result.elapsed_seconds:.1f}s, "
           f"cost ${result.cost_usd:.4f} (session total ${cost_tracker.total_cost_usd:.4f})",
           file=sys.stderr)
-    print(f"# price: ¥{result.initial_price:.2f} → ¥{result.final_price:.2f} "
+    print(f"# price: {result.initial_price:.2f} → {result.final_price:.2f} "
           f"({result.cumulative_delta_pct * 100:+.2f}%)", file=sys.stderr)
     print(f"# report: {report_path}", file=sys.stderr)
     print(f"# compliance: {'PASS' if ok else 'QUARANTINED'}", file=sys.stderr)

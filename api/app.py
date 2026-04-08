@@ -1,14 +1,18 @@
-"""Flask API for ssFish — synchronous, single-user.
+"""Flask API for ssFish — sandbox-only.
 
 Endpoints:
     GET  /healthz                  — no auth, returns {"status": "ok"}
-    POST /simulate                 — auth required, runs a simulation (blocks ~30s)
+    POST /simulate                 — auth required, runs a sandbox simulation (~18-30s)
     GET  /report/<simulation_id>   — auth required, fetches stored markdown report
+    GET  /cost                     — auth required, current cost tracker state
     GET  /                         — serves the static index.html form
 
-The /simulate endpoint is intentionally blocking. At 10×5 scale latency is
-~30 seconds, well within Flask's default request timeout. Async job queue is
-deferred to Week 3+ when multi-user load shows up.
+The /simulate endpoint is intentionally synchronous. At ~14 personas × 5 rounds
+the latency is ~18-30 seconds, well within Flask's default request timeout.
+Async job queue is deferred to a future scaling phase.
+
+The legacy `sentiment` mode endpoint was removed in the G2 cleanup —
+sandbox is the only execution mode.
 """
 
 from __future__ import annotations
@@ -19,19 +23,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from ssfish.aggregation import aggregate
 from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
 from ssfish.llm_client import BudgetExceeded, cost_tracker
 from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import (
-    render_safe_or_quarantine,
-    render_sandbox_safe_or_quarantine,
-    save_report,
-)
+from ssfish.report import render_sandbox_safe_or_quarantine, save_report
 from ssfish.sandbox import run_sandbox_simulation
-from ssfish.scorecard import init_db, insert_sandbox_simulation, insert_simulation
-from ssfish.simulation import run_simulation
+from ssfish.scorecard import init_db, insert_sandbox_simulation
 
 from .auth import require_password
 
@@ -61,10 +59,6 @@ def create_app() -> Flask:
         except Exception:
             return jsonify({"error": "invalid_json"}), 400
 
-        mode = payload.get("mode", "sentiment")
-        if mode not in {"sentiment", "sandbox"}:
-            return jsonify({"error": "invalid_mode", "detail": f"mode must be 'sentiment' or 'sandbox', got {mode!r}"}), 400
-
         try:
             event = Event(
                 ticker=payload.get("ticker", "").strip(),
@@ -80,76 +74,24 @@ def create_app() -> Flask:
         except (TypeError, ValueError) as exc:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
 
-        if mode == "sandbox" and not event.is_sandbox_ready:
+        if not event.is_sandbox_ready:
             return jsonify({
                 "error": "sandbox_not_ready",
-                "detail": "sandbox mode requires current_price and adv_cny in the request body"
+                "detail": "ssFish requires current_price and adv_cny in the request body",
             }), 400
 
-        personas_path = Path(payload.get("personas_path") or
-                             settings.personas_dir / "ashare.yaml")
+        personas_path = payload.get("personas_path")
+        if not personas_path:
+            return jsonify({
+                "error": "personas_path_required",
+                "detail": "personas_path must be specified — ssFish has no default market pack",
+            }), 400
+
         try:
-            personas = load_personas(personas_path)
+            personas = load_personas(Path(personas_path))
         except Exception as exc:
             return jsonify({"error": "personas_load_failed", "detail": str(exc)}), 500
 
-        if mode == "sandbox":
-            return _run_sandbox_endpoint(event, personas)
-        return _run_sentiment_endpoint(event, personas)
-
-    def _run_sentiment_endpoint(event: Event, personas):
-        try:
-            result = asyncio.run(run_simulation(event, personas))
-        except BudgetExceeded as exc:
-            return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
-        except Exception as exc:
-            log.exception("sentiment simulation failed")
-            return jsonify({"error": "simulation_failed", "detail": str(exc)}), 500
-
-        report = aggregate(result)
-        display, ok = render_safe_or_quarantine(result, report)
-        report_path = save_report(display, result.simulation_id)
-
-        sim_id = insert_simulation(
-            event_ticker=event.ticker,
-            event_date=event.event_date,
-            event_type=event.event_type,
-            event_text_hash=event.text_hash,
-            persona_set_hash=persona_set_hash(personas),
-            model_default=settings.default_model,
-            seed=settings.seed,
-            n_personas=result.n_personas,
-            n_rounds=result.n_rounds,
-            sentiment_mean=report.sentiment_mean,
-            sentiment_std=report.sentiment_std,
-            implied_move_low=report.implied_move_low,
-            implied_move_high=report.implied_move_high,
-            implied_move_confidence=report.implied_move_confidence,
-            blind_spots=report.blind_spots,
-            full_report_path=str(report_path),
-            cost_usd=result.cost_usd,
-            elapsed_seconds=result.elapsed_seconds,
-            simulation_id=result.simulation_id,
-            round_fingerprints=result.round_fingerprints,
-            llm_seed=result.llm_seed,
-        )
-
-        return jsonify({
-            "mode": "sentiment",
-            "simulation_id": sim_id,
-            "report_markdown": display,
-            "compliance_passed": ok,
-            "implied_move_low": report.implied_move_low,
-            "implied_move_high": report.implied_move_high,
-            "implied_move_confidence": report.implied_move_confidence,
-            "sentiment_mean": report.sentiment_mean,
-            "sentiment_std": report.sentiment_std,
-            "elapsed_seconds": result.elapsed_seconds,
-            "cost_usd": result.cost_usd,
-            "report_path": str(report_path),
-        })
-
-    def _run_sandbox_endpoint(event: Event, personas):
         try:
             result = asyncio.run(run_sandbox_simulation(event, personas))
         except BudgetExceeded as exc:
@@ -201,7 +143,6 @@ def create_app() -> Flask:
         )
 
         return jsonify({
-            "mode": "sandbox",
             "simulation_id": sim_id,
             "report_markdown": display,
             "compliance_passed": ok,
