@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ssFish — A 股事件舆情推演引擎</title>
+  <title>ssFish — Market Event Simulation Engine</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -23,7 +23,7 @@
       font-size: 13px;
       margin: 15px 0;
     }
-    label { display: block; margin-top: 15px; font-size: 13px; color: #555; }
+    label { display: block; margin-top: 12px; font-size: 13px; color: #555; }
     input[type=text], input[type=date], input[type=password], textarea, select {
       width: 100%;
       padding: 8px 10px;
@@ -32,10 +32,10 @@
       font-family: inherit;
       font-size: 14px;
     }
-    textarea { min-height: 100px; resize: vertical; }
+    textarea { min-height: 80px; resize: vertical; }
     .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
     button {
-      margin-top: 20px;
+      margin-top: 16px;
       background: #1a1a1a;
       color: white;
       border: none;
@@ -45,127 +45,222 @@
       border-radius: 3px;
     }
     button:disabled { opacity: 0.5; cursor: wait; }
+    button.secondary {
+      background: #fff;
+      color: #1a1a1a;
+      border: 1px solid #1a1a1a;
+    }
+    .step { background: #fafafa; padding: 20px; border: 1px solid #e0e0e0; border-radius: 3px; margin-top: 20px; }
+    .step.hidden { display: none; }
+    .extracted-field { background: #e8f4ff; padding: 6px 10px; border-radius: 3px; margin: 4px 0; font-size: 13px; }
+    .conf-high { border-left: 3px solid #2ca02c; }
+    .conf-med  { border-left: 3px solid #ffa500; }
+    .conf-low  { border-left: 3px solid #d62728; }
+    .conf-label { float: right; font-size: 11px; color: #888; }
     #report {
-      margin-top: 30px;
+      margin-top: 20px;
       padding: 20px;
       background: #fafafa;
       border: 1px solid #e0e0e0;
       border-radius: 3px;
       white-space: pre-wrap;
       font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 13px;
+      font-size: 12px;
       display: none;
     }
     .muted { color: #888; font-size: 12px; }
+    .warning { color: #d62728; font-size: 12px; margin-top: 6px; }
   </style>
 </head>
 <body>
-  <h1>ssFish — A 股事件舆情推演引擎</h1>
+  <h1>ssFish — Market Event Simulation Engine</h1>
 
   <div class="disclaimer">
-    <strong>研究工具声明:</strong> 本工具不提供投资意见, 不构成任何证券投资咨询业务。
-    所有生成的内容基于假设性多 agent 模拟, 仅供研究参考。使用本工具即表示您同意此声明。
+    <strong>Research tool / 研究工具:</strong> ssFish does NOT provide investment advice.
+    All output is from agent-based market simulations of real-data-calibrated participant
+    classes. For research only. ssFish 不提供投资意见, 所有内容基于多 agent 模拟, 仅供研究参考.
   </div>
 
-  <h2>事件输入</h2>
-
-  <label>访问密码 (X-Auth-Password)</label>
+  <label>Auth password (X-Auth-Password header)</label>
   <input type="password" id="auth" placeholder="env: SSFISH_PASSWORD">
 
-  <div class="row">
-    <div>
-      <label>股票代码</label>
-      <input type="text" id="ticker" placeholder="002594" required>
-    </div>
-    <div>
-      <label>事件类型</label>
-      <select id="event_type">
-        <option value="earnings">earnings (财报)</option>
-        <option value="policy">policy (政策)</option>
-        <option value="m_a">m_a (并购)</option>
-        <option value="management_change">management_change</option>
-        <option value="ipo">ipo</option>
-        <option value="dividend">dividend</option>
-        <option value="shareholder_action">shareholder_action</option>
-        <option value="lawsuit">lawsuit</option>
-        <option value="regulatory">regulatory</option>
-        <option value="other">other</option>
-      </select>
-    </div>
-    <div>
-      <label>事件日期</label>
-      <input type="date" id="event_date" required>
-    </div>
+  <!-- ============ Stage 0: Free-form input ============ -->
+  <div id="step1" class="step">
+    <h2>Step 1 — 描述事件 (一段文本即可)</h2>
+    <p class="muted">
+      粘贴新闻 / URL / 简短描述. ssFish 会自动 deep research 提取市场, 标的, 类型, 价格, ADV.
+      <br>e.g. <em>"NVIDIA Q1 2026 earnings beat, data center revenue +75%"</em> ·
+      <em>"OPEC+ surprise production cut announced"</em> · <em>"BYD Q1 财报: 营收 +18% beat 但毛利率 -2.3pp miss"</em>
+    </p>
+    <textarea id="raw_input" placeholder="Paste news / URL / event description here..."></textarea>
+    <button id="extract_btn">分析事件 (Analyze, ~30s, ~$0.02)</button>
+    <span class="muted" id="extract_status"></span>
   </div>
 
-  <label>事件正文 *</label>
-  <textarea id="event_text" placeholder="粘贴公告 / 新闻 / 政策原文..." required></textarea>
+  <!-- ============ Stage 1: Confirm extracted proposal ============ -->
+  <div id="step2" class="step hidden">
+    <h2>Step 2 — 确认 (auto-extracted, edit if needed)</h2>
 
-  <label>(可选) 事前共识 / 已被定价的预期</label>
-  <textarea id="prior_consensus" placeholder="例: 卖方一致预期净利润 +15%, 雪球热议..."></textarea>
-
-  <label>(可选) 近期价格行为</label>
-  <textarea id="recent_price_action" placeholder="例: 过去 30 天上涨 8%, 突破 200 日均线..."></textarea>
-
-  <label>(可选) 行业上下文</label>
-  <textarea id="sector_context" placeholder="例: 新能源板块整体情绪平稳, 上游价格..."></textarea>
-
-  <h2>市场状态</h2>
-
-  <div class="row">
-    <div>
-      <label>当前价格</label>
-      <input type="text" id="current_price" placeholder="218.50">
+    <div class="row">
+      <div>
+        <label>Market</label>
+        <input type="text" id="market">
+      </div>
+      <div>
+        <label>Instrument display name</label>
+        <input type="text" id="instrument">
+      </div>
+      <div>
+        <label>Ticker / contract code</label>
+        <input type="text" id="ticker">
+      </div>
     </div>
-    <div>
-      <label>日均成交额 (in 億 / B)</label>
-      <input type="text" id="adv_yi" placeholder="80">
+
+    <div class="row">
+      <div>
+        <label>Event type</label>
+        <input type="text" id="event_type">
+      </div>
+      <div>
+        <label>Event date (YYYY-MM-DD)</label>
+        <input type="text" id="event_date">
+      </div>
+      <div>
+        <label>Currency</label>
+        <input type="text" id="price_currency">
+      </div>
     </div>
-    <div>
-      <label>Persona pack 路径</label>
-      <input type="text" id="personas_path" placeholder="personas/ashare.yaml">
+
+    <div class="row">
+      <div>
+        <label>Current price</label>
+        <input type="text" id="current_price">
+      </div>
+      <div>
+        <label>ADV (in same currency, plain value)</label>
+        <input type="text" id="adv_value">
+      </div>
+      <div>
+        <label>Personas pack path</label>
+        <input type="text" id="personas_path">
+      </div>
     </div>
+
+    <label>Event text (polished by extractor)</label>
+    <textarea id="event_text"></textarea>
+
+    <label>Prior consensus (auto-fetched)</label>
+    <textarea id="prior_consensus"></textarea>
+
+    <label>Recent price action (auto-fetched)</label>
+    <textarea id="recent_price_action"></textarea>
+
+    <label>Sector context (auto-fetched)</label>
+    <textarea id="sector_context"></textarea>
+
+    <div id="extraction_meta" class="muted"></div>
+
+    <button id="run_btn">运行 sandbox 推演 (~18-30s, ~$0.02)</button>
+    <button id="back_btn" class="secondary">← Back to step 1</button>
+    <span class="muted" id="run_status"></span>
   </div>
-
-  <button id="run">运行 sandbox 推演 (~18-30 秒)</button>
-  <span class="muted" id="status"></span>
 
   <div id="report"></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    document.getElementById('event_date').valueAsDate = new Date();
 
-    document.getElementById('run').addEventListener('click', async () => {
-      const btn = $('run');
-      const status = $('status');
+    function show(stepId) {
+      ['step1', 'step2'].forEach(s => $(s).classList.toggle('hidden', s !== stepId));
+    }
+
+    // ========== Step 1: extract ==========
+    $('extract_btn').addEventListener('click', async () => {
+      const btn = $('extract_btn');
+      const status = $('extract_status');
+      btn.disabled = true;
+      status.textContent = '  分析中... (LLM 分类 + Web research + 结构化合成)';
+
+      try {
+        const res = await fetch('/extract-event', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Password': $('auth').value,
+          },
+          body: JSON.stringify({ input: $('raw_input').value.trim() }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          status.textContent = '';
+          alert('ERROR: ' + JSON.stringify(data, null, 2));
+          return;
+        }
+        // Populate the confirmation form
+        $('market').value = data.market || '';
+        $('instrument').value = data.instrument || '';
+        $('ticker').value = data.ticker || '';
+        $('event_type').value = data.event_type || '';
+        $('event_date').value = data.event_date || '';
+        $('price_currency').value = data.price_currency || '';
+        $('current_price').value = data.current_price !== null ? data.current_price : '';
+        $('adv_value').value = data.adv_value !== null ? data.adv_value : '';
+        $('personas_path').value = data.suggested_personas_path || '';
+        $('event_text').value = data.event_text || '';
+        $('prior_consensus').value = data.prior_consensus || '';
+        $('recent_price_action').value = data.recent_price_action || '';
+        $('sector_context').value = data.sector_context || '';
+
+        // Show metadata
+        const conf = data.confidence || {};
+        const confLabels = Object.entries(conf).map(([k, v]) => `${k}=${(v * 100).toFixed(0)}%`).join(', ');
+        let meta = `Confidence: ${confLabels} · Sources: ${(data.sources_consulted || []).length}`;
+        if (data.extraction_warnings && data.extraction_warnings.length > 0) {
+          meta += `<div class="warning">⚠ Warnings: ${data.extraction_warnings.join('; ')}</div>`;
+        }
+        $('extraction_meta').innerHTML = meta;
+
+        show('step2');
+        status.textContent = '';
+      } catch (err) {
+        status.textContent = '';
+        alert('NETWORK ERROR: ' + err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $('back_btn').addEventListener('click', () => show('step1'));
+
+    // ========== Step 2: run simulation ==========
+    $('run_btn').addEventListener('click', async () => {
+      const btn = $('run_btn');
+      const status = $('run_status');
       const out = $('report');
       btn.disabled = true;
-      status.textContent = '  运行中...';
+      status.textContent = '  Running sandbox simulation (14 personas × 5 rounds)...';
       out.style.display = 'none';
 
-      // ssFish only runs sandbox mode now (sentiment was removed in G2 cleanup)
       const cp = parseFloat($('current_price').value);
-      const advYi = parseFloat($('adv_yi').value);
-      const personasPath = $('personas_path').value.trim();
-      if (isNaN(cp) || cp <= 0 || isNaN(advYi) || advYi <= 0 || !personasPath) {
-        out.textContent = 'ERROR: 需要正数 当前价格 + 日均成交额 + persona pack 路径';
-        out.style.display = 'block';
-        btn.disabled = false;
+      const adv = parseFloat($('adv_value').value);
+      if (isNaN(cp) || cp <= 0 || isNaN(adv) || adv <= 0 || !$('personas_path').value.trim()) {
         status.textContent = '';
+        alert('需要正数 current_price + adv_value + persona pack 路径');
+        btn.disabled = false;
         return;
       }
+
       const payload = {
         ticker: $('ticker').value.trim(),
         event_text: $('event_text').value.trim(),
-        event_type: $('event_type').value,
-        event_date: $('event_date').value,
+        event_type: $('event_type').value.trim(),
+        event_date: $('event_date').value.trim(),
         prior_consensus: $('prior_consensus').value.trim(),
         recent_price_action: $('recent_price_action').value.trim(),
         sector_context: $('sector_context').value.trim(),
         current_price: cp,
-        adv_cny: advYi * 1e8,
-        personas_path: personasPath,
+        adv_cny: adv,  // backend Event accepts adv_cny as alias for adv_value
+        personas_path: $('personas_path').value.trim(),
       };
 
       try {
@@ -183,7 +278,7 @@
         } else {
           out.textContent = data.report_markdown;
           const extra = ` · ${data.initial_price.toFixed(2)} → ${data.final_price.toFixed(2)} (${(data.cumulative_delta_pct * 100).toFixed(2)}%)`;
-          status.textContent = `  成本 $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s${extra} · sim_id ${data.simulation_id.slice(0,8)}`;
+          status.textContent = `  Cost $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s${extra} · sim_id ${data.simulation_id.slice(0, 12)}`;
         }
         out.style.display = 'block';
       } catch (err) {

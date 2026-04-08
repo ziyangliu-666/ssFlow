@@ -25,6 +25,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
+from ssfish.event_extractor import extract_event
 from ssfish.llm_client import BudgetExceeded, cost_tracker
 from ssfish.persona import load_personas, persona_set_hash
 from ssfish.report import render_sandbox_safe_or_quarantine, save_report
@@ -51,6 +52,39 @@ def create_app() -> Flask:
         web_dir = settings.project_root / "web"
         return send_from_directory(web_dir, "index.html")
 
+    @app.post("/extract-event")
+    @require_password
+    def extract_event_endpoint():
+        """Stage 0 — auto-extract an EventProposal from a free-form input string.
+
+        Request:  {"input": "NVIDIA Q1 earnings beat..."}
+        Response: EventProposal as JSON (all fields auto-filled, with confidence)
+
+        The user reviews the response in the UI, edits any field, and submits
+        the (possibly edited) Event back to /simulate. This stage is the
+        autonomous "deep research" step that turns 1 input into 10 fields.
+
+        Cost: ~$0.02-0.04. Wall clock: ~20-40 seconds.
+        """
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            return jsonify({"error": "invalid_json"}), 400
+
+        raw_input = (payload.get("input") or "").strip()
+        if not raw_input:
+            return jsonify({"error": "input_required", "detail": "field 'input' must be a non-empty string"}), 400
+
+        try:
+            proposal = asyncio.run(extract_event(raw_input))
+        except BudgetExceeded as exc:
+            return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
+        except Exception as exc:
+            log.exception("event extraction failed")
+            return jsonify({"error": "extraction_failed", "detail": str(exc)}), 500
+
+        return jsonify(proposal.to_dict())
+
     @app.post("/simulate")
     @require_password
     def simulate():
@@ -60,6 +94,10 @@ def create_app() -> Flask:
             return jsonify({"error": "invalid_json"}), 400
 
         try:
+            # Accept both adv_value (new) and adv_cny (legacy alias) field names
+            adv = payload.get("adv_value")
+            if adv is None:
+                adv = payload.get("adv_cny")
             event = Event(
                 ticker=payload.get("ticker", "").strip(),
                 event_text=payload.get("event_text", "").strip(),
@@ -69,7 +107,10 @@ def create_app() -> Flask:
                 recent_price_action=payload.get("recent_price_action", "").strip(),
                 sector_context=payload.get("sector_context", "").strip(),
                 current_price=payload.get("current_price"),
-                adv_cny=payload.get("adv_cny"),
+                adv_value=adv,
+                market=payload.get("market"),
+                price_currency=payload.get("price_currency", "CNY"),
+                instrument=payload.get("instrument"),
             )
         except (TypeError, ValueError) as exc:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
@@ -77,7 +118,7 @@ def create_app() -> Flask:
         if not event.is_sandbox_ready:
             return jsonify({
                 "error": "sandbox_not_ready",
-                "detail": "ssFish requires current_price and adv_cny in the request body",
+                "detail": "ssFish requires current_price and adv_value in the request body",
             }), 400
 
         personas_path = payload.get("personas_path")
@@ -133,7 +174,7 @@ def create_app() -> Flask:
             class_pnl=class_pnl,
             strategic_signals=strategic_signals or None,
             lambda_used=result.lambda_used,
-            adv_used=result.adv_cny_used,
+            adv_used=result.adv_value_used,
             full_report_path=str(report_path),
             cost_usd=result.cost_usd,
             elapsed_seconds=result.elapsed_seconds,
@@ -153,7 +194,7 @@ def create_app() -> Flask:
             "class_pnl": class_pnl,
             "strategic_signals": strategic_signals or None,
             "lambda_used": result.lambda_used,
-            "adv_used": result.adv_cny_used,
+            "adv_used": result.adv_value_used,
             "elapsed_seconds": result.elapsed_seconds,
             "cost_usd": result.cost_usd,
             "report_path": str(report_path),

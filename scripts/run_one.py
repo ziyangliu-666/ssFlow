@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
+from ssfish.event_extractor import extract_event
 from ssfish.llm_client import cost_tracker
 from ssfish.persona import load_personas, persona_set_hash
 from ssfish.report import render_sandbox_safe_or_quarantine, save_report
@@ -64,23 +65,52 @@ def _read_or_blank(path: str | None) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ssFish — run one market sandbox simulation")
-    p.add_argument("--event", required=True, help="Path to event text file")
-    p.add_argument("--ticker", required=True, help="Instrument ticker (e.g. 002594, NVDA, BTC-USD)")
+    p = argparse.ArgumentParser(
+        description="ssFish — run one market sandbox simulation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Two ways to invoke:
+
+  1. Free-form input (recommended, ssFish auto-extracts everything):
+       --input "NVIDIA Q1 2026 earnings beat, data center revenue +75% YoY"
+       --confirm                  (skip interactive confirm prompt)
+
+  2. Explicit fields (legacy, scriptable):
+       --event ./byd.txt --ticker 002594 --event-type earnings ...
+        """,
+    )
+    # Free-form input mode (Stage 0 extractor)
+    p.add_argument(
+        "--input",
+        default=None,
+        help="Free-form input string. ssFish will run the event extractor "
+             "to identify market / instrument / event_type / current price / "
+             "ADV automatically. Mutually exclusive with --event.",
+    )
+    p.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Skip the interactive confirmation step (use auto-extracted values as-is)",
+    )
+
+    # Explicit field mode (legacy)
+    p.add_argument("--event", default=None, help="Path to event text file")
+    p.add_argument("--ticker", default=None, help="Instrument ticker (e.g. 002594, NVDA, BTC-USD)")
     p.add_argument(
         "--event-type",
         default="other",
         choices=sorted(VALID_EVENT_TYPES),
         help="Event type label",
     )
-    p.add_argument("--event-date", required=True, help="Event date (YYYY-MM-DD)")
+    p.add_argument("--event-date", default=None, help="Event date (YYYY-MM-DD)")
     p.add_argument("--prior-consensus", default=None, help="Path to prior consensus text file")
     p.add_argument("--recent-price-action", default=None, help="Path to recent price text file")
     p.add_argument("--sector-context", default=None, help="Path to sector context text file")
     p.add_argument(
         "--personas",
         default=None,
-        help="Path to personas YAML (no default — must be specified)",
+        help="Path to personas YAML (auto-suggested in --input mode, "
+             "required in explicit mode)",
     )
     p.add_argument(
         "--rounds", type=int, default=None, help="Override n_rounds (defaults to settings)"
@@ -88,53 +118,122 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--current-price",
         type=float,
-        required=True,
-        help="Current price of the instrument (in instrument's native currency)",
+        default=None,
+        help="Current price of the instrument (auto-extracted in --input mode)",
     )
     p.add_argument(
         "--adv",
         type=float,
-        required=True,
-        help="Average daily volume in the same currency as --current-price. "
-             "Trailing 30 days conventional.",
+        default=None,
+        help="Average daily volume in the same currency as --current-price "
+             "(auto-extracted in --input mode)",
     )
     return p.parse_args()
 
 
+async def _build_event_from_input(args: argparse.Namespace) -> tuple[Event, str | None]:
+    """Free-form input mode: run the event extractor + confirm with user.
+
+    Returns (event, suggested_personas_path).
+    """
+    print(f"# Extracting event from input: {args.input[:120]}{'...' if len(args.input) > 120 else ''}",
+          file=sys.stderr)
+    print(f"# (this takes ~20-40s, runs LLM classification + web research + synthesis)",
+          file=sys.stderr, flush=True)
+
+    proposal = await extract_event(args.input)
+
+    # Show the extracted proposal
+    print(f"\n=== Auto-extracted EventProposal ===", file=sys.stderr)
+    print(f"  Market:        {proposal.market}", file=sys.stderr)
+    print(f"  Instrument:    {proposal.instrument} ({proposal.ticker})", file=sys.stderr)
+    print(f"  Event type:    {proposal.event_type}", file=sys.stderr)
+    print(f"  Event date:    {proposal.event_date}", file=sys.stderr)
+    print(f"  Currency:      {proposal.price_currency}", file=sys.stderr)
+    print(f"  Current price: {proposal.current_price}", file=sys.stderr)
+    print(f"  ADV:           {proposal.adv_value}", file=sys.stderr)
+    print(f"  Pack:          {proposal.suggested_personas_path}", file=sys.stderr)
+    print(f"  Confidence:    {proposal.confidence}", file=sys.stderr)
+    if proposal.extraction_warnings:
+        print(f"  Warnings:      {proposal.extraction_warnings}", file=sys.stderr)
+    print(f"  Sources:       {len(proposal.sources_consulted)} URLs consulted", file=sys.stderr)
+    print(file=sys.stderr)
+
+    if not args.confirm:
+        try:
+            response = input("Proceed with these values? (y/n/edit): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("Cancelled", file=sys.stderr)
+            sys.exit(1)
+        if response not in ("y", "yes", ""):
+            print("Aborted by user. Re-run with --confirm to skip this prompt.",
+                  file=sys.stderr)
+            sys.exit(0)
+
+    if proposal.current_price is None or proposal.adv_value is None:
+        print(
+            "ERROR: extraction did not produce current_price + adv_value. "
+            "Either edit the proposal manually or pass --current-price + --adv "
+            "explicitly.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    return proposal.to_event(), proposal.suggested_personas_path
+
+
 async def amain() -> int:
     args = parse_args()
+    suggested_path: str | None = None
 
-    event_text = _read_or_blank(args.event)
-    if not event_text:
-        print(f"ERROR: event file empty or missing: {args.event}", file=sys.stderr)
-        return 2
+    if args.input:
+        # Free-form input mode (Stage 0 extractor)
+        event, suggested_path = await _build_event_from_input(args)
+    else:
+        # Explicit field mode (legacy)
+        if not args.event or not args.ticker or not args.event_date:
+            print(
+                "ERROR: explicit mode requires --event, --ticker, --event-date. "
+                "Or use --input for free-form input.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.current_price is None or args.adv is None:
+            print(
+                "ERROR: explicit mode requires --current-price and --adv.",
+                file=sys.stderr,
+            )
+            return 2
+        event_text = _read_or_blank(args.event)
+        if not event_text:
+            print(f"ERROR: event file empty or missing: {args.event}", file=sys.stderr)
+            return 2
+        try:
+            event = Event(
+                ticker=args.ticker,
+                event_text=event_text,
+                event_type=args.event_type,
+                event_date=args.event_date,
+                prior_consensus=_read_or_blank(args.prior_consensus),
+                recent_price_action=_read_or_blank(args.recent_price_action),
+                sector_context=_read_or_blank(args.sector_context),
+                current_price=args.current_price,
+                adv_value=args.adv,
+            )
+        except ValueError as exc:
+            print(f"ERROR: invalid event: {exc}", file=sys.stderr)
+            return 2
 
-    try:
-        event = Event(
-            ticker=args.ticker,
-            event_text=event_text,
-            event_type=args.event_type,
-            event_date=args.event_date,
-            prior_consensus=_read_or_blank(args.prior_consensus),
-            recent_price_action=_read_or_blank(args.recent_price_action),
-            sector_context=_read_or_blank(args.sector_context),
-            current_price=args.current_price,
-            adv_cny=args.adv,
-        )
-    except ValueError as exc:
-        print(f"ERROR: invalid event: {exc}", file=sys.stderr)
-        return 2
-
-    if args.personas is None:
+    personas_path = args.personas or suggested_path
+    if not personas_path:
         print(
-            "ERROR: --personas is required. ssFish no longer defaults to a "
-            "specific market pack — pass --personas personas/ashare.yaml "
-            "(or any other pack).",
+            "ERROR: no personas pack specified and event extractor did not "
+            "suggest one. Pass --personas personas/<market>.yaml.",
             file=sys.stderr,
         )
         return 2
 
-    personas = load_personas(Path(args.personas))
+    personas = load_personas(Path(personas_path))
     init_db()
 
     print(f"# ssFish run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
@@ -176,7 +275,7 @@ async def amain() -> int:
         class_pnl=result.compute_class_pnl(),
         strategic_signals=strategic_signals or None,
         lambda_used=result.lambda_used,
-        adv_used=result.adv_cny_used,
+        adv_used=result.adv_value_used,
         full_report_path=str(report_path),
         cost_usd=result.cost_usd,
         elapsed_seconds=result.elapsed_seconds,
