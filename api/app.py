@@ -1,36 +1,65 @@
-"""Flask API for ssFlow — sandbox-only.
+"""Flask API for ssFlow.
 
-Endpoints:
-    GET  /healthz                  — no auth, returns {"status": "ok"}
-    POST /simulate                 — auth required, runs a sandbox simulation (~18-30s)
-    GET  /report/<simulation_id>   — auth required, fetches stored markdown report
-    GET  /cost                     — auth required, current cost tracker state
-    GET  /                         — serves the static index.html form
+Endpoints
+---------
 
-The /simulate endpoint is intentionally synchronous. At ~14 personas × 5 rounds
-the latency is ~18-30 seconds, well within Flask's default request timeout.
-Async job queue is deferred to a future scaling phase.
+Public:
+    GET  /healthz                       — no auth, returns {"status": "ok"}
+    GET  /                              — serves the SPA (frontend/dist or web/index.html)
+    GET  /assets/<path>                 — Vite-built static assets
 
-The legacy `sentiment` mode endpoint was removed in the G2 cleanup —
-sandbox is the only execution mode.
+Authed (X-Auth-Password header):
+    POST /extract-event                 — legacy: text-only event extraction (kept for tests)
+    POST /simulate                      — legacy: synchronous run with personas YAML path
+    GET  /report/<simulation_id>        — fetch a stored markdown report
+    GET  /cost                          — current cost tracker state
+
+    POST /session                       — create a new session, returns {session_id}
+    POST /upload                        — multipart upload, returns {files: [{tmp_path, name, kind}]}
+    POST /extract                       — files+urls+prompt → EventProposal + persona partials
+    POST /personas/template             — blank persona template for "+ add" button
+    POST /simulate-stream/init          — register a streaming-sim payload, returns {stream_id}
+    GET  /simulate-stream/<stream_id>   — SSE stream of engine events (one-shot)
+
+The streaming flow ties /upload → /extract → /simulate-stream together via a
+single `session_id` issued at /session create time. The stream_id from
+/simulate-stream/init is the auth token for the GET — it's a single-use
+uuid4 hex with a 60s TTL, so EventSource (which can't send custom headers)
+can still use it safely.
+
+The legacy `/simulate` and `/extract-event` endpoints stay for backwards
+compatibility with the existing CLI and test suite.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import queue
+import threading
+import time
+import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 from ssflow.config import settings
+from ssflow.document_ingestion import build_corpus, ingest_many
 from ssflow.event import VALID_EVENT_TYPES, Event
+from ssflow.event_bus import QueueSink
 from ssflow.event_extractor import extract_event
 from ssflow.llm_client import BudgetExceeded, cost_tracker
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas, persona_set_hash
+from ssflow.persona_proposer import (
+    blank_partial,
+    persona_from_partial,
+    propose_personas,
+)
 from ssflow.report import render_simulation_safe_or_quarantine, save_report
 from ssflow.scorecard import init_db, insert_sandbox_simulation
+from ssflow.session_store import get_default_store
 
 from .auth import require_password
 
@@ -39,33 +68,546 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("ssflow.api")
 
 
+# Where /upload writes user files. Cleaned up by lazy GC tied to the session.
+UPLOAD_ROOT = settings.project_root / "tmp" / "uploads"
+
+
+def _ensure_upload_root() -> Path:
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    return UPLOAD_ROOT
+
+
+def _spa_root() -> Path | None:
+    """Pick the directory to serve as the web frontend root.
+
+    Prefers `frontend/dist` (Vite build output) when present, falls back
+    to the legacy `web/` directory. Returns None if neither exists.
+    """
+    dist = settings.project_root / "frontend" / "dist"
+    if (dist / "index.html").exists():
+        return dist
+    legacy = settings.project_root / "web"
+    if (legacy / "index.html").exists():
+        return legacy
+    return None
+
+
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=None)
     init_db()
+    store = get_default_store()
+
+    # ─────────────────────── Health / static / legacy ───────────────────────
 
     @app.get("/healthz")
     def healthz():
-        return jsonify({"status": "ok", "version": "0.0.1"})
+        return jsonify({"status": "ok", "version": "0.0.3"})
 
     @app.get("/")
     def index():
-        web_dir = settings.project_root / "web"
-        return send_from_directory(web_dir, "index.html")
+        root = _spa_root()
+        if root is None:
+            return jsonify({"error": "no_frontend_built"}), 404
+        return send_from_directory(root, "index.html")
+
+    @app.get("/assets/<path:filename>")
+    def assets(filename: str):
+        """Serve Vite-hashed assets from frontend/dist/assets."""
+        root = _spa_root()
+        if root is None:
+            return jsonify({"error": "no_frontend_built"}), 404
+        return send_from_directory(root / "assets", filename)
+
+    @app.get("/favicon.ico")
+    def favicon():
+        root = _spa_root()
+        if root is None or not (root / "favicon.ico").exists():
+            return ("", 204)
+        return send_from_directory(root, "favicon.ico")
+
+    @app.get("/setup")
+    @app.get("/setup/")
+    @app.get("/run/<path:tail>")
+    @app.get("/reports/<path:tail>")
+    def spa_routes(tail: str | None = None):
+        """Catchall for the Vue Router history-mode routes.
+
+        These paths are owned by the SPA, not by the Flask API. We must
+        serve index.html when a user reloads on /run/<id> or /reports/<id>
+        so the SPA can take over routing client-side.
+        """
+        root = _spa_root()
+        if root is None:
+            return jsonify({"error": "no_frontend_built"}), 404
+        return send_from_directory(root, "index.html")
+
+    # ─────────────────────── Sessions ───────────────────────
+
+    @app.post("/session")
+    @require_password
+    def create_session():
+        state = store.create_session()
+        return jsonify(
+            {
+                "session_id": state.session_id,
+                "created_at": state.created_at,
+            }
+        )
+
+    # ─────────────────────── /upload ───────────────────────
+
+    @app.post("/upload")
+    @require_password
+    def upload():
+        """Multipart upload of files. Returns the saved tmp paths.
+
+        Form fields:
+            files: one or more file parts (input name "files")
+            session_id: optional — if missing, a new session is created
+        """
+        session_id = request.form.get("session_id") or request.args.get("session_id")
+        if not session_id:
+            session_id = store.create_session().session_id
+        else:
+            if store.get_session(session_id) is None:
+                # Create a fresh state for unknown session_ids so the UI
+                # can reuse a stale id without errors.
+                store.create_session()  # eager GC
+                session_id = store.create_session().session_id
+
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify({"error": "no_files"}), 400
+
+        upload_root = _ensure_upload_root()
+        session_dir = upload_root / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        saved: list[dict[str, object]] = []
+        for f in files:
+            if not f or not f.filename:
+                continue
+            # Strip directory components to keep all uploads flat.
+            safe_name = Path(f.filename).name
+            target = session_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+            f.save(target)
+            saved.append(
+                {
+                    "tmp_path": str(target),
+                    "name": safe_name,
+                    "size": target.stat().st_size,
+                    "kind": target.suffix.lower().lstrip("."),
+                }
+            )
+
+        # Append to whatever the session already tracked
+        existing = []
+        state = store.get_session(session_id)
+        if state is not None:
+            existing = list(state.uploaded_files)
+        store.update_session(session_id, uploaded_files=existing + saved)
+
+        return jsonify({"session_id": session_id, "files": saved})
+
+    # ─────────────────────── /extract ───────────────────────
+
+    @app.post("/extract")
+    @require_password
+    def extract():
+        """Stage 0 — produce an EventProposal + a list of editable persona partials.
+
+        Request JSON:
+            {
+                "session_id": "<uuid>",
+                "prompt":     "free-form description of what to predict",
+                "urls":       ["https://example.com/article", ...],
+                "extra_text": "optional pasted context"
+            }
+
+        The endpoint:
+          1. Loads files saved against the session via /upload
+          2. Ingests them + any URLs into a corpus
+          3. Runs `extract_event(prompt, pre_fetched_corpus=corpus)`
+          4. Loads the suggested persona pack and projects to partials
+          5. Returns {event_proposal, personas_proposed, session_id}
+        """
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            return jsonify({"error": "invalid_json"}), 400
+
+        session_id = payload.get("session_id")
+        if not session_id:
+            session_id = store.create_session().session_id
+        state = store.get_session(session_id)
+        if state is None:
+            state = store.create_session()
+            session_id = state.session_id
+
+        prompt = (payload.get("prompt") or "").strip()
+        extra_text = (payload.get("extra_text") or "").strip()
+        urls = payload.get("urls") or []
+        if not isinstance(urls, list):
+            urls = []
+
+        if not prompt and not state.uploaded_files and not urls:
+            return jsonify(
+                {
+                    "error": "empty_input",
+                    "detail": "extract requires at least a prompt, a file, or a URL",
+                }
+            ), 400
+
+        file_paths = [f["tmp_path"] for f in state.uploaded_files]
+
+        try:
+            ingested = asyncio.run(ingest_many(files=file_paths, urls=urls))
+        except Exception as exc:
+            log.exception("ingest_many failed")
+            return jsonify({"error": "ingest_failed", "detail": str(exc)}), 500
+
+        corpus = build_corpus(ingested)
+
+        # Build the raw_input passed to the extractor: prompt + extra_text.
+        raw_input_parts = []
+        if prompt:
+            raw_input_parts.append(prompt)
+        if extra_text:
+            raw_input_parts.append(extra_text)
+        if not raw_input_parts and corpus:
+            # When the user only uploaded files, derive a stub raw_input
+            # from the first source title.
+            raw_input_parts.append(
+                f"Analyze the uploaded documents about {corpus[0].get('title', 'an event')}"
+            )
+        raw_input = "\n\n".join(raw_input_parts)
+
+        try:
+            proposal = asyncio.run(
+                extract_event(raw_input, pre_fetched_corpus=corpus or None)
+            )
+        except BudgetExceeded as exc:
+            return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
+        except Exception as exc:
+            log.exception("extract_event failed")
+            return jsonify({"error": "extraction_failed", "detail": str(exc)}), 500
+
+        proposal_dict = proposal.to_dict()
+
+        # Propose personas from the suggested pack
+        base_pack_path = (
+            proposal.suggested_personas_path or "personas/ashare.yaml"
+        )
+        try:
+            personas_proposed = propose_personas(
+                event=proposal.to_event(),
+                base_pack_path=base_pack_path,
+            )
+        except Exception as exc:
+            log.warning(
+                "propose_personas failed for %s: %s — falling back to ashare",
+                base_pack_path,
+                exc,
+            )
+            try:
+                personas_proposed = propose_personas(
+                    base_pack_path="personas/ashare.yaml"
+                )
+                base_pack_path = "personas/ashare.yaml"
+            except Exception as exc2:
+                log.exception("fallback persona proposal failed")
+                return jsonify(
+                    {"error": "persona_proposal_failed", "detail": str(exc2)}
+                ), 500
+
+        # Persist on the session for convenience.
+        store.update_session(
+            session_id,
+            event_proposal=proposal_dict,
+            personas_proposed=personas_proposed,
+            prompt=prompt,
+            urls=urls,
+        )
+
+        return jsonify(
+            {
+                "session_id": session_id,
+                "event_proposal": proposal_dict,
+                "personas_proposed": personas_proposed,
+                "base_personas_path": base_pack_path,
+                "ingested_docs": [
+                    {
+                        "source": d.source,
+                        "kind": d.kind,
+                        "char_count": d.char_count,
+                        "title": d.title,
+                        "warnings": d.warnings,
+                    }
+                    for d in ingested
+                ],
+            }
+        )
+
+    # ─────────────────────── /personas/template ───────────────────────
+
+    @app.post("/personas/template")
+    @require_password
+    def personas_template():
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            payload = {}
+        decision_mode = (payload.get("decision_mode") or "discretionary").strip()
+        return jsonify(blank_partial(decision_mode))
+
+    # ─────────────────────── /simulate-stream/init ───────────────────────
+
+    @app.post("/simulate-stream/init")
+    @require_password
+    def simulate_stream_init():
+        """Validate the payload, resolve the personas + event, and stash
+        them under a one-shot stream_id for the EventSource GET to claim."""
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            return jsonify({"error": "invalid_json"}), 400
+
+        event_data = payload.get("event") or {}
+        personas_partials = payload.get("personas") or []
+        n_rounds = payload.get("n_rounds") or settings.n_rounds
+        seed = payload.get("seed")
+        base_personas_path = (
+            payload.get("base_personas_path") or "personas/ashare.yaml"
+        )
+        session_id = payload.get("session_id")
+
+        if not isinstance(personas_partials, list) or not personas_partials:
+            return jsonify(
+                {"error": "personas_required", "detail": "personas list must be non-empty"}
+            ), 400
+
+        # Validate the event
+        try:
+            event = _build_event_from_dict(event_data)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
+
+        if not event.is_sandbox_ready:
+            return jsonify(
+                {
+                    "error": "sandbox_not_ready",
+                    "detail": "event requires current_price and adv_value > 0",
+                }
+            ), 400
+
+        # Load the base pack to resolve partials → full Personas
+        try:
+            base_pack = load_personas(Path(base_personas_path))
+        except Exception as exc:
+            return jsonify(
+                {"error": "base_pack_load_failed", "detail": str(exc)}
+            ), 400
+
+        try:
+            personas = [
+                persona_from_partial(p, base_pack=base_pack)
+                for p in personas_partials
+            ]
+        except Exception as exc:
+            log.exception("persona_from_partial failed")
+            return jsonify(
+                {"error": "persona_resolve_failed", "detail": str(exc)}
+            ), 400
+
+        if not personas:
+            return jsonify({"error": "no_resolved_personas"}), 400
+
+        # Stash everything in the store. The actual run happens when the
+        # client opens the SSE GET.
+        stream_id = store.register_stream_payload(
+            payload={
+                "event": _event_to_dict(event),
+                "personas": [_persona_to_storable(p) for p in personas],
+                "personas_partials": personas_partials,
+                "n_rounds": int(n_rounds),
+                "seed": seed,
+                "base_personas_path": base_personas_path,
+            },
+            session_id=session_id,
+        )
+
+        return jsonify({"stream_id": stream_id, "n_personas": len(personas)})
+
+    # ─────────────────────── /simulate-stream/<id> ───────────────────────
+
+    @app.get("/simulate-stream/<stream_id>")
+    def simulate_stream(stream_id: str):
+        """Open the SSE channel and run the simulation in a background thread.
+
+        NOTE: this route does NOT use @require_password — the stream_id
+        IS the auth token. It was issued by /simulate-stream/init (which
+        is auth'd) and is single-use + TTL'd to 60 seconds. EventSource
+        cannot send custom headers, so this is the only way to make
+        SSE work without query-param auth (which has its own pitfalls
+        around access logs).
+        """
+        entry = store.claim_stream_payload(stream_id)
+        if entry is None:
+            return jsonify({"error": "stream_not_found_or_already_claimed"}), 404
+
+        sim_payload = entry.payload
+        try:
+            event = _build_event_from_dict(sim_payload["event"])
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": "invalid_event_in_payload", "detail": str(exc)}), 500
+
+        # Re-resolve personas from the stored partials so we get fresh
+        # Persona objects (the dataclass is not trivially picklable through
+        # the in-memory dict, so we re-hydrate via the same path).
+        base_personas_path = sim_payload.get("base_personas_path", "personas/ashare.yaml")
+        try:
+            base_pack = load_personas(Path(base_personas_path))
+            personas = [
+                persona_from_partial(p, base_pack=base_pack)
+                for p in sim_payload["personas_partials"]
+            ]
+        except Exception as exc:
+            log.exception("re-hydrate personas failed")
+            return jsonify({"error": "rehydrate_failed", "detail": str(exc)}), 500
+
+        n_rounds = int(sim_payload.get("n_rounds") or settings.n_rounds)
+        seed = sim_payload.get("seed")
+
+        q: "queue.Queue[dict | None]" = queue.Queue(maxsize=2000)
+
+        def engine_thread() -> None:
+            try:
+                result = asyncio.run(
+                    run_simulation(
+                        event,
+                        personas,
+                        n_rounds=n_rounds,
+                        seed=seed,
+                        event_sink=QueueSink(q),
+                    )
+                )
+                # Render + persist the report
+                display, ok = render_simulation_safe_or_quarantine(result)
+                report_path = save_report(display, result.simulation_id)
+                publication_log = [
+                    {
+                        "publication_id": pub.publication_id,
+                        "author_persona_id": pub.author_persona_id,
+                        "author_archetype": pub.author_archetype,
+                        "content_type": pub.content_type,
+                        "text": pub.text,
+                        "round_idx": pub.round_idx,
+                        "authority_weight": pub.authority_weight,
+                        "references": pub.references,
+                        "oasis_post_id": pub.oasis_post_id,
+                        "likes": pub.likes,
+                        "reposts": pub.reposts,
+                    }
+                    for pub in result.all_publications
+                ]
+                class_pnl = result.compute_class_pnl()
+                sim_id = insert_sandbox_simulation(
+                    event_ticker=event.ticker,
+                    event_date=event.event_date,
+                    event_type=event.event_type,
+                    event_text_hash=event.text_hash,
+                    persona_set_hash=persona_set_hash(personas),
+                    model_default=settings.default_model,
+                    seed=settings.seed,
+                    n_personas=result.n_personas,
+                    n_rounds=result.n_rounds,
+                    initial_price=result.initial_price,
+                    final_price=result.final_price,
+                    cumulative_delta_pct=result.cumulative_delta_pct,
+                    price_trajectory=result.price_trajectory,
+                    class_pnl=class_pnl,
+                    strategic_signals=None,
+                    lambda_used=result.lambda_used,
+                    adv_used=result.adv_value_used,
+                    full_report_path=str(report_path),
+                    cost_usd=result.cost_usd,
+                    elapsed_seconds=result.elapsed_seconds,
+                    simulation_id=result.simulation_id,
+                    round_fingerprints=None,
+                    llm_seed=result.llm_seed,
+                    publication_log=publication_log or None,
+                    oasis_db_path=result.oasis_db_path,
+                )
+                q.put(
+                    {
+                        "type": "simulation_done",
+                        "simulation_id": sim_id,
+                        "report_markdown": display,
+                        "report_path": str(report_path),
+                        "compliance_passed": ok,
+                        "publication_log": publication_log,
+                        "class_pnl": class_pnl,
+                        "price_trajectory": result.price_trajectory,
+                        "initial_price": result.initial_price,
+                        "final_price": result.final_price,
+                        "cumulative_delta_pct": result.cumulative_delta_pct,
+                        "elapsed_seconds": result.elapsed_seconds,
+                        "cost_usd": result.cost_usd,
+                    }
+                )
+            except BudgetExceeded as exc:
+                log.warning("stream sim hit budget: %s", exc)
+                q.put(
+                    {"type": "error", "code": "budget_exceeded", "detail": str(exc)}
+                )
+            except Exception as exc:
+                log.exception("streaming sim failed")
+                q.put(
+                    {"type": "error", "code": "simulation_failed", "detail": str(exc)}
+                )
+            finally:
+                q.put(None)
+
+        thread = threading.Thread(target=engine_thread, daemon=True)
+        thread.start()
+
+        def sse_generator():
+            yield "retry: 5000\n\n"
+            yield ': open\n\n'
+            last_heartbeat = time.time()
+            while True:
+                try:
+                    event_msg = q.get(timeout=1.0)
+                except queue.Empty:
+                    if time.time() - last_heartbeat > 15:
+                        yield ": keepalive\n\n"
+                        last_heartbeat = time.time()
+                    continue
+                if event_msg is None:
+                    return
+                event_type = str(event_msg.get("type", "message"))
+                yield (
+                    f"event: {event_type}\n"
+                    f"data: {json.dumps(event_msg, ensure_ascii=False, default=_json_default)}\n\n"
+                )
+                last_heartbeat = time.time()
+
+        return Response(
+            stream_with_context(sse_generator()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    # ─────────────────────── Legacy endpoints (kept) ───────────────────────
 
     @app.post("/extract-event")
     @require_password
     def extract_event_endpoint():
-        """Stage 0 — auto-extract an EventProposal from a free-form input string.
-
-        Request:  {"input": "NVIDIA Q1 earnings beat..."}
-        Response: EventProposal as JSON (all fields auto-filled, with confidence)
-
-        The user reviews the response in the UI, edits any field, and submits
-        the (possibly edited) Event back to /simulate. This stage is the
-        autonomous "deep research" step that turns 1 input into 10 fields.
-
-        Cost: ~$0.02-0.04. Wall clock: ~20-40 seconds.
-        """
+        """Legacy: text-only Stage 0 extraction (no file upload)."""
         try:
             payload = request.get_json(force=True) or {}
         except Exception:
@@ -73,7 +615,7 @@ def create_app() -> Flask:
 
         raw_input = (payload.get("input") or "").strip()
         if not raw_input:
-            return jsonify({"error": "input_required", "detail": "field 'input' must be a non-empty string"}), 400
+            return jsonify({"error": "input_required"}), 400
 
         try:
             proposal = asyncio.run(extract_event(raw_input))
@@ -88,13 +630,13 @@ def create_app() -> Flask:
     @app.post("/simulate")
     @require_password
     def simulate():
+        """Legacy: synchronous run with personas YAML path. Used by CLI + tests."""
         try:
             payload = request.get_json(force=True) or {}
         except Exception:
             return jsonify({"error": "invalid_json"}), 400
 
         try:
-            # Accept both adv_value (new) and adv_cny (legacy alias) field names
             adv = payload.get("adv_value")
             if adv is None:
                 adv = payload.get("adv_cny")
@@ -116,17 +658,21 @@ def create_app() -> Flask:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
 
         if not event.is_sandbox_ready:
-            return jsonify({
-                "error": "sandbox_not_ready",
-                "detail": "ssFlow requires current_price and adv_value in the request body",
-            }), 400
+            return jsonify(
+                {
+                    "error": "sandbox_not_ready",
+                    "detail": "ssFlow requires current_price and adv_value in the request body",
+                }
+            ), 400
 
         personas_path = payload.get("personas_path")
         if not personas_path:
-            return jsonify({
-                "error": "personas_path_required",
-                "detail": "personas_path must be specified — ssFlow has no default market pack",
-            }), 400
+            return jsonify(
+                {
+                    "error": "personas_path_required",
+                    "detail": "personas_path must be specified — ssFlow has no default market pack",
+                }
+            ), 400
 
         try:
             personas = load_personas(Path(personas_path))
@@ -134,7 +680,6 @@ def create_app() -> Flask:
             return jsonify({"error": "personas_load_failed", "detail": str(exc)}), 500
 
         try:
-            # OASIS engine is async; Flask is sync, so wrap in asyncio.run.
             result = asyncio.run(run_simulation(event, personas))
         except BudgetExceeded as exc:
             return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
@@ -191,22 +736,24 @@ def create_app() -> Flask:
             oasis_db_path=result.oasis_db_path,
         )
 
-        return jsonify({
-            "simulation_id": sim_id,
-            "report_markdown": display,
-            "compliance_passed": ok,
-            "initial_price": result.initial_price,
-            "final_price": result.final_price,
-            "cumulative_delta_pct": result.cumulative_delta_pct,
-            "price_trajectory": result.price_trajectory,
-            "class_pnl": class_pnl,
-            "publication_log": publication_log,
-            "lambda_used": result.lambda_used,
-            "adv_used": result.adv_value_used,
-            "elapsed_seconds": result.elapsed_seconds,
-            "cost_usd": result.cost_usd,
-            "report_path": str(report_path),
-        })
+        return jsonify(
+            {
+                "simulation_id": sim_id,
+                "report_markdown": display,
+                "compliance_passed": ok,
+                "initial_price": result.initial_price,
+                "final_price": result.final_price,
+                "cumulative_delta_pct": result.cumulative_delta_pct,
+                "price_trajectory": result.price_trajectory,
+                "class_pnl": class_pnl,
+                "publication_log": publication_log,
+                "lambda_used": result.lambda_used,
+                "adv_used": result.adv_value_used,
+                "elapsed_seconds": result.elapsed_seconds,
+                "cost_usd": result.cost_usd,
+                "report_path": str(report_path),
+            }
+        )
 
     @app.get("/report/<simulation_id>")
     @require_password
@@ -214,19 +761,92 @@ def create_app() -> Flask:
         path = settings.reports_dir / f"{simulation_id}.md"
         if not path.exists():
             return jsonify({"error": "not_found"}), 404
-        return path.read_text(encoding="utf-8"), 200, {"Content-Type": "text/markdown; charset=utf-8"}
+        return (
+            path.read_text(encoding="utf-8"),
+            200,
+            {"Content-Type": "text/markdown; charset=utf-8"},
+        )
 
     @app.get("/cost")
     @require_password
     def get_cost():
-        return jsonify({
-            "total_cost_usd": cost_tracker.total_cost_usd,
-            "total_calls": cost_tracker.total_calls,
-            "by_model": cost_tracker.cost_by_model,
-            "budget_usd": settings.budget_usd,
-        })
+        return jsonify(
+            {
+                "total_cost_usd": cost_tracker.total_cost_usd,
+                "total_calls": cost_tracker.total_calls,
+                "by_model": cost_tracker.cost_by_model,
+                "budget_usd": settings.budget_usd,
+            }
+        )
 
     return app
+
+
+# ─────────────────────── Helpers ───────────────────────
+
+
+def _build_event_from_dict(data: dict) -> Event:
+    """Construct an Event from the loose JSON shape we accept on the wire."""
+    adv = data.get("adv_value")
+    if adv is None:
+        adv = data.get("adv_cny")
+    event_type = data.get("event_type", "other")
+    if event_type not in VALID_EVENT_TYPES:
+        event_type = "other"
+    return Event(
+        ticker=str(data.get("ticker", "")).strip(),
+        event_text=str(data.get("event_text", "")).strip(),
+        event_type=event_type,
+        event_date=str(data.get("event_date", "")).strip(),
+        prior_consensus=str(data.get("prior_consensus", "")).strip(),
+        recent_price_action=str(data.get("recent_price_action", "")).strip(),
+        sector_context=str(data.get("sector_context", "")).strip(),
+        current_price=data.get("current_price"),
+        adv_value=adv,
+        market=data.get("market"),
+        price_currency=data.get("price_currency", "CNY"),
+        instrument=data.get("instrument"),
+    )
+
+
+def _event_to_dict(event: Event) -> dict:
+    return {
+        "ticker": event.ticker,
+        "event_text": event.event_text,
+        "event_type": event.event_type,
+        "event_date": event.event_date,
+        "prior_consensus": event.prior_consensus,
+        "recent_price_action": event.recent_price_action,
+        "sector_context": event.sector_context,
+        "current_price": event.current_price,
+        "adv_value": event.adv_value,
+        "market": event.market,
+        "price_currency": event.price_currency,
+        "instrument": event.instrument,
+    }
+
+
+def _persona_to_storable(persona) -> dict:
+    """Lightweight projection of a Persona for the stream payload echo.
+
+    The actual run uses the partials list (which we re-hydrate). This
+    projection is just for diagnostics.
+    """
+    return {
+        "id": persona.id,
+        "archetype": persona.archetype,
+        "entity_role": persona.entity_role,
+    }
+
+
+def _json_default(value):
+    """Fallback JSON encoder for engine event payloads (handles dataclasses)."""
+    if hasattr(value, "__dataclass_fields__"):
+        from dataclasses import asdict
+        return asdict(value)
+    if isinstance(value, (set, frozenset)):
+        return list(value)
+    return str(value)
 
 
 app = create_app()

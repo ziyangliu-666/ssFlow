@@ -49,6 +49,20 @@ from oasis.social_platform.typing import ActionType, DefaultPlatformType
 
 from .config import settings
 from .event import Event
+from .event_bus import (
+    EVENT_CLASS_FLOW_COMPUTED,
+    EVENT_ERROR,
+    EVENT_EXTERNAL_EVENT_INJECTED,
+    EVENT_PERSONA_THOUGHT,
+    EVENT_PRICE_UPDATED,
+    EVENT_ROUND_COMPLETE,
+    EVENT_ROUND_START,
+    EVENT_SIMULATION_COMPLETE,
+    EVENT_SIMULATION_START,
+    EVENT_TRADE_SUBMITTED,
+    EventSink,
+    safe_emit,
+)
 from .information import Publication
 from .information.external_events import ExternalEventSchedule
 from .llm_client import BudgetExceeded, cost_tracker
@@ -276,6 +290,7 @@ async def run_simulation(
     seed: int | None = None,
     external_events: ExternalEventSchedule | None = None,
     db_path: str | None = None,
+    event_sink: EventSink | None = None,
 ) -> OasisSimResult:
     """Run a Phase I OASIS-based market simulation.
 
@@ -294,6 +309,10 @@ async def run_simulation(
         external_events: optional schedule of mid-sim policy/news events
         db_path: optional path for the OASIS SQLite db. Defaults to a temp file
             under reports/oasis_dbs/.
+        event_sink: optional `EventSink` that receives progress events
+            (round_start, persona_thought, trade_submitted, price_updated, …)
+            as the simulation runs. See `ssflow.event_bus` for the protocol
+            and the available event types. Sink errors are swallowed.
 
     Returns:
         OasisSimResult with the full price trajectory + publication log.
@@ -340,6 +359,25 @@ async def run_simulation(
 
     cost_at_start = cost_tracker.total_cost_usd
     t0 = time.time()
+
+    safe_emit(
+        event_sink,
+        EVENT_SIMULATION_START,
+        simulation_id=simulation_id,
+        ticker=event.ticker,
+        instrument=event.instrument,
+        market=event.market,
+        market_event_type=event.event_type,
+        event_date=event.event_date,
+        initial_price=float(event.current_price),
+        price_currency=event.price_currency,
+        adv_value=float(event.adv_value),
+        lambda_used=lambda_used,
+        n_personas=len(personas),
+        n_traders=sum(1 for p in personas if p.sandbox is not None),
+        n_rounds=n_rounds,
+        seed=seed,
+    )
 
     # ── Build the agent graph (with the trading tool wired into traders) ──
     channel = Channel()
@@ -402,6 +440,13 @@ async def run_simulation(
         for round_idx in range(n_rounds):
             log.info("OASIS sim %s round %d starting at price %.2f",
                      simulation_id, round_idx, current_price)
+            safe_emit(
+                event_sink,
+                EVENT_ROUND_START,
+                simulation_id=simulation_id,
+                round_idx=round_idx,
+                current_price=current_price,
+            )
             pre_round_post_id = _max_post_id(str(db_path_obj))
             order_collector.set_round(round_idx)
 
@@ -434,6 +479,17 @@ async def run_simulation(
                             round_idx=round_idx,
                         ),
                     )
+                    safe_emit(
+                        event_sink,
+                        EVENT_EXTERNAL_EVENT_INJECTED,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        author_persona_id=author_id,
+                        content_type=ev.content_type,
+                        text=ev.text,
+                        authority_weight=ev.authority_weight,
+                        oasis_post_id=int(ev_post_id),
+                    )
 
             # 2. OASIS social step: every real persona acts via LLM.
             #    Trader personas see BOTH the 21 native OASIS social actions
@@ -446,10 +502,18 @@ async def run_simulation(
             }
             try:
                 await env.step(real_agents)
-            except BudgetExceeded:
+            except BudgetExceeded as exc:
                 log.warning(
                     "OASIS sim %s hit budget at round %d social step",
                     simulation_id, round_idx,
+                )
+                safe_emit(
+                    event_sink,
+                    EVENT_ERROR,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    code="budget_exceeded",
+                    detail=str(exc),
                 )
                 raise
             except Exception as exc:
@@ -481,6 +545,16 @@ async def run_simulation(
                     )
                     continue
                 persona = persona_by_id[order.persona_id]
+                safe_emit(
+                    event_sink,
+                    EVENT_TRADE_SUBMITTED,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    persona_id=order.persona_id,
+                    archetype=persona.archetype,
+                    distribution=dict(order.distribution),
+                    rationale=order.rationale,
+                )
                 flow = apply_distribution_to_agent_pop(
                     persona=persona,
                     agents=agent_pops[order.persona_id],
@@ -492,6 +566,18 @@ async def run_simulation(
                 )
                 class_flows[order.persona_id] = flow
                 submitted_ids.add(order.persona_id)
+                safe_emit(
+                    event_sink,
+                    EVENT_CLASS_FLOW_COMPUTED,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    persona_id=order.persona_id,
+                    archetype=persona.archetype,
+                    net_flow=float(flow.net_flow),
+                    n_agents=int(flow.n_agents),
+                    action_histogram=dict(flow.action_histogram),
+                    held=False,
+                )
 
             # Traders that didn't submit this round → treat as full hold.
             # Build a synthetic "all-hold" distribution per sandbox action_space.
@@ -504,13 +590,26 @@ async def run_simulation(
                     persona.sandbox.action_space[0]["name"],
                 )
                 hold_dist = {hold_action: 1.0}
-                class_flows[persona.id] = apply_distribution_to_agent_pop(
+                hold_flow = apply_distribution_to_agent_pop(
                     persona=persona,
                     agents=agent_pops[persona.id],
                     distribution=hold_dist,
                     current_price=current_price,
                     rng=sample_rng,
                     rationale="(no tool call this round, held)",
+                )
+                class_flows[persona.id] = hold_flow
+                safe_emit(
+                    event_sink,
+                    EVENT_CLASS_FLOW_COMPUTED,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    persona_id=persona.id,
+                    archetype=persona.archetype,
+                    net_flow=float(hold_flow.net_flow),
+                    n_agents=int(hold_flow.n_agents),
+                    action_histogram=dict(hold_flow.action_histogram),
+                    held=True,
                 )
 
             # 4. Aggregate net flow + Kyle
@@ -521,6 +620,17 @@ async def run_simulation(
                 lambda_market=lambda_used,
             )
             price_after = current_price * (1.0 + delta_pct)
+            safe_emit(
+                event_sink,
+                EVENT_PRICE_UPDATED,
+                simulation_id=simulation_id,
+                round_idx=round_idx,
+                price_before=float(current_price),
+                price_after=float(price_after),
+                delta_pct=float(delta_pct),
+                net_flow_total=float(net_flow_total),
+                price_currency=event.price_currency,
+            )
 
             # 5. Post the price update from the market broadcaster
             price_post = _build_price_update_post(
@@ -559,6 +669,23 @@ async def run_simulation(
                 persona_id_to_oasis_id=persona_id_to_oasis_id,
                 since_post_id=pre_round_post_id,
             )
+            for pub in publications_this_round:
+                safe_emit(
+                    event_sink,
+                    EVENT_PERSONA_THOUGHT,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    publication_id=pub.publication_id,
+                    oasis_post_id=pub.oasis_post_id,
+                    persona_id=pub.author_persona_id,
+                    archetype=pub.author_archetype,
+                    content_type=pub.content_type,
+                    text=pub.text,
+                    authority_weight=float(pub.authority_weight),
+                    likes=int(pub.likes),
+                    reposts=int(pub.reposts),
+                    references=list(pub.references),
+                )
 
             rounds.append(
                 RoundRecord(
@@ -571,6 +698,17 @@ async def run_simulation(
                     publications_this_round=publications_this_round,
                     external_events_injected=len(external_for_round),
                 )
+            )
+            safe_emit(
+                event_sink,
+                EVENT_ROUND_COMPLETE,
+                simulation_id=simulation_id,
+                round_idx=round_idx,
+                publications_count=len(publications_this_round),
+                orders_count=len(pending_orders),
+                class_flows_count=len(class_flows),
+                price_after=float(price_after),
+                net_flow_total=float(net_flow_total),
             )
 
             log.info(
@@ -600,6 +738,22 @@ async def run_simulation(
         (final_price / initial_price - 1.0) * 100,
         sum(len(r.publications_this_round) for r in rounds),
         len(rounds),
+    )
+
+    safe_emit(
+        event_sink,
+        EVENT_SIMULATION_COMPLETE,
+        simulation_id=simulation_id,
+        initial_price=float(initial_price),
+        final_price=float(final_price),
+        cumulative_delta_pct=(
+            (final_price / initial_price - 1.0) if initial_price else 0.0
+        ),
+        price_trajectory=[float(initial_price)] + [float(r.price_after) for r in rounds],
+        n_rounds_completed=len(rounds),
+        n_publications=sum(len(r.publications_this_round) for r in rounds),
+        elapsed_seconds=float(elapsed),
+        cost_usd=float(max(0.0, cost_at_end - cost_at_start)),
     )
 
     return OasisSimResult(

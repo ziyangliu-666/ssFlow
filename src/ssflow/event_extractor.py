@@ -320,15 +320,29 @@ async def _synthesize_proposal(
 # ─────────────────────── Top-level orchestrator ───────────────────────
 
 
-async def extract_event(raw_input: str) -> EventProposal:
+async def extract_event(
+    raw_input: str,
+    *,
+    pre_fetched_corpus: list[dict[str, str]] | None = None,
+) -> EventProposal:
     """Stage 0 — full pipeline.
 
     Input: a free-form string (URL, news text, headline, short description).
     Output: an EventProposal with all fields auto-filled, ready for the user
     to review + edit + confirm before running through the sandbox.
 
+    Args:
+        raw_input: the user's free-form text prompt.
+        pre_fetched_corpus: optional list of ``{"url", "title", "excerpt"}``
+            dicts that the caller already fetched (e.g. via
+            `document_ingestion`). When provided, Stage 0b web research is
+            **skipped** entirely — the user's own docs are assumed to be
+            richer primary sources than whatever DDG would find. This
+            both speeds up extraction and keeps first-party context in
+            the loop.
+
     Cost: ~$0.02-0.04 per extraction (2 LLM calls + ~12 web fetches).
-    Wall clock: ~20-40 seconds.
+    Wall clock: ~20-40 seconds (much faster with pre_fetched_corpus — no web).
     """
     today = now_utc8_date()
     log.info("[extract] Starting extraction for input: %r", raw_input[:120])
@@ -342,9 +356,23 @@ async def extract_event(raw_input: str) -> EventProposal:
         classification.get("event_type"),
     )
 
-    # Stage 0b: research
-    sources = await _research_context(classification)
-    log.info("[extract] Research complete: %d sources", len(sources))
+    # Stage 0b: research (or skip if caller supplied a corpus)
+    if pre_fetched_corpus is not None:
+        sources = [
+            {
+                "url": str(s.get("url", "")),
+                "title": str(s.get("title", "")),
+                "excerpt": str(s.get("excerpt", "")),
+            }
+            for s in pre_fetched_corpus
+            if s.get("excerpt")
+        ]
+        log.info(
+            "[extract] Stage 0b skipped: using %d pre-fetched sources", len(sources)
+        )
+    else:
+        sources = await _research_context(classification)
+        log.info("[extract] Research complete: %d sources", len(sources))
 
     # Stage 0c: synthesize
     synth = await _synthesize_proposal(classification, sources, today)
