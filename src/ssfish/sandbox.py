@@ -28,13 +28,18 @@ Design decisions locked in plan §9 + persona-pack-spec-v1.md §9:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import random
+import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from .llm_client import JsonChatResult, chat_json
+from .config import settings
+from .event import Event
+from .llm_client import BudgetExceeded, JsonChatResult, chat_json, cost_tracker
 from .persona import Persona, SandboxConfig
 
 
@@ -598,6 +603,461 @@ def update_holdings_for_price(agents: list[Agent], price_delta_pct: float) -> No
     return
 
 
+# ─────────────────────── Prompt builders (B3) ───────────────────────
+
+
+def _format_biases(biases: dict[str, float]) -> str:
+    if not biases:
+        return "  (none specified)"
+    return "\n".join(f"  - {k}: {v}" for k, v in biases.items())
+
+
+def _format_action_space(action_space: list[dict[str, Any]]) -> str:
+    lines = []
+    for a in action_space:
+        side = a.get("side", "none")
+        pool = a.get("pool", "none")
+        fraction = a.get("fraction", 0)
+        lines.append(
+            f"  - {a['name']}: side={side}, pool={pool}, fraction={fraction}"
+        )
+    return "\n".join(lines)
+
+
+def _build_sandbox_system_prompt(persona: Persona) -> str:
+    """Build the system message for sandbox-mode action distribution queries.
+
+    The persona is asked to output a probability distribution over its
+    `sandbox.action_space`, NOT a sentiment score. Strategic personas
+    (decision_mode=strategic) are also asked to emit a `strategic_signal`
+    field that gets routed to the report's separate "战略层信号" section.
+    """
+    sandbox = persona.sandbox
+    if sandbox is None:
+        raise ValueError(
+            f"persona '{persona.id}' has no sandbox config; "
+            f"cannot build sandbox prompt"
+        )
+
+    action_descriptions = _format_action_space(sandbox.action_space)
+    bias_block = _format_biases(persona.biases)
+    expected_actions_json = ", ".join(f'"{a["name"]}": <0-1>' for a in sandbox.action_space)
+
+    is_strategic = persona.decision_mode == "strategic"
+    strategic_field = ""
+    if is_strategic:
+        strategic_field = (
+            ',\n'
+            '  "strategic_signal": {\n'
+            '    "direction": "reduce|neutral|accumulate|defensive",\n'
+            '    "magnitude": "low|medium|high",\n'
+            '    "time_horizon_days": <integer>\n'
+            '  }'
+        )
+
+    return (
+        f"你代表 A 股市场中的一类参与者: {persona.archetype} ({persona.id})\n"
+        f"画像: {persona.display_name}\n"
+        f"\n"
+        f"# 你的语气和风格\n"
+        f"{persona.voice_prompt}\n"
+        f"\n"
+        f"# 你的行为偏差\n"
+        f"{bias_block}\n"
+        f"\n"
+        f"# 这一类参与者的特征\n"
+        f"  - 决策模式: {persona.decision_mode}\n"
+        f"  - 角色: {persona.role}\n"
+        f"  - 市场份额 (by_volume): {persona.market_share.by_volume if persona.market_share else 'unknown'}\n"
+        f"\n"
+        f"# 你这一类的可选动作\n"
+        f"{action_descriptions}\n"
+        f"\n"
+        f"# 任务\n"
+        f"给定下面的事件和当前市场状态, 输出你这一类参与者的动作概率分布.\n"
+        f"概率应该反映你这一类的真实分歧——不需要全部押注同一个动作.\n"
+        f"\n"
+        f"必须返回 JSON 格式 (所有概率加起来约等于 1.0):\n"
+        f'{{\n'
+        f'  "action_distribution": {{{expected_actions_json}}},\n'
+        f'  "rationale": "用 50-150 字解释这一类参与者会怎么想",\n'
+        f'  "confidence": 0.0-1.0{strategic_field}\n'
+        f'}}\n'
+        f"\n"
+        f"# 重要规则\n"
+        f"  1. 严格按 JSON 格式输出, 不要任何额外文字\n"
+        f"  2. action_distribution 的 keys 必须只包含上面列出的动作名\n"
+        f"  3. 不要输出投资建议. 你描述的是这一类人会**做什么**, 不是建议读者做什么\n"
+        f"  4. 你的角色是这一类的代表, 不是单一个体\n"
+    )
+
+
+def _build_sandbox_round_zero_user_message(
+    event: Event,
+    current_price: float,
+    adv_cny: float,
+) -> str:
+    return (
+        f"# 事件\n"
+        f"{event.to_simulation_input()}\n"
+        f"\n"
+        f"# 当前市场状态\n"
+        f"  - 当前价格: ¥{current_price:.2f}\n"
+        f"  - 日均成交额 (ADV): ¥{adv_cny / 1e8:.1f}億\n"
+        f"  - 这是事件刚发生的瞬间, 尚无价格反应\n"
+        f"\n"
+        f"请输出你这一类参与者的 action_distribution + rationale + confidence."
+    )
+
+
+def _build_sandbox_round_n_user_message(
+    event: Event,
+    current_price: float,
+    adv_cny: float,
+    initial_price: float,
+    round_idx: int,
+    history: list["SandboxRoundRecord"],
+) -> str:
+    history_lines = []
+    for r in history:
+        history_lines.append(
+            f"  R{r.round_idx}: ¥{r.price_before:.2f} → ¥{r.price_after:.2f} "
+            f"(Δ {r.delta_pct * 100:+.2f}%, 净流 ¥{r.net_flow_cny / 1e8:+.2f}億)"
+        )
+    history_block = "\n".join(history_lines) if history_lines else "  (no prior rounds)"
+    cumulative_delta = (current_price / initial_price - 1.0) * 100 if initial_price else 0.0
+
+    return (
+        f"# 事件\n"
+        f"{event.to_simulation_input()}\n"
+        f"\n"
+        f"# 历史轮次 (你已经看到的市场反应)\n"
+        f"{history_block}\n"
+        f"\n"
+        f"# 当前市场状态 (R{round_idx})\n"
+        f"  - 当前价格: ¥{current_price:.2f}\n"
+        f"  - 累计变动: {cumulative_delta:+.2f}%\n"
+        f"  - 日均成交额 (ADV): ¥{adv_cny / 1e8:.1f}億\n"
+        f"\n"
+        f"考虑前面几轮的反应, 输出你这一类参与者本轮的 action_distribution.\n"
+        f"持有的人看到 {cumulative_delta:+.2f}% 的累计变化后, 心态可能不一样了.\n"
+    )
+
+
+# ─────────────────────── Round + Result dataclasses ───────────────────────
+
+
+@dataclass
+class SandboxRoundRecord:
+    """Snapshot of one sandbox round.
+
+    `class_flows` is keyed by persona_id and carries the per-class flow result
+    (net_flow + action histogram + LLM rationale + optional strategic signal).
+    `fingerprints` is parallel to the persona list and stores each LLM call's
+    system_fingerprint for reproducibility tracking in the scorecard.
+    """
+
+    round_idx: int
+    price_before: float
+    price_after: float
+    delta_pct: float
+    net_flow_cny: float
+    class_flows: dict[str, ClassFlowResult]
+    fingerprints: list[str | None] = field(default_factory=list)
+
+
+@dataclass
+class SandboxResult:
+    """Top-level result of a sandbox-mode simulation."""
+
+    simulation_id: str
+    event: Event
+    personas: list[Persona]
+    initial_price: float
+    final_price: float
+    rounds: list[SandboxRoundRecord]
+    elapsed_seconds: float
+    cost_usd_at_start: float
+    cost_usd_at_end: float
+    llm_seed: int | None
+    lambda_used: float
+    adv_cny_used: float
+    final_agents_by_class: dict[str, list[Agent]] = field(default_factory=dict)
+
+    @property
+    def n_personas(self) -> int:
+        return len(self.personas)
+
+    @property
+    def n_rounds(self) -> int:
+        return len(self.rounds)
+
+    @property
+    def cost_usd(self) -> float:
+        return max(0.0, self.cost_usd_at_end - self.cost_usd_at_start)
+
+    @property
+    def price_trajectory(self) -> list[float]:
+        if not self.rounds:
+            return [self.initial_price]
+        return [self.initial_price] + [r.price_after for r in self.rounds]
+
+    def compute_class_pnl(self) -> dict[str, float]:
+        return {
+            class_id: sum(a.pnl_at(self.final_price) for a in agents)
+            for class_id, agents in self.final_agents_by_class.items()
+        }
+
+    @property
+    def cumulative_delta_pct(self) -> float:
+        if not self.initial_price:
+            return 0.0
+        return (self.final_price / self.initial_price - 1.0)
+
+
+# ─────────────────────── Main orchestration loop (B3) ───────────────────────
+
+
+async def _query_class_action_distribution(
+    persona: Persona,
+    event: Event,
+    current_price: float,
+    adv_cny: float,
+    round_idx: int,
+    history: list[SandboxRoundRecord],
+    initial_price: float,
+    seed: int | None,
+) -> ActionDistributionResult:
+    """Build messages + call chat_action_distribution for one persona class.
+
+    Round 0 uses the no-history prompt, round R>=1 uses the with-history prompt.
+    """
+    sandbox = persona.sandbox
+    if sandbox is None:
+        raise ValueError(
+            f"persona '{persona.id}' has no sandbox config; "
+            f"cannot run sandbox-mode simulation"
+        )
+
+    system_msg = _build_sandbox_system_prompt(persona)
+    if round_idx == 0:
+        user_msg = _build_sandbox_round_zero_user_message(event, current_price, adv_cny)
+    else:
+        user_msg = _build_sandbox_round_n_user_message(
+            event, current_price, adv_cny, initial_price, round_idx, history
+        )
+
+    expected_actions = [a["name"] for a in sandbox.action_space]
+    expects_strategic = bool(persona.contributes_to_strategic_signal)
+
+    return await chat_action_distribution(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        persona_id=persona.id,
+        expected_actions=expected_actions,
+        model=persona.model,
+        seed=seed,
+        expects_strategic_signal=expects_strategic,
+    )
+
+
+async def run_sandbox_simulation(
+    event: Event,
+    personas: list[Persona],
+    n_rounds: int | None = None,
+    *,
+    simulation_id: str | None = None,
+    lambda_market: float | None = None,
+) -> SandboxResult:
+    """Run an agent-based market simulation in sandbox mode.
+
+    For each round R in [0, n_rounds):
+        1. Build per-class messages (R0 prompt for first round, Rn for rest)
+        2. Call chat_action_distribution for each persona class IN PARALLEL
+           (asyncio.gather across classes — Q9 synchronous-parallel rounds)
+        3. Sample agents from each class's action distribution and aggregate
+           into a per-class net flow (aggregate_class_flow)
+        4. Sum all class flows into a single net total flow (Gotcha 5)
+        5. Apply Kyle square-root price impact: ΔP/P = λ × sign(flow) × sqrt(|flow|/ADV)
+        6. Update price for next round
+        7. Record SandboxRoundRecord
+
+    Args:
+        event: must have current_price and adv_cny set (Event.is_sandbox_ready)
+        personas: list of v2 Personas with sandbox config
+        n_rounds: number of rounds (default = settings.default_rounds)
+        simulation_id: stable id for scorecard tracking (auto-generated if None)
+        lambda_market: market impact coefficient (defaults to LAMBDA_LITERATURE['ashare'])
+
+    Returns:
+        SandboxResult with the full price trajectory + final agent state.
+
+    Raises:
+        ValueError: if event is not sandbox-ready or personas list is empty
+        BudgetExceeded: if the LLM cost guard trips mid-run (caller should
+            persist the partial result if useful)
+    """
+    if not personas:
+        raise ValueError("run_sandbox_simulation requires at least one persona")
+    if not event.is_sandbox_ready:
+        raise ValueError(
+            f"event {event.ticker} is not sandbox-ready: "
+            f"current_price={event.current_price}, adv_cny={event.adv_cny}. "
+            f"Sandbox mode requires both fields."
+        )
+
+    n_rounds = n_rounds or settings.n_rounds
+    simulation_id = simulation_id or f"sandbox_{uuid.uuid4().hex[:12]}"
+    # Default to A-share λ since ssFish's primary market is A-share. Override
+    # via the lambda_market kwarg for cross-market sims.
+    lambda_used = (
+        lambda_market
+        if lambda_market is not None
+        else LAMBDA_LITERATURE["ashare"]
+    )
+    seed = settings.seed
+
+    log.info(
+        "Starting sandbox simulation: id=%s ticker=%s personas=%d rounds=%d "
+        "initial_price=%.2f adv=%.0f lambda=%.3f seed=%s",
+        simulation_id,
+        event.ticker,
+        len(personas),
+        n_rounds,
+        event.current_price,
+        event.adv_cny,
+        lambda_used,
+        seed,
+    )
+
+    cost_at_start = cost_tracker.total_cost_usd
+    t0 = time.time()
+
+    # Spawn all agents fresh at t=0
+    spawn_rng = random.Random(seed if seed is not None else 0)
+    agents_by_class: dict[str, list[Agent]] = {}
+    for persona in personas:
+        agents_by_class[persona.id] = spawn_agents(
+            persona, current_price=event.current_price, rng=spawn_rng
+        )
+
+    rounds: list[SandboxRoundRecord] = []
+    current_price = float(event.current_price)
+    initial_price = current_price
+
+    for round_idx in range(n_rounds):
+        history_for_this_round = list(rounds)
+
+        # Step 1: query all persona classes IN PARALLEL (Q9)
+        # asyncio.gather respects the order of personas → keeps zipping safe
+        tasks = [
+            _query_class_action_distribution(
+                persona=p,
+                event=event,
+                current_price=current_price,
+                adv_cny=event.adv_cny,
+                round_idx=round_idx,
+                history=history_for_this_round,
+                initial_price=initial_price,
+                seed=seed,
+            )
+            for p in personas
+        ]
+        try:
+            distribution_results: list[ActionDistributionResult] = await asyncio.gather(*tasks)
+        except BudgetExceeded:
+            log.warning(
+                "Sandbox simulation %s hit budget guard at round %d", simulation_id, round_idx
+            )
+            raise
+
+        # Step 2: aggregate per-class flow
+        class_flows: dict[str, ClassFlowResult] = {}
+        fingerprints: list[str | None] = []
+        flow_rng = random.Random(
+            (seed if seed is not None else 0) + 1000 + round_idx
+        )
+
+        for persona, dist_result in zip(personas, distribution_results):
+            agents = agents_by_class[persona.id]
+            class_flow = aggregate_class_flow(
+                persona_id=persona.id,
+                agents=agents,
+                action_distribution=dist_result.action_distribution,
+                action_specs=persona.sandbox.action_space,
+                current_price=current_price,
+                rng=flow_rng,
+                rationale=dist_result.rationale,
+                strategic_signal=dist_result.strategic_signal,
+            )
+            class_flows[persona.id] = class_flow
+            fingerprints.append(dist_result.system_fingerprint)
+
+        # Step 3: sum total net flow (Gotcha 5: single λ application)
+        net_flow_total = sum(cf.net_flow_cny for cf in class_flows.values())
+
+        # Step 4: Kyle price impact
+        delta_pct = compute_price_impact(
+            net_flow_cny=net_flow_total,
+            adv_cny=event.adv_cny,
+            lambda_market=lambda_used,
+        )
+        price_after = current_price * (1.0 + delta_pct)
+
+        rounds.append(
+            SandboxRoundRecord(
+                round_idx=round_idx,
+                price_before=current_price,
+                price_after=price_after,
+                delta_pct=delta_pct,
+                net_flow_cny=net_flow_total,
+                class_flows=class_flows,
+                fingerprints=fingerprints,
+            )
+        )
+
+        log.info(
+            "  R%d: %.2f → %.2f (%+.2f%%), net_flow=¥%+.2f億",
+            round_idx,
+            current_price,
+            price_after,
+            delta_pct * 100,
+            net_flow_total / 1e8,
+        )
+
+        current_price = price_after
+
+    cost_at_end = cost_tracker.total_cost_usd
+    elapsed = time.time() - t0
+    final_price = current_price
+
+    log.info(
+        "Sandbox sim %s done in %.1fs ($%.4f). Cumulative price delta: %+.2f%%",
+        simulation_id,
+        elapsed,
+        cost_at_end - cost_at_start,
+        (final_price / initial_price - 1.0) * 100,
+    )
+
+    return SandboxResult(
+        simulation_id=simulation_id,
+        event=event,
+        personas=personas,
+        initial_price=initial_price,
+        final_price=final_price,
+        rounds=rounds,
+        elapsed_seconds=elapsed,
+        cost_usd_at_start=cost_at_start,
+        cost_usd_at_end=cost_at_end,
+        llm_seed=seed,
+        lambda_used=lambda_used,
+        adv_cny_used=event.adv_cny,
+        final_agents_by_class=agents_by_class,
+    )
+
+
 __all__ = [
     "Agent",
     "ClassFlowResult",
@@ -605,11 +1065,14 @@ __all__ = [
     "NORMALIZATION_TOLERANCE",
     "ActionDistributionParseError",
     "ActionDistributionResult",
+    "SandboxResult",
+    "SandboxRoundRecord",
     "aggregate_class_flow",
     "apply_action_to_agent",
     "chat_action_distribution",
     "compute_price_impact",
     "normalize_action_distribution",
+    "run_sandbox_simulation",
     "sample_actions",
     "spawn_agents",
     "update_holdings_for_price",

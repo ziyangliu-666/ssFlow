@@ -775,3 +775,372 @@ def test_update_holdings_for_price_is_noop():
     assert a.holdings_shares == 60.0
     # But the *value* at the new price IS lower
     assert a.holdings_value_cny(95.0) < a.holdings_value_cny(100.0)
+
+
+# ─────────────────────── run_sandbox_simulation (B3) ───────────────────────
+
+
+from ssfish.event import Event
+from ssfish.sandbox import (
+    SandboxResult,
+    SandboxRoundRecord,
+    run_sandbox_simulation,
+)
+
+
+def _sandbox_event(adv_cny: float = 8e9, current_price: float = 218.50) -> Event:
+    return Event(
+        ticker="002594",
+        event_text="比亚迪 2026 Q1 营收 +18% YoY (beat), 毛利率 -2.3pp (miss)",
+        event_type="earnings",
+        event_date="2026-04-29",
+        prior_consensus="市场预期 +15%",
+        recent_price_action="过去 30 天 -3%",
+        sector_context="新能源板块情绪平稳",
+        current_price=current_price,
+        adv_cny=adv_cny,
+    )
+
+
+def _make_distribution_mock(action_distributions_by_persona: dict[str, dict[str, float]]):
+    """Build a fake chat_action_distribution that returns the given distributions
+    based on persona_id. Returns the SAME distribution every round for a given
+    persona — fine for deterministic tests."""
+
+    async def fake_call(
+        messages,
+        persona_id,
+        expected_actions,
+        model=None,
+        seed=None,
+        max_tokens=800,
+        expects_strategic_signal=False,
+    ):
+        dist = action_distributions_by_persona.get(
+            persona_id,
+            # Default: uniform over expected_actions
+            {a: 1.0 / len(expected_actions) for a in expected_actions},
+        )
+        # Filter to expected actions, normalize (mirror the real wrapper)
+        filtered = {k: v for k, v in dist.items() if k in expected_actions}
+        total = sum(filtered.values()) or 1.0
+        normalized = {k: v / total for k, v in filtered.items()}
+        for a in expected_actions:
+            normalized.setdefault(a, 0.0)
+        ss = None
+        if expects_strategic_signal:
+            ss = {"direction": "neutral", "magnitude": "low", "time_horizon_days": 90}
+        return ActionDistributionResult(
+            persona_id=persona_id,
+            action_distribution=normalized,
+            rationale=f"mocked rationale for {persona_id}",
+            confidence=0.7,
+            model=model or "fake-model",
+            system_fingerprint=f"fp_mock_{persona_id}",
+            prompt_tokens=1000,
+            completion_tokens=200,
+            raw_distribution=dist,
+            normalization_warning=None,
+            strategic_signal=ss,
+        )
+
+    return fake_call
+
+
+class TestRunSandboxSimulation:
+
+    @pytest.mark.asyncio
+    async def test_runs_5_rounds_with_uniform_distribution_no_crash(self, monkeypatch):
+        """Smoke: 2 personas × 5 rounds, uniform distribution, runs to completion."""
+        personas = [
+            _make_sandbox_persona(pid="retail", instance_count=200),
+            _make_sandbox_persona(pid="quant", instance_count=50),
+        ]
+        event = _sandbox_event()
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({}),  # default uniform
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=5)
+        assert isinstance(result, SandboxResult)
+        assert result.n_rounds == 5
+        assert result.n_personas == 2
+        assert len(result.rounds) == 5
+        assert all(isinstance(r, SandboxRoundRecord) for r in result.rounds)
+        # Price trajectory has n_rounds+1 entries (initial + after each round)
+        assert len(result.price_trajectory) == 6
+        assert result.price_trajectory[0] == event.current_price
+        assert result.lambda_used == LAMBDA_LITERATURE["ashare"]
+        assert result.adv_cny_used == event.adv_cny
+
+    @pytest.mark.asyncio
+    async def test_all_panic_sell_distribution_drives_price_down(self, monkeypatch):
+        """If both classes panic-sell every round, price MUST go down."""
+        personas = [
+            _make_sandbox_persona(
+                pid="retail",
+                instance_count=500,
+                prob_holding=1.0,  # everyone holds initially
+                pos_min=0.30,
+                pos_max=0.30,
+            ),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"panic_sell_50pct": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=3)
+        assert result.final_price < result.initial_price
+        # Each round should have negative net flow
+        for r in result.rounds:
+            assert r.net_flow_cny < 0
+            assert r.delta_pct < 0
+        # Cumulative move should be negative
+        assert result.cumulative_delta_pct < 0
+
+    @pytest.mark.asyncio
+    async def test_all_fomo_buy_distribution_drives_price_up(self, monkeypatch):
+        """If both classes panic-buy every round, price MUST go up."""
+        personas = [
+            _make_sandbox_persona(
+                pid="retail",
+                instance_count=500,
+                prob_holding=0.0,  # nobody holds initially → all cash
+                pos_min=0.0,
+                pos_max=0.0,
+            ),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"fomo_buy_30pct": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=3)
+        assert result.final_price > result.initial_price
+        for r in result.rounds:
+            assert r.net_flow_cny > 0
+            assert r.delta_pct > 0
+
+    @pytest.mark.asyncio
+    async def test_hold_distribution_yields_flat_trajectory(self, monkeypatch):
+        """Pure hold → zero flow → flat trajectory."""
+        personas = [
+            _make_sandbox_persona(pid="retail", instance_count=100, prob_holding=1.0),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"hold": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=4)
+        for r in result.rounds:
+            assert r.net_flow_cny == 0.0
+            assert r.delta_pct == 0.0
+        assert result.final_price == result.initial_price
+
+    @pytest.mark.asyncio
+    async def test_kyle_formula_applied_correctly(self, monkeypatch):
+        """Spot check: with known flow, the price update should match the
+        Kyle formula exactly."""
+        personas = [
+            _make_sandbox_persona(
+                pid="retail",
+                instance_count=100,
+                prob_holding=1.0,
+                pos_min=0.50,
+                pos_max=0.50,
+                # All have same capital for predictability
+                median_capital=100000,
+                sigma=0.001,  # near-degenerate
+            ),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"panic_sell_50pct": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=1, lambda_market=0.5)
+        r0 = result.rounds[0]
+        # Expected flow ≈ 100 agents × 100k capital × 0.5 holdings × 0.5 sell fraction = -2.5M CNY
+        assert r0.net_flow_cny == pytest.approx(-2.5e6, rel=0.05)
+        # Kyle: ΔP/P = 0.5 × (-1) × sqrt(2.5e6 / 1e9) = -0.5 × 0.05 = -0.025
+        assert r0.delta_pct == pytest.approx(-0.025, abs=0.005)
+
+    @pytest.mark.asyncio
+    async def test_reproducible_with_same_seed(self, monkeypatch):
+        """Same seed → same agents → same flow → same price trajectory."""
+        from ssfish.config import settings as ssettings
+
+        monkeypatch.setattr(ssettings, "seed", 42)
+        personas = [_make_sandbox_persona(pid="retail", instance_count=200)]
+        event = _sandbox_event()
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"panic_sell_50pct": 0.5, "hold": 0.5}}),
+        )
+
+        r1 = await run_sandbox_simulation(event, personas, n_rounds=3)
+        r2 = await run_sandbox_simulation(event, personas, n_rounds=3)
+
+        assert len(r1.rounds) == len(r2.rounds)
+        for a, b in zip(r1.rounds, r2.rounds):
+            assert a.net_flow_cny == pytest.approx(b.net_flow_cny, rel=1e-9)
+            assert a.delta_pct == pytest.approx(b.delta_pct, rel=1e-9)
+
+    @pytest.mark.asyncio
+    async def test_class_pnl_computed_after_run(self, monkeypatch):
+        """compute_class_pnl returns per-class P&L at the final price."""
+        personas = [
+            _make_sandbox_persona(
+                pid="retail",
+                instance_count=100,
+                prob_holding=1.0,
+                pos_min=0.50,
+                pos_max=0.50,
+            ),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e10)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"hold": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, personas, n_rounds=2)
+        pnl_by_class = result.compute_class_pnl()
+        assert "retail" in pnl_by_class
+        # All hold + flat price → zero PnL
+        assert pnl_by_class["retail"] == pytest.approx(0.0, abs=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_strategic_persona_emits_signal_through_round_record(
+        self, monkeypatch
+    ):
+        """Strategic personas have contributes_to_strategic_signal=True; their
+        ClassFlowResult.strategic_signal should be populated."""
+        strategic = Persona(
+            id="strat_holder",
+            archetype="大股东",
+            display_name="控股股东方",
+            voice_prompt="x",
+            decision_mode="strategic",
+            role="strategic_holder",
+            market_share=MarketShare(by_holdings=0.30, by_volume=0.05),
+            sandbox=SandboxConfig(
+                instance_count=20,
+                capital_distribution={
+                    "type": "lognormal",
+                    "median_cny": 1e9,
+                    "sigma": 0.5,
+                },
+                initial_position_distribution={"type": "fixed", "value": 0.20},
+                risk={},
+                action_space=[
+                    {"name": "do_nothing", "side": "none", "pool": "none", "fraction": 0.0},
+                    {
+                        "name": "block_sale_5pct",
+                        "side": "sell",
+                        "pool": "holdings_in_target",
+                        "fraction": 0.05,
+                    },
+                ],
+            ),
+        )
+        # By default strategic personas auto-flag contributes_to_strategic_signal=True
+        # via the loader, but here we built one inline so set it manually:
+        strategic.contributes_to_sentiment_mean = False
+        strategic.contributes_to_strategic_signal = True
+
+        event = _sandbox_event()
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"strat_holder": {"do_nothing": 1.0}}),
+        )
+
+        result = await run_sandbox_simulation(event, [strategic], n_rounds=1)
+        cf = result.rounds[0].class_flows["strat_holder"]
+        assert cf.strategic_signal is not None
+        assert cf.strategic_signal["direction"] == "neutral"
+
+    @pytest.mark.asyncio
+    async def test_event_without_sandbox_fields_raises(self, monkeypatch):
+        bad_event = Event(
+            ticker="002594",
+            event_text="x",
+            event_type="other",
+            event_date="2026-04-29",
+            # current_price + adv_cny missing
+        )
+        personas = [_make_sandbox_persona()]
+        with pytest.raises(ValueError, match="not sandbox-ready"):
+            await run_sandbox_simulation(bad_event, personas, n_rounds=1)
+
+    @pytest.mark.asyncio
+    async def test_empty_personas_raises(self):
+        event = _sandbox_event()
+        with pytest.raises(ValueError, match="at least one persona"):
+            await run_sandbox_simulation(event, [], n_rounds=1)
+
+    @pytest.mark.asyncio
+    async def test_persona_without_sandbox_raises(self, monkeypatch):
+        no_sandbox = Persona(
+            id="bad",
+            archetype="x",
+            display_name="x",
+            voice_prompt="x",
+            decision_mode="discretionary",
+            role="x",
+            market_share=MarketShare(by_volume=0.1),
+            # sandbox=None (default)
+        )
+        event = _sandbox_event()
+
+        async def never_called(**kwargs):
+            raise AssertionError("LLM should not be called")
+
+        monkeypatch.setattr("ssfish.sandbox.chat_action_distribution", never_called)
+        with pytest.raises(ValueError, match="no sandbox config"):
+            await run_sandbox_simulation(event, [no_sandbox], n_rounds=1)
+
+    @pytest.mark.asyncio
+    async def test_multi_round_feedback_changes_per_round(self, monkeypatch):
+        """Verify the multi-round dynamics actually feed back: total cumulative
+        change should differ from a single round's change."""
+        personas = [
+            _make_sandbox_persona(
+                pid="retail",
+                instance_count=300,
+                prob_holding=1.0,
+                pos_min=0.20,
+                pos_max=0.20,
+            ),
+        ]
+        event = _sandbox_event(current_price=100.0, adv_cny=1e9)
+
+        monkeypatch.setattr(
+            "ssfish.sandbox.chat_action_distribution",
+            _make_distribution_mock({"retail": {"panic_sell_50pct": 1.0}}),
+        )
+
+        single = await run_sandbox_simulation(event, personas, n_rounds=1)
+        multi = await run_sandbox_simulation(event, personas, n_rounds=3)
+
+        # Multi-round should produce a more extreme cumulative move (each round
+        # the agents sell 50% of REMAINING holdings)
+        assert abs(multi.cumulative_delta_pct) > abs(single.cumulative_delta_pct)
+        # But each successive round should have a smaller flow than the prior
+        # (because remaining holdings shrink)
+        flows = [abs(r.net_flow_cny) for r in multi.rounds]
+        assert flows[0] > flows[1] > flows[2]
