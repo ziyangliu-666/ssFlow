@@ -22,7 +22,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS simulations (
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS simulations (
     seed                 INTEGER,
     n_personas           INTEGER,
     n_rounds             INTEGER,
+    -- Sentiment-mode outputs (NULL when mode='sandbox')
     sentiment_mean       REAL,
     sentiment_std        REAL,
     implied_move_low     REAL,
@@ -54,11 +55,23 @@ CREATE TABLE IF NOT EXISTS simulations (
     -- fingerprints and the actual seed passed to the LLM API. Old rows will
     -- have NULL here; new rows populate these.
     round_fingerprints_json  TEXT,
-    llm_seed                 INTEGER
+    llm_seed                 INTEGER,
+    -- Added in schema v3 (Phase B sandbox mode): sandbox-specific outputs
+    -- and metadata. NULL when mode='sentiment'.
+    mode                     TEXT DEFAULT 'sentiment',
+    initial_price            REAL,
+    final_price              REAL,
+    cumulative_delta_pct     REAL,
+    price_trajectory_json    TEXT,
+    class_pnl_json           TEXT,
+    strategic_signals_json   TEXT,
+    lambda_used              REAL,
+    adv_used                 REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sim_ticker_date ON simulations(event_ticker, event_date);
 CREATE INDEX IF NOT EXISTS idx_sim_event_hash ON simulations(event_text_hash);
+CREATE INDEX IF NOT EXISTS idx_sim_mode ON simulations(mode);
 """
 
 
@@ -69,12 +82,29 @@ _V2_MIGRATIONS_SQL = [
     "ALTER TABLE simulations ADD COLUMN llm_seed INTEGER",
 ]
 
+# v3 adds the sandbox-mode columns. Same idempotent ALTER TABLE pattern.
+_V3_MIGRATIONS_SQL = [
+    "ALTER TABLE simulations ADD COLUMN mode TEXT DEFAULT 'sentiment'",
+    "ALTER TABLE simulations ADD COLUMN initial_price REAL",
+    "ALTER TABLE simulations ADD COLUMN final_price REAL",
+    "ALTER TABLE simulations ADD COLUMN cumulative_delta_pct REAL",
+    "ALTER TABLE simulations ADD COLUMN price_trajectory_json TEXT",
+    "ALTER TABLE simulations ADD COLUMN class_pnl_json TEXT",
+    "ALTER TABLE simulations ADD COLUMN strategic_signals_json TEXT",
+    "ALTER TABLE simulations ADD COLUMN lambda_used REAL",
+    "ALTER TABLE simulations ADD COLUMN adv_used REAL",
+]
 
-def _migrate_to_v2(conn: sqlite3.Connection) -> None:
-    """Idempotently add v2 columns to pre-existing v1 databases."""
+
+def _idempotent_alter_columns(
+    conn: sqlite3.Connection, statements: list[str]
+) -> None:
+    """Apply a list of `ALTER TABLE simulations ADD COLUMN` statements,
+    skipping any whose target column already exists. Used by both v2 and v3
+    migrations."""
     cur = conn.execute("PRAGMA table_info(simulations)")
     existing_cols = {row[1] for row in cur.fetchall()}
-    for alter_sql in _V2_MIGRATIONS_SQL:
+    for alter_sql in statements:
         col_name = alter_sql.split("ADD COLUMN ")[1].split()[0]
         if col_name not in existing_cols:
             try:
@@ -82,6 +112,16 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
             except sqlite3.OperationalError:
                 # Column already exists from a concurrent migration; safe to ignore.
                 pass
+
+
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Idempotently add v2 columns to pre-existing v1 databases."""
+    _idempotent_alter_columns(conn, _V2_MIGRATIONS_SQL)
+
+
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    """Idempotently add v3 sandbox-mode columns to pre-v3 databases."""
+    _idempotent_alter_columns(conn, _V3_MIGRATIONS_SQL)
 
 
 # ─────────────────────── Connection helper ───────────────────────
@@ -102,6 +142,7 @@ def _connect() -> Iterator[sqlite3.Connection]:
     try:
         conn.executescript(SCHEMA_SQL)
         _migrate_to_v2(conn)
+        _migrate_to_v3(conn)
         yield conn
         conn.commit()
     finally:
@@ -141,13 +182,15 @@ def insert_simulation(
     round_fingerprints: list[str | None] | None = None,
     llm_seed: int | None = None,
 ) -> str:
-    """Insert one simulation row. Returns the simulation_id.
+    """Insert one sentiment-mode simulation row. Returns the simulation_id.
 
     round_fingerprints / llm_seed were added in schema v2 (retrospective
     reproducibility fix). The provider's `system_fingerprint` plus the seed
     we passed to the LLM API are what let us claim "same config fingerprint"
     reruns. The old `seed` column is kept for backwards compatibility but
     only records settings.seed (the shuffle seed), not what reached the LLM.
+
+    For sandbox-mode runs, use insert_sandbox_simulation() instead.
     """
     sim_id = simulation_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -165,8 +208,9 @@ def insert_simulation(
                 implied_move_low, implied_move_high, implied_move_confidence,
                 blind_spots_json, full_report_path, cost_usd, elapsed_seconds,
                 created_at,
-                round_fingerprints_json, llm_seed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                round_fingerprints_json, llm_seed,
+                mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sim_id, event_ticker, event_date, event_type,
@@ -178,6 +222,78 @@ def insert_simulation(
                 full_report_path, cost_usd, elapsed_seconds,
                 now,
                 fingerprints_json, llm_seed,
+                'sentiment',
+            ),
+        )
+    return sim_id
+
+
+def insert_sandbox_simulation(
+    *,
+    event_ticker: str,
+    event_date: str,
+    event_type: str,
+    event_text_hash: str,
+    persona_set_hash: str,
+    model_default: str,
+    seed: int,
+    n_personas: int,
+    n_rounds: int,
+    initial_price: float,
+    final_price: float,
+    cumulative_delta_pct: float,
+    price_trajectory: list[float],
+    class_pnl: dict[str, float],
+    strategic_signals: dict[str, dict[str, Any]] | None,
+    lambda_used: float,
+    adv_used: float,
+    full_report_path: str | None,
+    cost_usd: float,
+    elapsed_seconds: float,
+    simulation_id: str | None = None,
+    round_fingerprints: list[list[str | None]] | None = None,
+    llm_seed: int | None = None,
+) -> str:
+    """Insert one sandbox-mode simulation row. Returns the simulation_id.
+
+    Sentiment-mode columns (sentiment_mean, implied_move_*, blind_spots_json)
+    are NULL for sandbox runs. Sandbox-specific columns (price_trajectory_json,
+    class_pnl_json, lambda_used, adv_used, etc.) are populated.
+
+    `mode` column is set to 'sandbox'.
+    """
+    sim_id = simulation_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    # round_fingerprints for sandbox is a list of lists (one inner list per
+    # round, one fingerprint per persona class). Stringify the whole thing.
+    fingerprints_json = (
+        json.dumps(round_fingerprints) if round_fingerprints is not None else None
+    )
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO simulations (
+                simulation_id, event_ticker, event_date, event_type,
+                event_text_hash, persona_set_hash, model_default,
+                seed, n_personas, n_rounds,
+                full_report_path, cost_usd, elapsed_seconds, created_at,
+                round_fingerprints_json, llm_seed,
+                mode, initial_price, final_price, cumulative_delta_pct,
+                price_trajectory_json, class_pnl_json, strategic_signals_json,
+                lambda_used, adv_used
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sim_id, event_ticker, event_date, event_type,
+                event_text_hash, persona_set_hash, model_default,
+                seed, n_personas, n_rounds,
+                full_report_path, cost_usd, elapsed_seconds, now,
+                fingerprints_json, llm_seed,
+                'sandbox', initial_price, final_price, cumulative_delta_pct,
+                json.dumps(price_trajectory),
+                json.dumps(class_pnl, ensure_ascii=False),
+                json.dumps(strategic_signals, ensure_ascii=False) if strategic_signals else None,
+                lambda_used, adv_used,
             ),
         )
     return sim_id
@@ -228,6 +344,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "get_simulation",
     "init_db",
+    "insert_sandbox_simulation",
     "insert_simulation",
     "query_recent",
     "update_actual_move",

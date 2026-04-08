@@ -110,6 +110,26 @@
   <label>(可选) 行业上下文</label>
   <textarea id="sector_context" placeholder="例: 新能源板块整体情绪平稳, 上游价格..."></textarea>
 
+  <h2>执行模式</h2>
+
+  <div class="row">
+    <div>
+      <label>模拟模式</label>
+      <select id="mode">
+        <option value="sentiment">sentiment (启发式聚合, 默认)</option>
+        <option value="sandbox">sandbox (agent-based market 推演)</option>
+      </select>
+    </div>
+    <div>
+      <label>当前价格 ¥ (sandbox 必填)</label>
+      <input type="text" id="current_price" placeholder="218.50">
+    </div>
+    <div>
+      <label>日均成交额 ¥億 (sandbox 必填)</label>
+      <input type="text" id="adv_yi" placeholder="80">
+    </div>
+  </div>
+
   <button id="run">运行模拟 (大约 30-60 秒)</button>
   <span class="muted" id="status"></span>
 
@@ -135,7 +155,23 @@
         prior_consensus: $('prior_consensus').value.trim(),
         recent_price_action: $('recent_price_action').value.trim(),
         sector_context: $('sector_context').value.trim(),
+        mode: $('mode').value,
       };
+
+      // Sandbox mode requires numeric current_price + adv (in CNY)
+      if (payload.mode === 'sandbox') {
+        const cp = parseFloat($('current_price').value);
+        const advYi = parseFloat($('adv_yi').value);
+        if (isNaN(cp) || cp <= 0 || isNaN(advYi) || advYi <= 0) {
+          out.textContent = 'ERROR: sandbox mode requires positive 当前价格 and 日均成交额';
+          out.style.display = 'block';
+          btn.disabled = false;
+          status.textContent = '';
+          return;
+        }
+        payload.current_price = cp;
+        payload.adv_cny = advYi * 1e8;  // user enters 億, send as CNY
+      }
 
       try {
         const res = await fetch('/simulate', {
@@ -151,7 +187,11 @@
           out.textContent = 'ERROR: ' + JSON.stringify(data, null, 2);
         } else {
           out.textContent = data.report_markdown;
-          status.textContent = `  成本 $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s · sim_id ${data.simulation_id.slice(0,8)}`;
+          let extra = '';
+          if (data.mode === 'sandbox') {
+            extra = ` · ¥${data.initial_price.toFixed(2)} → ¥${data.final_price.toFixed(2)} (${(data.cumulative_delta_pct * 100).toFixed(2)}%)`;
+          }
+          status.textContent = `  成本 $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s${extra} · sim_id ${data.simulation_id.slice(0,8)}`;
         }
         out.style.display = 'block';
       } catch (err) {

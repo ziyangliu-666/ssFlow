@@ -24,8 +24,13 @@ from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
 from ssfish.llm_client import BudgetExceeded, cost_tracker
 from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import render_safe_or_quarantine, save_report
-from ssfish.scorecard import init_db, insert_simulation
+from ssfish.report import (
+    render_safe_or_quarantine,
+    render_sandbox_safe_or_quarantine,
+    save_report,
+)
+from ssfish.sandbox import run_sandbox_simulation
+from ssfish.scorecard import init_db, insert_sandbox_simulation, insert_simulation
 from ssfish.simulation import run_simulation
 
 from .auth import require_password
@@ -56,6 +61,10 @@ def create_app() -> Flask:
         except Exception:
             return jsonify({"error": "invalid_json"}), 400
 
+        mode = payload.get("mode", "sentiment")
+        if mode not in {"sentiment", "sandbox"}:
+            return jsonify({"error": "invalid_mode", "detail": f"mode must be 'sentiment' or 'sandbox', got {mode!r}"}), 400
+
         try:
             event = Event(
                 ticker=payload.get("ticker", "").strip(),
@@ -65,9 +74,17 @@ def create_app() -> Flask:
                 prior_consensus=payload.get("prior_consensus", "").strip(),
                 recent_price_action=payload.get("recent_price_action", "").strip(),
                 sector_context=payload.get("sector_context", "").strip(),
+                current_price=payload.get("current_price"),
+                adv_cny=payload.get("adv_cny"),
             )
         except (TypeError, ValueError) as exc:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
+
+        if mode == "sandbox" and not event.is_sandbox_ready:
+            return jsonify({
+                "error": "sandbox_not_ready",
+                "detail": "sandbox mode requires current_price and adv_cny in the request body"
+            }), 400
 
         personas_path = Path(payload.get("personas_path") or
                              settings.personas_dir / "ashare.yaml")
@@ -76,19 +93,23 @@ def create_app() -> Flask:
         except Exception as exc:
             return jsonify({"error": "personas_load_failed", "detail": str(exc)}), 500
 
+        if mode == "sandbox":
+            return _run_sandbox_endpoint(event, personas)
+        return _run_sentiment_endpoint(event, personas)
+
+    def _run_sentiment_endpoint(event: Event, personas):
         try:
             result = asyncio.run(run_simulation(event, personas))
         except BudgetExceeded as exc:
             return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
         except Exception as exc:
-            log.exception("simulation failed")
+            log.exception("sentiment simulation failed")
             return jsonify({"error": "simulation_failed", "detail": str(exc)}), 500
 
         report = aggregate(result)
         display, ok = render_safe_or_quarantine(result, report)
         report_path = save_report(display, result.simulation_id)
 
-        # Persist to scorecard (includes v2 reproducibility columns)
         sim_id = insert_simulation(
             event_ticker=event.ticker,
             event_date=event.event_date,
@@ -114,6 +135,7 @@ def create_app() -> Flask:
         )
 
         return jsonify({
+            "mode": "sentiment",
             "simulation_id": sim_id,
             "report_markdown": display,
             "compliance_passed": ok,
@@ -122,6 +144,75 @@ def create_app() -> Flask:
             "implied_move_confidence": report.implied_move_confidence,
             "sentiment_mean": report.sentiment_mean,
             "sentiment_std": report.sentiment_std,
+            "elapsed_seconds": result.elapsed_seconds,
+            "cost_usd": result.cost_usd,
+            "report_path": str(report_path),
+        })
+
+    def _run_sandbox_endpoint(event: Event, personas):
+        try:
+            result = asyncio.run(run_sandbox_simulation(event, personas))
+        except BudgetExceeded as exc:
+            return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
+        except Exception as exc:
+            log.exception("sandbox simulation failed")
+            return jsonify({"error": "simulation_failed", "detail": str(exc)}), 500
+
+        display, ok = render_sandbox_safe_or_quarantine(result)
+        report_path = save_report(display, result.simulation_id)
+
+        # Strategic signals from final round
+        strategic_signals = {}
+        by_id = {p.id: p for p in personas}
+        if result.rounds:
+            last = result.rounds[-1]
+            for cid, cf in last.class_flows.items():
+                p = by_id.get(cid)
+                if p and p.contributes_to_strategic_signal and cf.strategic_signal:
+                    strategic_signals[cid] = cf.strategic_signal
+
+        fingerprints_per_round = [r.fingerprints for r in result.rounds]
+        class_pnl = result.compute_class_pnl()
+
+        sim_id = insert_sandbox_simulation(
+            event_ticker=event.ticker,
+            event_date=event.event_date,
+            event_type=event.event_type,
+            event_text_hash=event.text_hash,
+            persona_set_hash=persona_set_hash(personas),
+            model_default=settings.default_model,
+            seed=settings.seed,
+            n_personas=result.n_personas,
+            n_rounds=result.n_rounds,
+            initial_price=result.initial_price,
+            final_price=result.final_price,
+            cumulative_delta_pct=result.cumulative_delta_pct,
+            price_trajectory=result.price_trajectory,
+            class_pnl=class_pnl,
+            strategic_signals=strategic_signals or None,
+            lambda_used=result.lambda_used,
+            adv_used=result.adv_cny_used,
+            full_report_path=str(report_path),
+            cost_usd=result.cost_usd,
+            elapsed_seconds=result.elapsed_seconds,
+            simulation_id=result.simulation_id,
+            round_fingerprints=fingerprints_per_round,
+            llm_seed=result.llm_seed,
+        )
+
+        return jsonify({
+            "mode": "sandbox",
+            "simulation_id": sim_id,
+            "report_markdown": display,
+            "compliance_passed": ok,
+            "initial_price": result.initial_price,
+            "final_price": result.final_price,
+            "cumulative_delta_pct": result.cumulative_delta_pct,
+            "price_trajectory": result.price_trajectory,
+            "class_pnl": class_pnl,
+            "strategic_signals": strategic_signals or None,
+            "lambda_used": result.lambda_used,
+            "adv_used": result.adv_cny_used,
             "elapsed_seconds": result.elapsed_seconds,
             "cost_usd": result.cost_usd,
             "report_path": str(report_path),
