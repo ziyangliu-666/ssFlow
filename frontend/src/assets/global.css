@@ -1,0 +1,143 @@
+/* ssFlow global styles — editorial research-tool language.
+   Inter for UI, Noto Serif SC for CJK headlines, Fraunces italic for accents,
+   JetBrains Mono for numbers/tickers. One orange accent, used sparingly. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  width: 100%;
+  min-height: 100vh;
+  background: #ffffff;
+  color: #0a0a0a;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont,
+               'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Typographic roles — use these classes instead of hardcoded families */
+.ss-serif-cjk { font-family: 'Noto Serif SC', 'Songti SC', 'SimSun', serif; }
+.ss-serif-accent { font-family: 'Fraunces', Georgia, serif; font-style: italic; color: var(--ss-accent); }
+.ss-mono { font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace; font-variant-numeric: tabular-nums; }
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track { background: #f5f5f5; }
+::-webkit-scrollbar-thumb { background: #0a0a0a; }
+::-webkit-scrollbar-thumb:hover { background: #333; }
+
+/* shared color tokens */
+:root {
+  --ss-bg: #ffffff;
+  --ss-bg-soft: #f7f7f7;
+  --ss-bg-card: #fafafa;
+  --ss-fg: #0a0a0a;
+  --ss-fg-muted: #6b6b6b;
+  --ss-fg-faint: #a3a3a3;
+  --ss-line: #ececec;
+  --ss-line-strong: #cfcfcf;
+  --ss-accent: #ff6a00;
+  --ss-accent-soft: #fff4ec;
+  --ss-good: #1d7a3a;
+  --ss-bad:  #c43c3c;
+  --ss-info: #2c66d4;
+  --ss-sidebar-w: 220px;
+}
+
+/* Tag chip used in many places */
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--ss-line);
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  background: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chip.accent {
+  background: var(--ss-accent-soft);
+  color: var(--ss-accent);
+  border-color: var(--ss-accent);
+}
+.chip.good { background: #e7f5ec; border-color: var(--ss-good); color: var(--ss-good); }
+.chip.bad  { background: #fbecec; border-color: var(--ss-bad);  color: var(--ss-bad);  }
+
+/* Status dot */
+.dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ss-fg-faint);
+  vertical-align: middle;
+}
+.dot.live { background: var(--ss-accent); animation: pulse 1.4s infinite; }
+.dot.done { background: var(--ss-good); }
+.dot.bad  { background: var(--ss-bad);  }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+/* Generic button */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border: 1px solid var(--ss-line-strong);
+  background: #0a0a0a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.btn:hover:not(:disabled) { background: #333; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.ghost {
+  background: #fff;
+  color: #0a0a0a;
+}
+.btn.ghost:hover:not(:disabled) { background: var(--ss-bg-soft); }
+.btn.accent {
+  background: var(--ss-accent);
+  color: #fff;
+  border-color: var(--ss-accent);
+}
+.btn.accent:hover:not(:disabled) { background: #d65800; border-color: #d65800; }
