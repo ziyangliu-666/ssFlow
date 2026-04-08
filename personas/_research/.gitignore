@@ -1,0 +1,2 @@
+# Cached research data — regenerate with `uv run python scripts/generate_pack.py`
+*.json
