@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--personas",
         default=None,
-        help="Path to personas YAML (defaults to personas/ashare-v1.yaml)",
+        help="Path to personas YAML (defaults to personas/ashare.yaml)",
     )
     p.add_argument(
         "--rounds", type=int, default=None, help="Override n_rounds (defaults to settings)"
@@ -87,7 +87,7 @@ async def amain() -> int:
         print(f"ERROR: invalid event: {exc}", file=sys.stderr)
         return 2
 
-    personas_path = Path(args.personas) if args.personas else settings.personas_dir / "ashare-v1.yaml"
+    personas_path = Path(args.personas) if args.personas else settings.personas_dir / "ashare.yaml"
     personas = load_personas(personas_path)
 
     init_db()

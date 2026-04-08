@@ -70,7 +70,7 @@ def create_app() -> Flask:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
 
         personas_path = Path(payload.get("personas_path") or
-                             settings.personas_dir / "ashare-v1.yaml")
+                             settings.personas_dir / "ashare.yaml")
         try:
             personas = load_personas(personas_path)
         except Exception as exc:

@@ -85,7 +85,7 @@ AMBIGUOUS_EVENT_TEXT = """
 """.strip()
 
 
-# A condensed 10-persona roster (same archetypes as ashare-v1.yaml but
+# A condensed 10-persona roster (same archetypes as the ashare pack but
 # inlined so this script is self-contained and doesn't require persona
 # YAML loading). The archetypes are what matters for the diversity test.
 PERSONAS_INLINE = [
