@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 
 from ssfish.event import Event
-from ssfish.persona import Persona
+from ssfish.persona import MarketShare, Persona
 from ssfish.simulation import (
     Reaction,
     SimulationResult,
@@ -48,8 +48,11 @@ def _make_persona(pid: str, archetype: str = "test") -> Persona:
         id=pid,
         archetype=archetype,
         display_name=f"{pid} display",
-        model="gpt-4o-mini",
         voice_prompt="short test prompt",
+        model="gpt-4o-mini",
+        decision_mode="discretionary",
+        role="directional_speculator",
+        market_share=MarketShare(by_volume=0.1),
     )
 
 

@@ -67,16 +67,40 @@ def _intent_breakdown(reactions: list[Reaction]) -> dict[str, float]:
     return {intent: round(count / n, 3) for intent, count in counts.most_common()}
 
 
-def _weighted_sentiment(reactions: list[Reaction], personas: list[Persona]) -> float:
-    """Persona-weight-adjusted sentiment mean."""
+DEFAULT_WEIGHT_DIMENSION = "by_volume"
+
+
+def _weight_for(persona: Persona | None, dimension: str) -> float:
+    """Read a persona's weight from market_share[dimension].
+
+    Falls back to 0.0 if the persona is missing or its market_share is unset.
+    Strategic personas (`contributes_to_sentiment_mean=False`) are excluded
+    from sentiment-mean weighting and return 0.0 here regardless of their
+    market_share value.
+    """
+    if persona is None or persona.market_share is None:
+        return 0.0
+    if not persona.contributes_to_sentiment_mean:
+        return 0.0
+    val = persona.market_share.get(dimension)
+    return float(val) if val is not None else 0.0
+
+
+def _weighted_sentiment(
+    reactions: list[Reaction],
+    personas: list[Persona],
+    dimension: str = DEFAULT_WEIGHT_DIMENSION,
+) -> float:
+    """Persona-weight-adjusted sentiment mean.
+
+    Weight comes from `persona.market_share[dimension]`. Strategic personas
+    are silently dropped (their `contributes_to_sentiment_mean=False`).
+    """
     by_id = {p.id: p for p in personas}
     total_weight = 0.0
     total_weighted = 0.0
     for r in reactions:
-        w = by_id.get(r.persona_id, Persona(
-            id=r.persona_id, archetype="?", display_name="?", model="?",
-            voice_prompt="?",
-        )).weight
+        w = _weight_for(by_id.get(r.persona_id), dimension)
         total_weight += w
         total_weighted += w * r.sentiment
     return total_weighted / total_weight if total_weight else 0.0
@@ -157,6 +181,7 @@ def _extract_blind_spots(
 def _persona_summary_rows(
     final_reactions: list[Reaction],
     personas: list[Persona],
+    dimension: str = DEFAULT_WEIGHT_DIMENSION,
 ) -> list[dict[str, Any]]:
     by_id = {p.id: p for p in personas}
     rows = []
@@ -170,7 +195,7 @@ def _persona_summary_rows(
                 "action_intent": r.action_intent,
                 "comment": r.comment,
                 "confidence": round(r.confidence, 2),
-                "weight": p.weight if p else 1.0,
+                "weight": round(_weight_for(p, dimension), 4),
             }
         )
     return rows

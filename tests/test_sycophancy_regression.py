@@ -46,7 +46,7 @@ from typing import Any
 import pytest
 
 from ssfish.event import Event
-from ssfish.persona import Persona
+from ssfish.persona import MarketShare, Persona
 from ssfish.simulation import SimulationResult, run_simulation
 
 
@@ -65,29 +65,41 @@ def _make_test_personas() -> list[Persona]:
             id="bull_analyst",
             archetype="多头分析师",
             display_name="sell-side bull",
-            model="gpt-4o-mini",
             voice_prompt="permabull fundamental analyst",
+            model="gpt-4o-mini",
+            decision_mode="discretionary",
+            role="sell_side_analyst",
+            market_share=MarketShare(by_volume=0.05),
         ),
         Persona(
             id="bear_short_seller",
             archetype="空头卖空者",
             display_name="short-seller",
-            model="gpt-4o-mini",
             voice_prompt="contrarian short-seller, always skeptical",
+            model="gpt-4o-mini",
+            decision_mode="discretionary",
+            role="short_seller",
+            market_share=MarketShare(by_volume=0.05),
         ),
         Persona(
             id="quant_rebalance",
             archetype="量化机器人",
             display_name="mid-freq quant",
-            model="gpt-4o-mini",
             voice_prompt="systematic, no narrative",
+            model="gpt-4o-mini",
+            decision_mode="systematic",
+            role="quant",
+            market_share=MarketShare(by_volume=0.20),
         ),
         Persona(
             id="retail_herd",
             archetype="散户",
             display_name="retail herd",
-            model="gpt-4o-mini",
             voice_prompt="emotional, follows price action",
+            model="gpt-4o-mini",
+            decision_mode="discretionary",
+            role="directional_speculator",
+            market_share=MarketShare(by_volume=0.30),
         ),
     ]
 

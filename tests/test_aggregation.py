@@ -6,20 +6,29 @@ import pytest
 
 from ssfish.aggregation import aggregate
 from ssfish.event import Event
-from ssfish.persona import Persona
+from ssfish.persona import MarketShare, Persona
 from ssfish.simulation import Reaction, SimulationResult
 
 
-def _persona(pid: str, weight: float = 1.0) -> Persona:
+def _persona(pid: str, by_volume: float = 1.0) -> Persona:
+    """Construct a minimal v2 Persona for aggregation tests.
+
+    `by_volume` is the persona's market_share[by_volume] weight, which is the
+    default dimension used by `_weighted_sentiment`. Schema-required fields
+    (decision_mode, role) get sensible defaults so the dataclass instantiates
+    cleanly.
+    """
     return Persona(
         id=pid,
         archetype=f"archetype_{pid}",
         display_name=f"display {pid}",
-        model="gpt-4o-mini",
         voice_prompt="x",
+        model="gpt-4o-mini",
         biases={},
         knowledge={},
-        weight=weight,
+        decision_mode="discretionary",
+        role="directional_speculator",
+        market_share=MarketShare(by_volume=by_volume),
     )
 
 
@@ -157,13 +166,13 @@ def test_aggregate_empty_raises() -> None:
 
 def test_persona_weight_affects_implied_move() -> None:
     """Higher-weight personas should pull the implied move toward their stance."""
-    # Setup: 4 neutral personas + 1 strongly bearish persona with high weight
+    # Setup: 4 neutral personas + 1 strongly bearish persona with high market_share.by_volume
     personas = [
-        _persona("a", weight=1.0),
-        _persona("b", weight=1.0),
-        _persona("c", weight=1.0),
-        _persona("d", weight=1.0),
-        _persona("heavyweight", weight=5.0),
+        _persona("a", by_volume=1.0),
+        _persona("b", by_volume=1.0),
+        _persona("c", by_volume=1.0),
+        _persona("d", by_volume=1.0),
+        _persona("heavyweight", by_volume=5.0),
     ]
     final = [
         _r("a", 0.0),

@@ -39,6 +39,16 @@ class Event:
     recent_price_action: str = ""
     sector_context: str = ""
 
+    # ── Sandbox-mode fields (required for sandbox runs, optional for sentiment) ──
+    # `current_price` is the price at t=0 (before the event hits the market).
+    # `adv_cny` is the trailing-30-day average daily volume in CNY, used as the
+    # denominator in the Kyle square-root price impact formula. `sector_etf_ticker`
+    # is reserved for future cross-asset spillover modeling — currently unused
+    # (v1 sandbox is single-ticker per Q7 spec lock-in).
+    current_price: float | None = None
+    adv_cny: float | None = None
+    sector_etf_ticker: str | None = None
+
     def __post_init__(self) -> None:
         # Light validation, no exceptions on optional context (just warnings)
         if not self.ticker or not self.ticker.strip():
@@ -51,6 +61,19 @@ class Event:
             )
         if not self.event_date or len(self.event_date) != 10:
             raise ValueError("Event.event_date must be YYYY-MM-DD")
+        if self.current_price is not None and self.current_price <= 0:
+            raise ValueError(
+                f"Event.current_price must be > 0 if set, got {self.current_price}"
+            )
+        if self.adv_cny is not None and self.adv_cny <= 0:
+            raise ValueError(
+                f"Event.adv_cny must be > 0 if set, got {self.adv_cny}"
+            )
+
+    @property
+    def is_sandbox_ready(self) -> bool:
+        """True iff the event has the fields required for sandbox-mode simulation."""
+        return self.current_price is not None and self.adv_cny is not None
 
     @property
     def context_completeness(self) -> float:
