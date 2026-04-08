@@ -3,21 +3,11 @@ market: ashare
 locale: zh-CN
 last_updated: '2026-04-08'
 _generated_by: ssfish.persona_factory
-_generation_summary: A股市场的投资者结构呈现出多元化的特征，个人投资者占据了重要地位，持股比例达到33.51%。机构投资者的规模也在稳步增长，尤其是公募基金和保险机构。外资的参与度逐渐上升，显示出市场的开放性。整体来看，A股市场的投资者结构正在向专业化和多元化方向发展。
+_generation_summary: A股市场的投资者结构呈现出散户和机构投资者共存的特征。散户账户数超过2.4亿，持股占比约33.51%。机构投资者中，公募基金、保险资金和外资是主要力量，合计持股超过14万亿元。市场正在向多元化和专业化方向发展，散户的市场影响力虽然在下降，但仍然是重要的参与者。
 data_sources:
-- id: https-www-sohu-com-a-962437040-121834007
-  name: A股投资者结构全景图（2025Q3）_持股_流通市值_规模
-  url: https://www.sohu.com/a/962437040_121834007
-  accessed: '2026-04-08'
-  note: auto-extracted by persona_factory.research_market
-- id: https-wordpress-com
-  name: 'WordPress.com: Everything You Need to Build Your Website'
-  url: https://wordpress.com/
-  accessed: '2026-04-08'
-  note: auto-extracted by persona_factory.research_market
-- id: https-www-nhs-uk-conditions
-  name: Conditions A to Z - NHS
-  url: https://www.nhs.uk/conditions/
+- id: https-finance-sina-com-cn-roll-2024-12-22-doc-in
+  name: 果然，散户还是A股最大的投资者|A股_新浪财经_新浪网
+  url: https://finance.sina.com.cn/roll/2024-12-22/doc-ineahtaz4050755.shtml
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
 - id: https-xueqiu-com-9859748126-359364194
@@ -25,19 +15,14 @@ data_sources:
   url: https://xueqiu.com/9859748126/359364194
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-wordpress-org-showcase-submit-a-wordpress-
-  name: Submit a WordPress site | WordPress.org
-  url: https://wordpress.org/showcase/submit-a-wordpress-site/
+- id: https-www-sohu-com-a-962437040-121834007
+  name: A股投资者结构全景图（2025Q3）_持股_流通市值_规模
+  url: https://www.sohu.com/a/962437040_121834007
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-amac-org-cn-sjtj
-  name: 统计数据
-  url: https://www.amac.org.cn/sjtj/
-  accessed: '2026-04-08'
-  note: auto-extracted by persona_factory.research_market
-- id: https-data-eastmoney-com-hsgtcg-gzcglist-html
-  name: 沪深港通持股 _ 数据中心 _ 东方财富网
-  url: https://data.eastmoney.com/hsgtcg/gzcglist.html
+- id: https-finance-ifeng-com-c-8vwsmnkmkbj
+  name: 资金画像｜北上资金连续四年活跃度超10%，成交占比创历史新高，“宁王”跻身前三大持股！杠杆资金“跑步入场”，千亿成交额游资出炉_凤凰网财经_凤凰网
+  url: https://finance.ifeng.com/c/8VwSMNkmKbJ
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
 - id: https-reportify-cn-reports-1121962008758063104
@@ -45,9 +30,29 @@ data_sources:
   url: https://reportify.cn/reports/1121962008758063104
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-imdb-com-title-tt0106489
-  name: https://www.imdb.com/title/tt0106489/
-  url: https://www.imdb.com/title/tt0106489/
+- id: https-caifuhao-eastmoney-com-news-20250824214141
+  name: 散户在A股市场中的人数和资金量占比，决定了散户的市场角色地位和作用_财富号_东方财富网
+  url: https://caifuhao.eastmoney.com/news/20250824214141911949940
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-nhs-uk-conditions
+  name: Conditions A to Z - NHS
+  url: https://www.nhs.uk/conditions/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-caifuhao-eastmoney-com-news-20251127212606
+  name: A股投资者结构全景图，最新A股资金版图梳理_财富号_东方财富网
+  url: https://caifuhao.eastmoney.com/news/20251127212606088414340
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-wordpress-org-showcase-submit-a-wordpress-
+  name: Submit a WordPress site | WordPress.org
+  url: https://wordpress.org/showcase/submit-a-wordpress-site/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-jdbinvesting-com-whisper-tem-tem-hghac
+  name: 木头姐减仓TEM引发市场抛售 - 美投
+  url: https://www.jdbinvesting.com/whisper/TEM/TEM-Hghac-W
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
 - id: https-gemini-google-com-app
@@ -55,85 +60,89 @@ data_sources:
   url: https://gemini.google.com/app
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-gov-uk-fishing-licences
-  name: 'Buy a rod fishing licence: When you need a licence - GOV.UK'
-  url: https://www.gov.uk/fishing-licences
+- id: https-www-usmartsecurities-com-en-news-detail-65
+  name: 挪威主权财富基金的投资二十年 | uSMART
+  url: https://www.usmartsecurities.com/en/news-detail/6562872575804964898
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-jdbinvesting-com-tofu-n2obe-tofu
-  name: 技术分析有用吗？#YouTube搬运 - 美投
-  url: https://www.jdbinvesting.com/tofu/n2Obe-TOFU
+- id: https-www-fmz-com
+  name: FMZ - 发明者量化
+  url: https://www.fmz.com/
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-xueqiu-com-6917949348-365895164
-  name: https://xueqiu.com/6917949348/365895164
-  url: https://xueqiu.com/6917949348/365895164
+- id: https-data-eastmoney-com-hsgt-index-html
+  name: 沪深港通资金流向 _ 数据中心 _ 东方财富网
+  url: https://data.eastmoney.com/hsgt/index.html
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-sohu-com-a-932740637-121976703
-  name: 成交量放大！量化交易贡献几何？A股市场“众人拾柴”_资金_投资_郭锋
-  url: https://www.sohu.com/a/932740637_121976703
+- id: https-en-wikipedia-org-wiki-class-b-share
+  name: Class B share - Wikipedia
+  url: https://en.wikipedia.org/wiki/Class_B_share
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-www-investing-com
-  name: Investing.com - Stock Market Quotes & Financial News
-  url: https://www.investing.com/
+- id: https-wikimili-com-en-class-b-share
+  name: Class B share - WikiMili, The Best Wikipedia Reader
+  url: https://wikimili.com/en/Class_B_share
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-tradingeconomics-com-china-stock-market
-  name: China Shanghai Composite Stock Market Index - Quote - Chart - Historical Data - News | Trading Economics
-  url: https://tradingeconomics.com/china/stock-market
+- id: https-iiosnail-blogspot-com-2024-11-stock-metric
+  name: 股票页面股票页面各个数值的含义（A股盘口指标详细说明） - iioSnail
+  url: https://iiosnail.blogspot.com/2024/11/stock-metrics.html
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
-- id: https-research-szltech-com-wp-content-uploads-20
-  name: https://research.szltech.com/wp-content/uploads/2022/03/中国银行业理财市场年度报告（2021年）-2.pdf
-  url: https://research.szltech.com/wp-content/uploads/2022/03/中国银行业理财市场年度报告（2021年）-2.pdf
+- id: https-36kr-com-p-2660913816789767
+  name: 一分钟卖出25亿，量化巨头为何做空？-36氪
+  url: https://36kr.com/p/2660913816789767
   accessed: '2026-04-08'
   note: auto-extracted by persona_factory.research_market
 personas:
 - id: retail_short_term_active
   archetype: 散户短期活跃
   sub_archetype: null
-  display_name: 散户短期活跃投资者, 25-40岁, 网络资讯
+  display_name: 散户短期活跃, 20-40岁, 信息来源于社交媒体和财经网站
   model: null
   decision_mode: discretionary
   role: directional_speculator
   market_share:
-    by_account_count: 0.15
-  voice_prompt: 您通常会频繁交易，追求短期利润。请关注市场动态，及时调整您的投资策略。保持警惕，避免因情绪而做出决策。
+    by_volume: 0.36
+    by_holdings: 0.0714
+    by_account_count: 0.1818
+    citations:
+    - source_id: src-id
+  voice_prompt: 你通常会关注市场的短期波动，快速反应以抓住机会。请注意风险管理，保持灵活的投资策略，适时调整你的持仓。关注市场情绪和热点板块，利用信息源来做出决策。
   biases:
     momentum_chasing: 0.8
     loss_aversion: 0.6
   knowledge:
     typical_holdings:
-    - 科技股
-    - 消费品
-    - 医药股
+    - 中小盘股
+    - 题材概念股
     information_sources:
-    - 网络论坛
-    - 投资博客
+    - 社交媒体
+    - 财经网站
+    - 投资论坛
     ignores:
-    - 长期投资策略
+    - 传统财经报纸
   behavior:
-    avg_position_pct: 0.75
-    annual_turnover: 5.0
+    avg_position_pct: 0.5
+    annual_turnover: 3.0
     typical_holding_period_days: 5
     stop_loss_discipline: medium
     reaction_speed: fast
   information:
     primary_sources:
-    - 网络资讯
     - 社交媒体
+    - 财经网站
     secondary_sources:
-    - 财经新闻
+    - 投资论坛
     ignored:
-    - 专业分析报告
+    - 传统财经报纸
     english_capable: false
   sandbox:
     instance_count: 3000
     capital_distribution:
       type: lognormal
-      median_cny: 50000
+      median_cny: 100000
       sigma: 1.0
       floor_cny: 10000
       ceiling_cny: 500000
@@ -146,8 +155,8 @@ personas:
         max: 0.5
     risk:
       max_position_pct: 0.95
-      margin_account_pct: 0.2
-      leverage_max: 2.0
+      margin_account_pct: 0.1
+      leverage_max: 1.5
       stop_loss_threshold: -0.1
       stop_loss_discipline: 0.5
     action_space:
@@ -155,55 +164,62 @@ personas:
       side: none
       pool: none
       fraction: 0.95
+    - name: enter_position_50pct
+      side: buy
+      pool: cash
+      fraction: 0.5
     - name: panic_sell_50pct
       side: sell
       pool: holdings_in_target
       fraction: 0.5
-    - name: increase_holding_10pct
-      side: buy
-      pool: cash
-      fraction: 0.1
     reaction_lag_rounds:
       type: discrete
       values:
       - 1
       - 2
+  capital_range_cny:
+  - 10000
+  - 500000
   time_horizon_days:
-  - 1
   - 30
+  - 40
 - id: retail_long_term_passive
   archetype: 散户长期被动
   sub_archetype: null
-  display_name: 散户长期被动投资者, 30-60岁, 主要通过网络媒体获取信息
+  display_name: '散户长期被动投资者 (¥1,000 - ¥1,000,000, 信息来源: src-id)'
   model: null
   decision_mode: passive
   role: long_term_holder
   market_share:
-    by_account_count: 0.25
-  voice_prompt: 您通常会持有股票多年，追求资本增值。请关注市场动态，保持耐心，您的投资策略是长期持有。请在合规窗口内进行操作，确保您的投资决策符合您的目标。
+    by_volume: 0.12
+    by_holdings: 0.1429
+    by_account_count: 0.4242
+    citations:
+    - source_id: src-id
+  voice_prompt: 您是一个长期被动投资者，专注于配置型投资。您倾向于持有沪深300成分股，关注市场的长期趋势，而不是短期波动。请保持耐心，关注您的投资组合表现。
   biases:
     momentum_chasing: 0.2
     loss_aversion: 0.4
   knowledge:
     typical_holdings:
-    - 蓝筹股
-    - 成长股
+    - 沪深300成分股
     information_sources:
-    - 财经新闻
-    - 社交媒体
+    - 市场新闻
+    - 财务报告
     ignores:
-    - 短期市场波动
+    - 短期交易策略
   behavior:
     avg_position_pct: 0.8
     annual_turnover: 0.1
-    typical_holding_period_days: 3650
+    typical_holding_period_days: 365
     stop_loss_discipline: low
     reaction_speed: slow
   information:
     primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
+    - src-id
     secondary_sources: []
-    ignored: []
+    ignored:
+    - 短期市场波动
     english_capable: false
   sandbox:
     instance_count: 3000
@@ -211,8 +227,8 @@ personas:
       type: lognormal
       median_cny: 500000
       sigma: 1.0
-      floor_cny: 10000
-      ceiling_cny: 10000000
+      floor_cny: 1000
+      ceiling_cny: 1000000
     initial_position_distribution:
       type: bernoulli
       prob_holding: 0.9
@@ -245,38 +261,50 @@ personas:
       - 3
       - 5
       - 7
+  capital_range_cny:
+  - 1000
+  - 1000000
+  time_horizon_days:
+  - 180
+  - 365
 - id: retail_high_net_worth_pro_am
-  archetype: 散户高净值专业投资者
+  archetype: 高净值散户专业投资者
   sub_archetype: null
-  display_name: 散户高净值专业投资者 (高资本, 30-50岁, 专业投资网站)
+  display_name: 高净值散户专业投资者, 30-60岁, 信息来源于市场分析和财务报告
   model: null
   decision_mode: discretionary
   role: strategic_holder
   market_share:
-    by_account_count: 0.1
-  voice_prompt: 您是一位高净值的专业投资者，专注于长期投资。请关注市场动态，评估您的投资组合，适时调整持仓。保持冷静，避免情绪化决策，确保您的投资策略符合您的财务目标。
+    by_volume: 0.3
+    by_holdings: 0.2143
+    by_account_count: 0.0182
+    citations:
+    - source_id: src-id
+  voice_prompt: 您是一位高净值散户专业投资者，倾向于价值投资，持股周期较长。请关注市场动态，合理配置您的投资组合。
   biases:
-    momentum_chasing: 0.5
-    loss_aversion: 0.3
+    momentum_chasing: 0.1
+    loss_aversion: 0.5
   knowledge:
     typical_holdings:
-    - 大型蓝筹股
-    - 成长型股票
+    - 蓝筹股
+    - 价值股
     information_sources:
     - 专业投资网站
-    - 财经新闻
+    - 投资论坛
     ignores:
-    - 短期市场波动
+    - 短期波动
   behavior:
-    avg_position_pct: 1.0
+    avg_position_pct: 0.8
     annual_turnover: 0.2
-    typical_holding_period_days: 180
+    typical_holding_period_days: 365
     stop_loss_discipline: high
     reaction_speed: medium
   information:
     primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
+    - 市场分析
+    - 财务报告
+    secondary_sources:
+    - 行业新闻
     ignored:
     - 社交媒体
     english_capable: false
@@ -284,164 +312,7 @@ personas:
     instance_count: 3
     capital_distribution:
       type: lognormal
-      median_cny: 1000000
-      sigma: 1.0
-      floor_cny: 1000000
-      ceiling_cny: 10000000
-    initial_position_distribution:
-      type: bernoulli
-      prob_holding: 1.0
-      position_size_pct_when_holding:
-        type: uniform
-        min: 0.5
-        max: 1.0
-    risk:
-      max_position_pct: 1.0
-      margin_account_pct: 0.0
-      leverage_max: 1.0
-      stop_loss_threshold: -0.1
-      stop_loss_discipline: 1.0
-    action_space:
-    - name: do_nothing
-      side: none
-      pool: none
-      fraction: 0.95
-    - name: increase_holding_2pct
-      side: none
-      pool: holdings_in_target
-      fraction: 0.02
-    - name: block_sale_5pct
-      side: none
-      pool: holdings_in_target
-      fraction: 0.05
-    reaction_lag_rounds:
-      type: discrete
-      values:
-      - 1
-      - 2
-  time_horizon_days:
-  - 30
-  - 365
-- id: mutual_fund_active_long_only
-  archetype: 公募基金/主动型长线
-  sub_archetype: null
-  display_name: 公募基金/主动型长线, 机构投资者, 来源于市场研究
-  model: null
-  decision_mode: systematic
-  role: institutional_long_only
-  market_share:
-    by_account_count: 0.08
-  voice_prompt: 您是一位积极管理投资组合的机构投资者，追求超越市场的回报。请关注市场动态，评估投资机会，保持对风险的敏感。您的目标是实现长期稳定的收益。请根据市场情况调整您的投资策略。
-  biases:
-    momentum_chasing: 0.6
-    loss_aversion: 0.5
-  knowledge:
-    typical_holdings:
-    - 大型蓝筹股
-    - 成长型股票
-    information_sources:
-    - 市场分析报告
-    - 行业新闻
-    ignores:
-    - 短期市场波动
-  behavior:
-    avg_position_pct: 0.1
-    annual_turnover: 0.3
-    typical_holding_period_days: 365
-    stop_loss_discipline: medium
-    reaction_speed: medium
-  information:
-    primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
-    ignored: []
-    english_capable: false
-  sandbox:
-    instance_count: 20
-    capital_distribution:
-      type: lognormal
-      median_cny: 100000000
-      sigma: 1.0
-      floor_cny: 100000000
-      ceiling_cny: 1000000000
-    initial_position_distribution:
-      type: bernoulli
-      prob_holding: 0.8
-      position_size_pct_when_holding:
-        type: uniform
-        min: 0.05
-        max: 0.15
-    risk:
-      max_position_pct: 0.15
-      margin_account_pct: 0.0
-      leverage_max: 1.0
-      stop_loss_threshold: -0.1
-      stop_loss_discipline: 0.5
-    action_space:
-    - name: do_nothing
-      side: none
-      pool: none
-      fraction: 0.95
-    - name: increase_holding_2pct
-      side: buy
-      pool: holdings_in_target
-      fraction: 0.02
-    - name: block_sale_5pct
-      side: sell
-      pool: holdings_in_target
-      fraction: 0.05
-    reaction_lag_rounds:
-      type: discrete
-      values:
-      - 1
-      - 2
-      - 3
-  time_horizon_days:
-  - 30
-  - 365
-- id: etf_passive_index
-  archetype: ETF/被动指数
-  sub_archetype: null
-  display_name: 被动指数投资者 (中等资本, 30-50岁, 来源于指数基金信息)
-  model: null
-  decision_mode: passive
-  role: institutional_long_only
-  market_share:
-    by_account_count: 0.05
-  voice_prompt: 您倾向于通过指数基金进行投资，追求市场的平均回报。请关注市场趋势，保持耐心，避免短期波动的影响。您的投资策略是长期持有，确保您的投资组合与市场指数保持一致。
-  biases:
-    momentum_chasing: 0.1
-    loss_aversion: 0.2
-  knowledge:
-    typical_holdings:
-    - 指数基金
-    - ETF
-    information_sources:
-    - 财经网站
-    - 投资顾问
-    ignores:
-    - 个股分析
-  behavior:
-    avg_position_pct: 0.8
-    annual_turnover: 0.2
-    typical_holding_period_days: 365
-    stop_loss_discipline: medium
-    reaction_speed: medium
-  information:
-    primary_sources:
-    - 指数基金信息
-    - 市场分析报告
-    secondary_sources:
-    - 财经新闻
-    - 投资论坛
-    ignored:
-    - 短期市场波动
-    english_capable: false
-  sandbox:
-    instance_count: 20
-    capital_distribution:
-      type: lognormal
-      median_cny: 5000000
+      median_cny: 50000000
       sigma: 1.0
       floor_cny: 1000000
       ceiling_cny: 100000000
@@ -453,7 +324,178 @@ personas:
         min: 0.5
         max: 0.8
     risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  capital_range_cny:
+  - 1000000
+  - 100000000
+  time_horizon_days:
+  - 365
+  - 730
+- id: mutual_fund_active_long_only
+  archetype: 公募基金主动型
+  sub_archetype: null
+  display_name: '公募基金主动型, 机构投资者, 信息来源: src-id'
+  model: null
+  decision_mode: systematic
+  role: institutional_long_only
+  market_share:
+    by_volume: 0.06
+    by_holdings: 0.05
+    by_account_count: 0.0606
+    citations:
+    - source_id: src-id
+  voice_prompt: 您是一位公募基金经理，专注于主动管理策略。您会分析市场趋势，寻找投资机会，并根据市场变化调整持仓。请关注长期价值，避免短期波动的影响。
+  biases:
+    momentum_chasing: 0.5
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - 大型蓝筹股
+    - 成长型股票
+    information_sources:
+    - 市场研究报告
+    - 财务分析
+    ignores:
+    - 短期市场波动
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.5
+    typical_holding_period_days: 180
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - src-id
+    secondary_sources: []
+    ignored:
+    - 散户情绪
+    english_capable: false
+  sandbox:
+    instance_count: 20
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000000
+      sigma: 1.0
+      floor_cny: 100000000
+      ceiling_cny: 1000000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
       max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  capital_range_cny:
+  - 100000000
+  - 1000000000
+  time_horizon_days:
+  - 30
+  - 180
+- id: etf_passive_index
+  archetype: ETF被动指数
+  sub_archetype: null
+  display_name: ETF被动指数, 30-50岁, 信息来源于市场数据
+  model: null
+  decision_mode: passive
+  role: passive_market_maker
+  market_share:
+    by_volume: 0.12
+    by_holdings: 0.0714
+    by_account_count: 0.1212
+    citations:
+    - source_id: src-id
+  voice_prompt: 您倾向于通过被动跟踪指数进行投资，关注长期表现而非短期波动。请保持耐心，关注市场趋势，合理配置您的资产。
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.2
+  knowledge:
+    typical_holdings:
+    - ETF基金
+    - 指数股票
+    information_sources:
+    - 市场数据
+    - 行业分析
+    ignores:
+    - 个股消息
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.2
+    typical_holding_period_days: 365
+    stop_loss_discipline: medium
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - 市场数据
+    - 指数报告
+    secondary_sources:
+    - 财经新闻
+    ignored:
+    - 短期波动
+    english_capable: false
+  sandbox:
+    instance_count: 1000
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.1
       margin_account_pct: 0.0
       leverage_max: 1.0
       stop_loss_threshold: -0.1
@@ -477,88 +519,116 @@ personas:
       - 1
       - 2
       - 3
+  capital_range_cny:
+  - 1000000
+  - 10000000
+  time_horizon_days:
+  - 180
+  - 365
 - id: hedge_fund_active_long_short
-  archetype: 对冲基金/主动型多空
+  archetype: 对冲基金主动多空
   sub_archetype: null
-  display_name: '对冲基金/主动型多空, 50M+ CNY, 资讯来源: 网络'
+  display_name: 对冲基金主动多空, 35-55岁, 机构投资者
   model: null
   decision_mode: systematic
   role: active_long_short
   market_share:
-    by_account_count: 0.07
-  voice_prompt: 您在市场中寻找机会，利用多空策略来追求绝对回报。请关注市场动态，灵活调整您的持仓。保持高效的止损纪律，以应对潜在风险。
+    by_volume: 0.09
+    by_holdings: 0.0357
+    by_account_count: 0.0303
+    citations:
+    - source_id: src-id
+  voice_prompt: 在市场波动中，你会灵活调整策略，关注长期趋势。保持警惕，利用数据分析来指导你的决策，确保在合规窗口内进行操作。
   biases:
-    momentum_chasing: 0.7
+    momentum_chasing: 0.6
     loss_aversion: 0.4
   knowledge:
     typical_holdings:
-    - 多空策略股票
-    - 对冲工具
+    - 科技股
+    - 消费品
+    - 金融股
     information_sources:
-    - 市场分析报告
-    - 金融新闻
+    - 量化模型
+    - 市场趋势分析
     ignores:
-    - 短期市场波动
+    - 短期波动
   behavior:
     avg_position_pct: 0.1
-    annual_turnover: 2.5
+    annual_turnover: 3.5
     typical_holding_period_days: 30
     stop_loss_discipline: high
     reaction_speed: fast
   information:
     primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
+    - 市场数据分析
+    - 行业报告
+    secondary_sources:
+    - 财经新闻
     ignored:
-    - 个人投资者的情绪
-    english_capable: false
+    - 社交媒体
+    english_capable: true
   sandbox:
-    action_space: &id001
-    - name: hold
-      side: none
-      pool: none
-      fraction: 0.0
-    - name: model_buy_8pct
-      side: buy
-      pool: cash
-      fraction: 0.08
-    - name: model_sell_8pct
-      side: sell
-      pool: holdings_in_target
-      fraction: 0.08
-    - name: stop_loss_full
-      side: sell
-      pool: holdings_in_target
-      fraction: 1.0
-    instance_count: 100
+    instance_count: 20
     capital_distribution:
       type: lognormal
-      median_cny: 100000
-      sigma: 0.8
+      median_cny: 100000000
+      sigma: 1.0
+      floor_cny: 50000000
+      ceiling_cny: 500000000
     initial_position_distribution:
       type: bernoulli
-      prob_holding: 0.5
+      prob_holding: 0.8
       position_size_pct_when_holding:
         type: uniform
         min: 0.05
-        max: 0.3
+        max: 0.15
     risk:
-      max_position_pct: 0.95
+      max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  capital_range_cny:
+  - 50000000
+  - 500000000
   time_horizon_days:
   - 30
-  - 180
+  - 90
 - id: insurance_pension_long_horizon
-  archetype: 保险/养老金/长期机构
+  archetype: 保险养老金长期投资
   sub_archetype: null
-  display_name: 保险/养老金机构投资者 (长期, 100M+ CNY, 机构研究)
+  display_name: 保险养老金长期投资 (100M-1B CNY, institutional sources)
   model: null
   decision_mode: passive
   role: institutional_long_horizon
   market_share:
-    by_account_count: 0.05
-  voice_prompt: 您是一个追求稳定收益的长期投资者，关注市场的基本面和长期趋势。请根据您的投资策略，评估当前市场的机会与风险，保持耐心，专注于长期目标。
+    by_volume: 0.06
+    by_holdings: 0.0357
+    by_account_count: 0.0606
+    citations:
+    - source_id: src-id
+  voice_prompt: 您关注长期稳定收益，倾向于在市场波动中保持耐心。请根据您的投资策略，评估当前持仓和未来的投资机会。
   biases:
-    momentum_chasing: 0.2
+    momentum_chasing: 0.1
     loss_aversion: 0.3
   knowledge:
     typical_holdings:
@@ -566,10 +636,10 @@ personas:
     - 债券
     - 稳定收益产品
     information_sources:
-    - 行业报告
+    - 行业研究
     - 经济数据
     ignores:
-    - 短期市场情绪
+    - 市场噪音
   behavior:
     avg_position_pct: 0.1
     annual_turnover: 0.2
@@ -578,16 +648,18 @@ personas:
     reaction_speed: slow
   information:
     primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
+    - 公募基金报告
+    - 市场分析
+    secondary_sources:
+    - 行业新闻
     ignored:
-    - 短期市场波动
+    - 短期波动
     english_capable: false
   sandbox:
     instance_count: 10
     capital_distribution:
       type: lognormal
-      median_cny: 100000000
+      median_cny: 500000000
       sigma: 1.0
       floor_cny: 100000000
       ceiling_cny: 1000000000
@@ -599,20 +671,16 @@ personas:
         min: 0.05
         max: 0.15
     risk:
-      max_position_pct: 0.15
+      max_position_pct: 0.1
       margin_account_pct: 0.0
       leverage_max: 1.0
       stop_loss_threshold: -0.1
-      stop_loss_discipline: 1.0
+      stop_loss_discipline: 0.9
     action_space:
     - name: do_nothing
       side: none
       pool: none
       fraction: 0.95
-    - name: increase_holding_2pct
-      side: buy
-      pool: holdings_in_target
-      fraction: 0.02
     - name: block_sale_5pct
       side: sell
       pool: holdings_in_target
@@ -623,103 +691,127 @@ personas:
       - 3
       - 5
       - 7
+  capital_range_cny:
+  - 100000000
+  - 1000000000
+  time_horizon_days:
+  - 365
+  - 730
 - id: foreign_active
-  archetype: 境外活跃投资者
+  archetype: 外资活跃投资者
   sub_archetype: null
-  display_name: 境外活跃投资者 (中等资本, 30-50岁, 网络和财经媒体)
+  display_name: 外资活跃投资者 (100M-1B CNY, src-id)
   model: null
   decision_mode: discretionary
   role: foreign_active
   market_share:
-    by_account_count: 0.03
-  voice_prompt: 您是一位境外活跃投资者，积极参与A股市场。请关注市场动态，利用您的分析能力做出明智的决策。保持对市场趋势的敏感，及时调整您的投资策略。
+    by_volume: 0.03
+    by_holdings: 0.0214
+    by_account_count: 0.0121
+    citations:
+    - source_id: src-id
+  voice_prompt: 您关注市场机会，倾向于通过北向资金参与A股市场。请保持对市场动态的敏感，及时调整您的投资策略。
   biases:
-    momentum_chasing: 0.5
-    loss_aversion: 0.4
+    momentum_chasing: 0.4
+    loss_aversion: 0.2
   knowledge:
     typical_holdings:
     - 科技股
     - 消费品
     - 金融股
     information_sources:
-    - 市场新闻
-    - 分析师报告
+    - 专业投资网站
+    - 市场数据平台
     ignores:
-    - 短期波动
+    - 小盘股
   behavior:
-    avg_position_pct: 0.7
-    annual_turnover: 1.5
+    avg_position_pct: 0.1
+    annual_turnover: 0.5
     typical_holding_period_days: 30
     stop_loss_discipline: medium
     reaction_speed: fast
   information:
     primary_sources:
-    - 财经媒体
     - 市场分析报告
+    - 财经新闻
     secondary_sources:
     - 社交媒体
     - 投资论坛
     ignored:
-    - 非主流信息
+    - 短期波动
     english_capable: true
   sandbox:
-    action_space:
-    - name: hold
-      side: none
-      pool: none
-      fraction: 0.0
-    - name: trim_25pct
-      side: sell
-      pool: holdings_in_target
-      fraction: 0.25
-    - name: add_15pct
-      side: buy
-      pool: cash
-      fraction: 0.15
-    - name: exit_full
-      side: sell
-      pool: holdings_in_target
-      fraction: 1.0
-    instance_count: 100
+    instance_count: 20
     capital_distribution:
       type: lognormal
-      median_cny: 100000
-      sigma: 0.8
+      median_cny: 500000000
+      sigma: 1.0
+      floor_cny: 100000000
+      ceiling_cny: 1000000000
     initial_position_distribution:
       type: bernoulli
-      prob_holding: 0.5
+      prob_holding: 0.7
       position_size_pct_when_holding:
         type: uniform
         min: 0.05
-        max: 0.3
+        max: 0.15
     risk:
-      max_position_pct: 0.95
+      max_position_pct: 0.1
+      margin_account_pct: 0.1
+      leverage_max: 1.5
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  capital_range_cny:
+  - 100000000
+  - 1000000000
   time_horizon_days:
   - 30
-  - 365
+  - 180
 - id: quant_market_maker
-  archetype: 量化交易市场做市商
+  archetype: 量化市场做市商
   sub_archetype: null
-  display_name: 量化交易市场做市商 (10M+ CNY, algorithm-driven)
+  display_name: 量化市场做市商, 机构, 100M-1B
   model: null
   decision_mode: systematic
   role: market_maker_arb
   market_share:
-    by_volume: 0.25
-    by_account_count: 0.1
-  voice_prompt: 您是一个量化交易市场做市商，利用算法和模型进行交易，提供市场流动性。请关注市场数据和流动性变化，快速反应以优化您的交易策略。
+    by_volume: 0.12
+    by_holdings: 0.0714
+    by_account_count: 0.0303
+    citations:
+    - source_id: src-id
+  voice_prompt: 在市场中，您通过算法交易提供流动性，参与做市。请关注市场动态，快速反应，确保流动性和盈利。保持对市场数据的敏感，利用算法优势，优化交易策略。
   biases:
-    momentum_chasing: 0.6
-    loss_aversion: 0.2
+    momentum_chasing: 0.5
+    loss_aversion: 0.3
   knowledge:
     typical_holdings:
-    - 流动性较好的股票
-    - 指数基金
+    - 流动性资产
+    - 衍生品
     information_sources:
+    - 实时市场数据
     - 算法模型
-    - 市场数据
     ignores:
-    - 短期市场波动
+    - 短期市场情绪
   behavior:
     avg_position_pct: 0.1
     annual_turnover: 5.0
@@ -728,62 +820,94 @@ personas:
     reaction_speed: instant
   information:
     primary_sources:
-    - https-www-sohu-com-a-932740637-121976703
-    secondary_sources: []
+    - 算法交易平台
+    - 市场数据分析
+    secondary_sources:
+    - 金融新闻
+    - 行业报告
     ignored:
-    - 情绪驱动的新闻
+    - 社交媒体
     english_capable: false
   sandbox:
-    action_space: *id001
-    instance_count: 100
+    instance_count: 20
     capital_distribution:
       type: lognormal
-      median_cny: 100000
-      sigma: 0.8
+      median_cny: 500000000
+      sigma: 1.0
+      floor_cny: 100000000
+      ceiling_cny: 1000000000
     initial_position_distribution:
       type: bernoulli
       prob_holding: 0.5
       position_size_pct_when_holding:
         type: uniform
         min: 0.05
-        max: 0.3
+        max: 0.15
     risk:
-      max_position_pct: 0.95
+      max_position_pct: 0.1
+      margin_account_pct: 0.1
+      leverage_max: 5.0
+      stop_loss_threshold: -0.02
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: adjust_position_5pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  capital_range_cny:
+  - 100000000
+  - 1000000000
   time_horizon_days:
   - 1
   - 30
-- id: corporate_strategic_holder
-  archetype: 企业战略持有者
+- id: strategic_holders
+  archetype: 战略持有者
   sub_archetype: null
-  display_name: 企业战略持有者 (大股东, 40-60岁, 公司创始人)
+  display_name: 战略持有者 (大股东, 40岁以上, 企业或国家队)
   model: null
   decision_mode: strategic
   role: strategic_holder
   market_share:
-    by_holdings: 0.1
-  voice_prompt: 作为企业战略持有者，您关注公司的长期发展和股东价值。请考虑市场的变化，保持对公司基本面的关注，避免短期波动的影响。
+    by_volume: 0.24
+    by_holdings: 0.2857
+    by_account_count: 0.0606
+    citations:
+    - source_id: src-id
+  voice_prompt: 作为战略持有者，您关注的是长期稳定的投资回报。请关注市场动态，保持对企业基本面的深入理解。您会在合规窗口内进行适度的调整，以确保投资组合的稳定性。
   biases:
-    momentum_chasing: 0.4
-    loss_aversion: 0.5
+    momentum_chasing: 0.1
+    loss_aversion: 0.2
   knowledge:
     typical_holdings:
-    - 公司股份
-    - 战略投资
+    - 大型国企股票
+    - 蓝筹股
     information_sources:
-    - 行业报告
-    - 公司公告
+    - 行业研究
+    - 财务报表
     ignores:
-    - 市场情绪
+    - 小型股
+    - 高波动性股票
   behavior:
     avg_position_pct: 1.0
     annual_turnover: 0.1
-    typical_holding_period_days: 3650
+    typical_holding_period_days: 365
     stop_loss_discipline: high
     reaction_speed: slow
   information:
     primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
+    - 企业公告
+    - 市场分析报告
+    secondary_sources:
+    - 财经新闻
     ignored:
     - 短期市场波动
     english_capable: false
@@ -791,34 +915,30 @@ personas:
     instance_count: 3
     capital_distribution:
       type: lognormal
-      median_cny: 500000000
+      median_cny: 1000000000
       sigma: 1.0
-      floor_cny: 100000000
+      floor_cny: 1000000000
       ceiling_cny: 10000000000
     initial_position_distribution:
       type: bernoulli
       prob_holding: 1.0
       position_size_pct_when_holding:
         type: uniform
-        min: 0.8
+        min: 0.5
         max: 1.0
     risk:
       max_position_pct: 1.0
       margin_account_pct: 0.0
       leverage_max: 1.0
-      stop_loss_threshold: -0.2
+      stop_loss_threshold: -0.1
       stop_loss_discipline: 0.9
     action_space:
     - name: do_nothing
       side: none
       pool: none
       fraction: 0.95
-    - name: increase_holding_2pct
-      side: none
-      pool: holdings_in_target
-      fraction: 0.02
     - name: block_sale_5pct
-      side: none
+      side: sell
       pool: holdings_in_target
       fraction: 0.05
     reaction_lag_rounds:
@@ -826,151 +946,5 @@ personas:
       values:
       - 3
       - 5
-  contributes_to_sentiment_mean: false
-  contributes_to_strategic_signal: true
-- id: government_state_holder
-  archetype: 政府/国资持有者
-  sub_archetype: null
-  display_name: 政府/国资持有者 (重要股份, 40-60岁, 政府基金和国有企业)
-  model: null
-  decision_mode: strategic
-  role: strategic_holder
-  market_share:
-    by_holdings: 0.05
-  voice_prompt: 您在投资时会关注国有企业的长期发展和政策导向。请考虑市场的稳定性和潜在的风险，保持对重要信息的敏感。您的决策将影响整体市场，确保您在合规窗口内进行操作。
-  biases:
-    momentum_chasing: 0.3
-    loss_aversion: 0.4
-  knowledge:
-    typical_holdings:
-    - 国有企业股票
-    - 基础设施投资
-    information_sources:
-    - 政策文件
-    - 市场研究
-    ignores:
-    - 短期市场波动
-  behavior:
-    avg_position_pct: 0.05
-    annual_turnover: 0.1
-    typical_holding_period_days: 365
-    stop_loss_discipline: high
-    reaction_speed: medium
-  information:
-    primary_sources:
-    - 政府报告
-    - 行业分析
-    secondary_sources:
-    - 财经新闻
-    ignored:
-    - 社交媒体
-    english_capable: false
-  sandbox:
-    instance_count: 5
-    capital_distribution:
-      type: lognormal
-      median_cny: 500000000
-      sigma: 1.0
-      floor_cny: 100000000
-      ceiling_cny: 10000000000
-    initial_position_distribution:
-      type: bernoulli
-      prob_holding: 0.95
-      position_size_pct_when_holding:
-        type: uniform
-        min: 0.05
-        max: 0.15
-    risk:
-      max_position_pct: 1.0
-      margin_account_pct: 0.0
-      leverage_max: 1.0
-      stop_loss_threshold: -0.1
-      stop_loss_discipline: 0.9
-    action_space:
-    - name: do_nothing
-      side: none
-      pool: none
-      fraction: 0.95
-    - name: block_sale_5pct
-      side: sell
-      pool: holdings_in_target
-      fraction: 0.05
-    reaction_lag_rounds:
-      type: discrete
-      values:
-      - 1
-      - 2
-      - 3
-  contributes_to_sentiment_mean: false
-  contributes_to_strategic_signal: true
-- id: cross_holding_related_party
-  archetype: 交叉持股/关联方持有者
-  sub_archetype: null
-  display_name: 交叉持股/关联方持有者 (中等资本, 40-60岁, 网络文章)
-  model: null
-  decision_mode: strategic
-  role: strategic_holder
-  market_share:
-    by_holdings: 0.02
-  voice_prompt: 您关注的是公司之间的交叉持股关系，这可能会影响公司的治理结构。请考虑您在市场中的位置和潜在的风险，保持警惕，确保您的投资决策符合您的长期目标。
-  biases:
-    momentum_chasing: 0.2
-    loss_aversion: 0.3
-  knowledge:
-    typical_holdings:
-    - 交叉持股公司股票
-    information_sources:
-    - 行业报告
-    - 公司公告
-    ignores:
-    - 市场情绪
-  behavior:
-    avg_position_pct: 0.8
-    annual_turnover: 0.1
-    typical_holding_period_days: 365
-    stop_loss_discipline: high
-    reaction_speed: medium
-  information:
-    primary_sources:
-    - https-www-sohu-com-a-962437040-121834007
-    secondary_sources: []
-    ignored:
-    - 短期市场波动
-    english_capable: false
-  sandbox:
-    instance_count: 3
-    capital_distribution:
-      type: lognormal
-      median_cny: 500000000
-      sigma: 1.0
-      floor_cny: 100000000
-      ceiling_cny: 10000000000
-    initial_position_distribution:
-      type: bernoulli
-      prob_holding: 0.95
-      position_size_pct_when_holding:
-        type: uniform
-        min: 0.5
-        max: 1.0
-    risk:
-      max_position_pct: 1.0
-      margin_account_pct: 0.1
-      leverage_max: 1.0
-      stop_loss_threshold: -0.1
-      stop_loss_discipline: 0.9
-    action_space:
-    - name: do_nothing
-      side: none
-      pool: none
-      fraction: 0.95
-    - name: block_sale_5pct
-      side: sell
-      pool: holdings_in_target
-      fraction: 0.05
-    reaction_lag_rounds:
-      type: discrete
-      values:
-      - 1
-      - 2
   contributes_to_sentiment_mean: false
   contributes_to_strategic_signal: true

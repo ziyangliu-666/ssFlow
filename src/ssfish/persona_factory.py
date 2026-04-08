@@ -1049,11 +1049,63 @@ async def generate_personas(
 # ─────────────────────── Stage 3: assemble + validate + emit ───────────────────────
 
 
+def _normalize_market_share_sums(persona_blocks: list[dict[str, Any]]) -> None:
+    """Mutate persona_blocks in place to normalize market_share sums to ~1.0.
+
+    The Stage 1 LLM estimates each class's share independently, often
+    producing sums like 1.4 or 1.85 instead of ~1.0. This is the calibration
+    flaw the user pointed out: GIGO at the input layer. We fix it deterministically
+    here by scaling each dimension to sum to 1.0 (or close to it for by_volume,
+    which can legitimately exceed 1.0 because of high-turnover classes).
+
+    Per-dimension targets:
+      - by_holdings: must sum to ~1.0 (zero-sum across all holders)
+      - by_account_count: must sum to ~1.0
+      - by_volume: capped at 1.5 (high-turnover classes contribute more)
+    """
+    for dim, target_sum in (
+        ("by_holdings", 1.0),
+        ("by_account_count", 1.0),
+        ("by_volume", 1.5),
+    ):
+        values = []
+        for block in persona_blocks:
+            ms = block.get("market_share", {})
+            v = ms.get(dim)
+            if v is not None:
+                values.append((block, float(v)))
+
+        if not values:
+            continue
+        current_sum = sum(v for _, v in values)
+        if current_sum <= 0:
+            continue
+
+        # Only normalize if the sum is meaningfully off from target (>20% off)
+        if abs(current_sum - target_sum) / target_sum > 0.20:
+            scale = target_sum / current_sum
+            log.info(
+                "[normalize] Rescaling %s: sum=%.3f → %.3f (scale=%.3f)",
+                dim, current_sum, target_sum, scale,
+            )
+            for block, _ in values:
+                block["market_share"][dim] = round(
+                    block["market_share"][dim] * scale, 4
+                )
+
+
 def assemble_pack(
     research: ResearchData,
     persona_blocks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Stage 3 — assemble the final pack dict (ready for yaml dump)."""
+    """Stage 3 — assemble the final pack dict (ready for yaml dump).
+
+    Runs market_share sum normalization before assembly so the emitted yaml
+    has by_holdings ≈ 1.0 by construction.
+    """
+    # Normalize sums in place
+    _normalize_market_share_sums(persona_blocks)
+
     # Build data_sources from the fetched corpus
     data_sources = []
     for s in research.sources:

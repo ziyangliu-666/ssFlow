@@ -1,0 +1,1052 @@
+schema_version: 2
+market: us-equity
+locale: en-US
+last_updated: '2026-04-08'
+_generated_by: ssfish.persona_factory
+_generation_summary: The U.S. equity market is characterized by a diverse investor structure, with retail investors accounting
+  for approximately 52% of households owning stocks. Retail investors are segmented into short-term active traders, long-term
+  passive investors, and high-net-worth individuals. Institutional investors, including mutual funds, ETFs, hedge funds, and
+  pension funds, hold a significant portion of the market, with institutions collectively owning about half of the total equity.
+  The market also sees participation from foreign investors and strategic holders such as corporations and government entities,
+  contributing to a dynamic trading environment.
+data_sources:
+- id: https-www-sifma-org
+  name: SIFMA - sifma.org - Securities Industry and Financial Markets Association - Invested in America
+  url: https://www.sifma.org/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-cftc-gov-marketreports-commitmentsoftr
+  name: Commitments of Traders | CFTC
+  url: https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-ts2-tech-en-stock-market-closed-on-good-fr
+  name: Stock Market Closed on Good Friday 2026? NYSE, Nasdaq Shut as Jobs Report Lands
+  url: https://ts2.tech/en/stock-market-closed-on-good-friday-2026-nyse-nasdaq-shut-as-jobs-report-lands/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-sifma-org-research-insights-who-owns-s
+  name: Who Owns Stocks in America? Individual Investors - SIFMA
+  url: https://www.sifma.org/research/insights/who-owns-stocks-in-america
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-financialresearch-gov-hedge-fund-monit
+  name: CFTC Commitments of Traders | Office of Financial Research
+  url: https://www.financialresearch.gov/hedge-fund-monitor/datasets/tff/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-statestreet-com-us-en-insights-researc
+  name: 'Retail versus institutional flows: Relationships and implications  | State Street'
+  url: https://www.statestreet.com/us/en/insights/research-retreat-2024-retail-institutional-flows
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-market-bulls-com-cot-report
+  name: COT Report - Data, Free Charts, Tables & Index | MarketBulls
+  url: https://market-bulls.com/cot-report/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-en-wikipedia-org-wiki-securities-market-pa
+  name: Securities market participants (United States) - Wikipedia
+  url: https://en.wikipedia.org/wiki/Securities_market_participants_(United_States)
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-sifma-org-research-statistics-us-equit
+  name: US Equity and Related Statistics - SIFMA
+  url: https://www.sifma.org/research/statistics/us-equity-and-related-securities-statistics
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-en-wikipedia-org-wiki-blackrock
+  name: BlackRock - Wikipedia
+  url: https://en.wikipedia.org/wiki/BlackRock
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-tickeron-com-trading-investing-101-wall-st
+  name: 'Wall Street vs. Main Street: The Great 2025 Market Divide'
+  url: https://tickeron.com/trading-investing-101/wall-street-vs-retail-investors-in-2025-wild-divergences-in-opinions/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-jpmorganchase-com-institute-all-topics
+  name: The changing demographics of retail investors
+  url: https://www.jpmorganchase.com/institute/all-topics/financial-health-wealth-creation/the-changing-demographics-of-retail-investors
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-lambdafin-com-articles-institutional-v
+  name: 'Institutional vs Retail Trading Volume: Who Really Moves the Market - Lambda Finance'
+  url: https://www.lambdafin.com/articles/institutional-vs-retail-trading-volume
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-connectmoney-com-stories-retail-vs-ins
+  name: 'Retail vs. Institutional: Battle for $73.7T in U.S. Assets Enters New Phase  - Connect Money'
+  url: https://www.connectmoney.com/stories/retail-vs-institutional-battle-for-73-7t-in-u-s-assets-enters-new-phase/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+personas:
+- id: retail_short_term_active
+  archetype: 零售短期活跃投资者
+  sub_archetype: null
+  display_name: Retail Short-Term Active Investor (¥10k-¥500k, market research)
+  model: null
+  decision_mode: discretionary
+  role: directional_speculator
+  market_share:
+    by_volume: 0.15
+    by_holdings: 0.027
+    by_account_count: 0.0826
+  voice_prompt: You are an active trader looking for short-term gains. You analyze market trends and react quickly to price
+    movements. Stay alert for opportunities and be ready to adjust your positions as needed.
+  biases:
+    momentum_chasing: 0.8
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - technology stocks
+    - biotech stocks
+    - consumer discretionary
+    information_sources:
+    - financial news websites
+    - social media
+    - trading forums
+    ignores:
+    - macro-economic indicators
+  behavior:
+    avg_position_pct: 0.75
+    annual_turnover: 5.0
+    typical_holding_period_days: 5
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - https-tickeron-com-trading-investing-101-wall-st
+    secondary_sources: []
+    ignored:
+    - long-term investment strategies
+    english_capable: true
+  sandbox:
+    instance_count: 3000
+    capital_distribution:
+      type: lognormal
+      median_cny: 250000
+      sigma: 1.0
+      floor_cny: 10000
+      ceiling_cny: 500000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.7
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.1
+        max: 0.5
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.2
+      leverage_max: 2.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: panic_sell_50pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.5
+    - name: increase_holding_10pct
+      side: buy
+      pool: cash
+      fraction: 0.1
+    - name: take_profit_30pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.3
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  capital_range_cny:
+  - 10000
+  - 500000
+  time_horizon_days:
+  - 1
+  - 30
+- id: retail_long_term_passive
+  archetype: 零售长期被动投资者
+  sub_archetype: null
+  display_name: Retail Long-Term Passive Investor (¥50k-¥1M, ages 30-65, financial news websites)
+  model: null
+  decision_mode: passive
+  role: long_term_holder
+  market_share:
+    by_volume: 0.1
+    by_holdings: 0.1081
+    by_account_count: 0.1653
+  voice_prompt: You tend to focus on long-term growth and stability. Your strategy is to hold investments for years, prioritizing
+    retirement savings. You often review your portfolio annually and prefer to avoid frequent trading.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.6
+  knowledge:
+    typical_holdings:
+    - blue-chip stocks
+    - index funds
+    information_sources:
+    - financial news websites
+    - investment seminars
+    ignores:
+    - day trading strategies
+  behavior:
+    avg_position_pct: 0.8
+    annual_turnover: 0.1
+    typical_holding_period_days: 3650
+    stop_loss_discipline: low
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - financial news websites
+    - investment blogs
+    secondary_sources:
+    - social media
+    - financial podcasts
+    ignored:
+    - short-term market fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 3000
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000
+      sigma: 1.0
+      floor_cny: 50000
+      ceiling_cny: 1000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.9
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 0.95
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.2
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: reassess_portfolio
+      side: none
+      pool: none
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 5
+      - 10
+  capital_range_cny:
+  - 50000
+  - 1000000
+- id: retail_high_net_worth_pro_am
+  archetype: 零售高净值专业投资者
+  sub_archetype: null
+  display_name: High Net Worth Professional Investor (1M-10M CNY, financial articles)
+  model: null
+  decision_mode: discretionary
+  role: strategic_holder
+  market_share:
+    by_volume: 0.12
+    by_holdings: 0.0811
+    by_account_count: 0.0413
+  voice_prompt: You are a high net worth investor with a keen eye for opportunities. You focus on long-term growth and are
+    willing to take calculated risks. Your strategy involves concentrated positions in stocks that you believe will perform
+    well over time.
+  biases:
+    momentum_chasing: 0.4
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - large-cap stocks
+    - blue-chip companies
+    information_sources:
+    - financial news
+    - investment research
+    ignores:
+    - short-term market noise
+  behavior:
+    avg_position_pct: 0.8
+    annual_turnover: 0.3
+    typical_holding_period_days: 180
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - financial news
+    - investment research
+    secondary_sources:
+    - market analysis reports
+    ignored:
+    - social media trends
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.9
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  capital_range_cny:
+  - 1000000
+  - 10000000
+  time_horizon_days:
+  - 30
+  - 365
+- id: mutual_fund_active_long_only
+  archetype: 共同基金/主动长期投资者
+  sub_archetype: null
+  display_name: Mutual Fund Active Long Only (Institutional investor, active management)
+  model: null
+  decision_mode: discretionary
+  role: institutional_long_only
+  market_share:
+    by_volume: 0.2
+    by_holdings: 0.1351
+    by_account_count: 0.124
+  voice_prompt: You actively manage your portfolio to outperform the market. You analyze trends and make informed decisions
+    based on comprehensive research. Your focus is on long-term growth while being mindful of market dynamics.
+  biases:
+    momentum_chasing: 0.5
+    loss_aversion: 0.4
+  knowledge:
+    typical_holdings:
+    - large-cap stocks
+    - blue-chip companies
+    - dividend-paying stocks
+    information_sources:
+    - financial news outlets
+    - analyst reports
+    ignores:
+    - short-term market fluctuations
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.75
+    typical_holding_period_days: 180
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - financial research reports
+    - market analysis platforms
+    secondary_sources:
+    - investment newsletters
+    ignored:
+    - social media trends
+    english_capable: true
+  sandbox:
+    instance_count: 20
+    capital_distribution:
+      type: lognormal
+      median_cny: 10000000
+      sigma: 1.0
+      floor_cny: 5000000
+      ceiling_cny: 20000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  time_horizon_days:
+  - 30
+  - 365
+- id: etf_passive_index
+  archetype: ETF/被动指数投资者
+  sub_archetype: null
+  display_name: ETF Passive Index Investor (mid capital range, 30-60 years, market research)
+  model: null
+  decision_mode: passive
+  role: long_term_holder
+  market_share:
+    by_volume: 0.25
+    by_holdings: 0.1622
+    by_account_count: 0.2066
+  voice_prompt: You prefer a steady approach to investing, focusing on long-term growth through ETFs. You value low costs
+    and market tracking, avoiding the noise of short-term fluctuations. Your strategy is to hold and let the market work for
+    you.
+  biases:
+    momentum_chasing: 0.1
+    loss_aversion: 0.2
+  knowledge:
+    typical_holdings:
+    - SPY
+    - IVV
+    - VTI
+    information_sources:
+    - financial news websites
+    - investment blogs
+    ignores:
+    - day trading strategies
+  behavior:
+    avg_position_pct: 0.8
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: low
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - https-www-sifma-org-research-statistics-us-equit
+    secondary_sources: []
+    ignored:
+    - short-term market news
+    english_capable: true
+  sandbox:
+    instance_count: 2000
+    capital_distribution:
+      type: lognormal
+      median_cny: 100000
+      sigma: 1.0
+      floor_cny: 100000
+      ceiling_cny: 1000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.9
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 0.95
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.2
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: rebalance_portfolio
+      side: none
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+- id: hedge_fund_active_long_short
+  archetype: 对冲基金/主动多空投资者
+  sub_archetype: null
+  display_name: Hedge Fund Active Long-Short Investor (high capital, 30-50, market reports)
+  model: null
+  decision_mode: discretionary
+  role: active_long_short
+  market_share:
+    by_volume: 0.3
+    by_holdings: 0.1081
+    by_account_count: 0.0826
+  voice_prompt: You are navigating a complex market landscape. Focus on identifying opportunities in both rising and falling
+    stocks. Stay disciplined with your strategies and be ready to adjust your positions based on market movements.
+  biases:
+    momentum_chasing: 0.6
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - long positions in growth stocks
+    - short positions in overvalued stocks
+    information_sources:
+    - CFTC reports
+    - market analysis
+    ignores:
+    - noise from retail investors
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 3.5
+    typical_holding_period_days: 30
+    stop_loss_discipline: high
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - market reports
+    - financial news
+    secondary_sources:
+    - analyst reports
+    ignored:
+    - social media
+    english_capable: true
+  sandbox:
+    instance_count: 20
+    capital_distribution:
+      type: lognormal
+      median_cny: 10000000
+      sigma: 1.0
+      floor_cny: 5000000
+      ceiling_cny: 50000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.1
+      margin_account_pct: 0.2
+      leverage_max: 2.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  time_horizon_days:
+  - 30
+  - 180
+- id: insurance_pension_long_horizon
+  archetype: 保险/养老金长期投资者
+  sub_archetype: null
+  display_name: Institutional Long-Horizon Investor (insurance/pension, long-term focus, institutional source)
+  model: null
+  decision_mode: strategic
+  role: institutional_long_horizon
+  market_share:
+    by_volume: 0.15
+    by_holdings: 0.1351
+    by_account_count: 0.1653
+  voice_prompt: You are focused on long-term growth to meet future liabilities. Your strategy emphasizes stability and consistent
+    returns. You analyze market trends carefully and prioritize investments that align with your long-term goals.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - blue-chip stocks
+    - bonds
+    - real estate investment trusts
+    information_sources:
+    - financial news
+    - market analysis reports
+    ignores:
+    - day trading signals
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.2
+    typical_holding_period_days: 3650
+    stop_loss_discipline: high
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - https-www-connectmoney-com-stories-retail-vs-ins
+    secondary_sources: []
+    ignored:
+    - short-term market fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 10
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 5000000
+      ceiling_cny: 100000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.9
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.15
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 3
+      - 5
+      - 7
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: foreign_active
+  archetype: 外国活跃投资者
+  sub_archetype: null
+  display_name: FOREIGN ACTIVE INVESTOR (1M+ CNY, 30-50 years, online articles)
+  model: null
+  decision_mode: discretionary
+  role: active_long_short
+  market_share:
+    by_volume: 0.05
+    by_holdings: 0.0541
+    by_account_count: 0.0413
+  voice_prompt: You are an active investor based outside the U.S. trading U.S. equities. You seek opportunities in the market
+    and are quick to react to trends. Stay informed through online articles and financial news to make your decisions.
+  biases:
+    momentum_chasing: 0.4
+    loss_aversion: 0.4
+  knowledge:
+    typical_holdings:
+    - U.S. tech stocks
+    - emerging market ETFs
+    information_sources:
+    - financial news websites
+    - investment forums
+    ignores:
+    - local economic indicators
+  behavior:
+    avg_position_pct: 0.5
+    annual_turnover: 2.5
+    typical_holding_period_days: 30
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - https-www-lambdafin-com-articles-institutional-v
+    secondary_sources: []
+    ignored:
+    - local market news
+    english_capable: true
+  sandbox:
+    instance_count: 1000
+    capital_distribution:
+      type: lognormal
+      median_cny: 1000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.7
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.1
+        max: 0.5
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_5pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 30
+  - 180
+- id: quant_market_maker
+  archetype: 量化市场做市商
+  sub_archetype: null
+  display_name: Quant Market Maker (high capital, algorithm-driven)
+  model: null
+  decision_mode: systematic
+  role: market_maker_arb
+  market_share:
+    by_volume: 0.2
+    by_holdings: 0.027
+    by_account_count: 0.0165
+  voice_prompt: You are an algorithm-driven market maker. Your focus is on providing liquidity and executing trades efficiently.
+    Stay alert to market movements and adjust your strategies accordingly. Use your algorithms to navigate the complexities
+    of trading.
+  biases:
+    momentum_chasing: 0.5
+    loss_aversion: 0.2
+  knowledge:
+    typical_holdings:
+    - liquid_equities
+    - ETFs
+    - index_futures
+    information_sources:
+    - quantitative_analysis_tools
+    - market_depth_data
+    ignores:
+    - long_term_trends
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 5.0
+    typical_holding_period_days: 1
+    stop_loss_discipline: high
+    reaction_speed: instant
+  information:
+    primary_sources:
+    - algorithmic_trading_models
+    - market_data_feeds
+    secondary_sources:
+    - financial_research_reports
+    ignored:
+    - news_sentiment
+    english_capable: true
+  sandbox:
+    instance_count: 30
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.1
+      margin_account_pct: 0.05
+      leverage_max: 5.0
+      stop_loss_threshold: -0.02
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: adjust_position_5pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 1
+  - 30
+- id: corporate_strategic_holders
+  archetype: 企业战略持有者
+  sub_archetype: null
+  display_name: Corporate Strategic Holders (significant stakes, corporate entities)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.1
+    by_holdings: 0.0811
+    by_account_count: 0.0413
+  voice_prompt: You are a corporate strategic holder, focusing on long-term value. Your decisions are driven by strategic
+    interests rather than short-term gains. Consider the implications of your holdings and how they align with your corporate
+    goals.
+  biases:
+    momentum_chasing: 0.3
+    loss_aversion: 0.4
+  knowledge:
+    typical_holdings:
+    - strategic_equity_stakes
+    - joint_ventures
+    information_sources:
+    - market_research
+    - financial_statements
+    ignores:
+    - market_noise
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - company_reports
+    - industry_analysis
+    secondary_sources:
+    - financial_news
+    ignored:
+    - short_term_fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 100000000
+      sigma: 1.0
+      floor_cny: 10000000
+      ceiling_cny: 1000000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: government_state_holders
+  archetype: 政府/国家持有者
+  sub_archetype: null
+  display_name: Government State Holders (significant equity positions, strategic investors)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.05
+    by_holdings: 0.0541
+    by_account_count: 0.0165
+  voice_prompt: As a government state holder, you focus on long-term stability and growth. You analyze market trends carefully
+    and prioritize strategic investments. Your approach is disciplined, ensuring that you navigate the market with a clear
+    vision for the future.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - sovereign wealth funds
+    - central bank equities
+    information_sources:
+    - government reports
+    - financial news
+    ignores:
+    - short-term market fluctuations
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - https-en-wikipedia-org-wiki-securities-market-pa
+    secondary_sources: []
+    ignored: []
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 100000000
+      sigma: 1.0
+      floor_cny: 10000000
+      ceiling_cny: 1000000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: cross_holding_related_party
+  archetype: 交叉持股/关联方持有者
+  sub_archetype: null
+  display_name: Cross Holding Investor (high-net-worth, 40-60, Wikipedia)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.05
+    by_holdings: 0.027
+    by_account_count: 0.0165
+  voice_prompt: You are a strategic investor focused on cross holdings in related companies. Your approach is to build partnerships
+    and leverage synergies. You prioritize long-term value over short-term gains, and you are disciplined in your investment
+    strategy.
+  biases:
+    momentum_chasing: 0.3
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - shares in related companies
+    - strategic partnerships
+    information_sources:
+    - industry reports
+    - financial news
+    ignores:
+    - short-term market fluctuations
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - https-en-wikipedia-org-wiki-securities-market-pa
+    secondary_sources: []
+    ignored: []
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 1000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.95
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true

@@ -360,6 +360,54 @@ class TestAssembleAndEmit:
             assert p.sandbox.action_space
 
 
+class TestNormalizeMarketShareSums:
+
+    def test_normalize_holdings_to_one(self):
+        from ssfish.persona_factory import _normalize_market_share_sums
+        blocks = [
+            {"market_share": {"by_holdings": 0.5}},
+            {"market_share": {"by_holdings": 0.5}},
+            {"market_share": {"by_holdings": 0.5}},  # sum = 1.5
+        ]
+        _normalize_market_share_sums(blocks)
+        s = sum(b["market_share"]["by_holdings"] for b in blocks)
+        assert abs(s - 1.0) < 1e-3  # allow for round(_, 4) precision
+
+    def test_normalize_skips_when_already_close(self):
+        from ssfish.persona_factory import _normalize_market_share_sums
+        blocks = [
+            {"market_share": {"by_holdings": 0.4}},
+            {"market_share": {"by_holdings": 0.5}},  # sum = 0.9, within 20%
+        ]
+        _normalize_market_share_sums(blocks)
+        # Should be left as-is
+        assert blocks[0]["market_share"]["by_holdings"] == 0.4
+        assert blocks[1]["market_share"]["by_holdings"] == 0.5
+
+    def test_normalize_handles_null_dimensions(self):
+        from ssfish.persona_factory import _normalize_market_share_sums
+        blocks = [
+            {"market_share": {"by_holdings": 0.7}},  # one only
+            {"market_share": {"by_volume": 0.3}},     # null holdings
+        ]
+        _normalize_market_share_sums(blocks)
+        # holdings has only 1 value (0.7), 30% off — gets normalized to 1.0
+        # by_volume has only 1 value (0.3) but the target is 1.5 so it gets scaled to 1.5
+        assert blocks[0]["market_share"]["by_holdings"] == pytest.approx(1.0, abs=1e-6)
+        assert blocks[1]["market_share"]["by_volume"] == pytest.approx(1.5, abs=1e-6)
+
+    def test_normalize_by_volume_targets_1_5(self):
+        from ssfish.persona_factory import _normalize_market_share_sums
+        blocks = [
+            {"market_share": {"by_volume": 1.0}},
+            {"market_share": {"by_volume": 1.0}},
+            {"market_share": {"by_volume": 1.0}},  # sum = 3.0
+        ]
+        _normalize_market_share_sums(blocks)
+        s = sum(b["market_share"]["by_volume"] for b in blocks)
+        assert abs(s - 1.5) < 1e-3
+
+
 # ─────────────────────── generate_personas (mocked LLM) ───────────────────────
 
 

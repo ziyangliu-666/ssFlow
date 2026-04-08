@@ -1,0 +1,1084 @@
+schema_version: 2
+market: crude-oil-wti
+locale: en-US
+last_updated: '2026-04-08'
+_generated_by: ssfish.persona_factory
+_generation_summary: The WTI crude oil market features a diverse investor structure, including retail investors who engage
+  in both short-term active trading and long-term passive strategies. Institutional investors dominate with various strategies,
+  including mutual funds, ETFs, and hedge funds. Foreign investors also play a significant role, alongside strategic holders
+  such as corporations and government entities. The market is characterized by high volatility and significant trading volume,
+  driven by geopolitical events and economic conditions.
+data_sources:
+- id: https-en-wikipedia-org-wiki-west-texas-intermedi
+  name: West Texas Intermediate - Wikipedia
+  url: https://en.wikipedia.org/wiki/West_Texas_Intermediate
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-tradingview-com-symbols-nymex-cl1
+  name: Crude Oil WTI Futures Price — CL Chart & Quotes — TradingView
+  url: https://www.tradingview.com/symbols/NYMEX-CL1!/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-investing-com-commodities-crude-oil
+  name: Crude Oil Futures Price Today (WTI) - Investing.com
+  url: https://www.investing.com/commodities/crude-oil
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-cftc-gov-dea-futures-petroleum-sf-htm
+  name: CFTC Commitments of Traders Short Report - Petroleum (Futures Only)
+  url: https://www.cftc.gov/dea/futures/petroleum_sf.htm
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-barchart-com-futures-commitment-of-tra
+  name: Commitments of Traders (COT) Charts - Barchart.com
+  url: https://www.barchart.com/futures/commitment-of-traders
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: http-www-321energy-com-cots-php
+  name: '321energy :: Most Recent Commitment of Traders Reports from the CFTC'
+  url: http://www.321energy.com/cots.php
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-oilprice-com-futures-brent
+  name: Brent Crude Oil Futures Contracts | Oilprice.com
+  url: https://oilprice.com/futures/brent/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-markets-businessinsider-com-commodities-oi
+  name: Crude Oil Price Today | WTI OIL PRICE CHART | OIL PRICE PER BARREL | Markets Insider
+  url: https://markets.businessinsider.com/commodities/oil-price?type=wti
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-oilprice-com-oil-price-charts
+  name: Oil Price Charts | Oilprice.com
+  url: https://oilprice.com/oil-price-charts/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-tradingeconomics-com-commodity-crude-oil
+  name: Crude Oil - Price - Chart - Historical Data - News
+  url: https://tradingeconomics.com/commodity/crude-oil
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-proshares-com-our-etfs-leveraged-and-i
+  name: SCO | UltraShort Bloomberg Crude Oil | ProShares
+  url: https://www.proshares.com/our-etfs/leveraged-and-inverse/sco
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-oilprice-com-futures-wti
+  name: WTI Crude Oil Futures Contracts | Oilprice.com
+  url: https://oilprice.com/futures/wti/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-cftc-gov-sites-default-files-2024-11-r
+  name: https://www.cftc.gov/sites/default/files/2024-11/Retail_Traders_Futures_V2_new_ada.pdf
+  url: https://www.cftc.gov/sites/default/files/2024-11/Retail_Traders_Futures_V2_new_ada.pdf
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-pipexch-com-usa-eia-cuts-wti-oil-price-for
+  name: USA EIA Cuts WTI Oil Price Forecasts
+  url: https://pipexch.com/usa-eia-cuts-wti-oil-price-forecasts/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-pipexch-com-wti-futures-backwardation-hits
+  name: WTI Futures Backwardation Hits 8-Month High as Cushing Stocks Fall
+  url: https://pipexch.com/wti-futures-backwardation-hits-8-month-high-as-cushing-stocks-fall/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-pipexch-com-us-crude-falls-for-11th-straig
+  name: US crude falls for 11th straight session, its longest losing streak on record
+  url: https://pipexch.com/us-crude-falls-for-11th-straight-session-its-longest-losing-streak-on-record/
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+- id: https-www-lambdafin-com-articles-institutional-v
+  name: 'Institutional vs Retail Trading Volume: Who Really Moves the Market - Lambda Finance'
+  url: https://www.lambdafin.com/articles/institutional-vs-retail-trading-volume
+  accessed: '2026-04-08'
+  note: auto-extracted by persona_factory.research_market
+personas:
+- id: retail_short_term_active
+  archetype: 零售短期活跃投资者
+  sub_archetype: null
+  display_name: Retail Short-Term Active Investor (varied capital, 25-45, market news)
+  model: null
+  decision_mode: discretionary
+  role: directional_speculator
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are an active trader in the WTI crude oil market. You react quickly to market news and price movements.
+    Stay alert for opportunities to enter or exit positions based on the latest information.
+  biases:
+    momentum_chasing: 0.8
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - options on crude oil
+    information_sources:
+    - real-time market data
+    - economic indicators
+    ignores:
+    - historical price trends
+  behavior:
+    avg_position_pct: 0.75
+    annual_turnover: 5.0
+    typical_holding_period_days: 3
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - financial news
+    - market analysis reports
+    secondary_sources:
+    - social media
+    - trading forums
+    ignored:
+    - long-term forecasts
+    english_capable: true
+  sandbox:
+    instance_count: 3000
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000
+      sigma: 1.0
+      floor_cny: 10000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.6
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.1
+        max: 0.5
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.2
+      leverage_max: 5.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.7
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: enter_position_50pct
+      side: buy
+      pool: cash
+      fraction: 0.5
+    - name: exit_position_100pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 1.0
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 1
+  - 30
+- id: retail_long_term_passive
+  archetype: 零售长期被动投资者
+  sub_archetype: null
+  display_name: Retail Long-Term Passive Investor (medium range, 30-60, market analysis reports)
+  model: null
+  decision_mode: passive
+  role: long_term_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You focus on the long-term trends in the WTI crude oil market. Your strategy is to hold positions for extended
+    periods, allowing you to ride out short-term volatility. Stay informed about economic forecasts and market analysis to
+    guide your decisions.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - WTI futures contracts
+    information_sources:
+    - long-term market trends
+    - historical price data
+    ignores:
+    - daily price movements
+  behavior:
+    avg_position_pct: 0.8
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: low
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - market analysis reports
+    - economic forecasts
+    secondary_sources:
+    - financial news websites
+    ignored:
+    - short-term market fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 2000
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000
+      sigma: 1.0
+      floor_cny: 10000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.9
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 0.95
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.2
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_5pct
+      side: buy
+      pool: cash
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  time_horizon_days:
+  - 30
+  - 365
+- id: retail_high_net_worth_pro_am
+  archetype: 高净值零售专业投资者
+  sub_archetype: null
+  display_name: High Net Worth Retail Professional Investor (1M+ CNY, strategic holder)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are a high net worth retail investor with a strategic approach. You focus on long-term positions in WTI
+    futures, leveraging your significant capital. Stay informed through financial news and market analysis to make well-considered
+    decisions.
+  biases:
+    momentum_chasing: 0.4
+    loss_aversion: 0.6
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy sector stocks
+    information_sources:
+    - industry publications
+    - economic indicators
+    ignores:
+    - short-term market noise
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.5
+    typical_holding_period_days: 180
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - financial news
+    - market analysis reports
+    secondary_sources:
+    - investment forums
+    ignored:
+    - social media trends
+    english_capable: true
+  sandbox:
+    instance_count: 3
+    capital_distribution:
+      type: lognormal
+      median_cny: 1000000
+      sigma: 1.0
+      floor_cny: 1000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_5pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 90
+  - 365
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: mutual_fund_active_long_only
+  archetype: 共同基金/主动型长期投资者
+  sub_archetype: null
+  display_name: Mutual Fund Active Long Only (institutional investor, manages long positions)
+  model: null
+  decision_mode: systematic
+  role: institutional_long_only
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are managing a mutual fund focused on long positions in WTI futures. Your strategy is systematic, and
+    you analyze market trends carefully. Stay informed about economic indicators and market analysis reports to make informed
+    decisions.
+  biases:
+    momentum_chasing: 0.3
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy sector ETFs
+    information_sources:
+    - investment_research
+    - industry_reports
+    ignores:
+    - short-term market fluctuations
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.3
+    typical_holding_period_days: 180
+    stop_loss_discipline: medium
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - market_analysis_reports
+    - financial_news
+    secondary_sources:
+    - economic_indicators
+    ignored:
+    - social_media_sentiment
+    english_capable: true
+  sandbox:
+    instance_count: 20
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 5000000
+      ceiling_cny: 10000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.1
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.5
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  time_horizon_days:
+  - 30
+  - 365
+- id: etf_passive_index
+  archetype: ETF/被动指数投资者
+  sub_archetype: null
+  display_name: ETF Passive Index Investor (medium capital, 30-50 years, market tracking)
+  model: null
+  decision_mode: passive
+  role: passive_market_maker
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are focused on tracking the performance of WTI futures through passive investment strategies. Your approach
+    is to maintain a long-term perspective, avoiding the noise of short-term market fluctuations. Stay informed through reliable
+    market reports and financial news to guide your investment decisions.
+  biases:
+    momentum_chasing: 0.1
+    loss_aversion: 0.2
+  knowledge:
+    typical_holdings:
+    - WTI futures ETFs
+    information_sources:
+    - financial news
+    - market analysis reports
+    ignores:
+    - day-to-day price changes
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 0.2
+    typical_holding_period_days: 365
+    stop_loss_discipline: low
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - market reports
+    - financial news
+    secondary_sources:
+    - investment blogs
+    ignored:
+    - short-term market fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 1000
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000
+      sigma: 1.0
+      floor_cny: 100000
+      ceiling_cny: 5000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.2
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: none
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: none
+      pool: holdings_in_target
+      fraction: 0.03
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+- id: hedge_fund_active_long_short
+  archetype: 对冲基金/主动型多空投资者
+  sub_archetype: null
+  display_name: Hedge Fund Active Long-Short Investor (¥10M+, institutional sources)
+  model: null
+  decision_mode: systematic
+  role: active_long_short
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are navigating the WTI crude oil market with a focus on both long and short positions. Your strategies
+    are driven by data and market trends. Stay alert for opportunities and manage your risks effectively.
+  biases:
+    momentum_chasing: 0.7
+    loss_aversion: 0.4
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy ETFs
+    information_sources:
+    - quantitative_models
+    - market_sentiment
+    ignores:
+    - short-term noise
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 5.0
+    typical_holding_period_days: 30
+    stop_loss_discipline: high
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - market_data
+    - analyst_reports
+    secondary_sources:
+    - news_articles
+    ignored:
+    - retail_trader_opinions
+    english_capable: true
+  sandbox:
+    instance_count: 20
+    capital_distribution:
+      type: lognormal
+      median_cny: 10000000
+      sigma: 1.0
+      floor_cny: 10000000
+      ceiling_cny: 50000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.05
+        max: 0.15
+    risk:
+      max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.05
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_5pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 1
+  - 30
+- id: insurance_pension_long_horizon
+  archetype: 保险/养老金/长期机构投资者
+  sub_archetype: null
+  display_name: Long-term institutional investor, insurance/pension, large capital
+  model: null
+  decision_mode: passive
+  role: long_term_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You focus on long-term stability and income from your investments. You analyze market trends and economic
+    indicators to make informed decisions. Your strategy is to hold positions for extended periods, minimizing reaction to
+    short-term market fluctuations.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy sector ETFs
+    information_sources:
+    - financial_news
+    - analyst_reports
+    ignores:
+    - day_trading_signals
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 3650
+    stop_loss_discipline: high
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - market_reports
+    - economic_indicators
+    secondary_sources:
+    - industry_analysis
+    ignored:
+    - short_term_fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 10
+    capital_distribution:
+      type: lognormal
+      median_cny: 5000000
+      sigma: 1.0
+      floor_cny: 5000000
+      ceiling_cny: 100000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.95
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: buy
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 5
+      - 10
+- id: foreign_active
+  archetype: 外国活跃投资者
+  sub_archetype: null
+  display_name: Foreign Active Investor (varied capital, global, market news)
+  model: null
+  decision_mode: discretionary
+  role: directional_speculator
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are an active trader in the WTI crude oil market, navigating global trends and market news. Stay alert
+    to price movements and adjust your positions accordingly. Remember to manage your risks while seeking opportunities.
+  biases:
+    momentum_chasing: 0.6
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - options on crude oil
+    information_sources:
+    - real-time market data
+    - economic news
+    ignores:
+    - local market trends
+  behavior:
+    avg_position_pct: 0.75
+    annual_turnover: 2.5
+    typical_holding_period_days: 10
+    stop_loss_discipline: medium
+    reaction_speed: fast
+  information:
+    primary_sources:
+    - financial news
+    - market analysis reports
+    secondary_sources:
+    - social media
+    - trading forums
+    ignored:
+    - outdated economic indicators
+    english_capable: true
+  sandbox:
+    instance_count: 2000
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000
+      sigma: 1.0
+      floor_cny: 100000
+      ceiling_cny: 5000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.7
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.1
+        max: 0.5
+    risk:
+      max_position_pct: 0.95
+      margin_account_pct: 0.2
+      leverage_max: 5.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.7
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: enter_position_50pct
+      side: buy
+      pool: cash
+      fraction: 0.5
+    - name: exit_position_50pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.5
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  time_horizon_days:
+  - 1
+  - 30
+- id: quant_market_maker_hft
+  archetype: 量化市场做市商/高频交易者
+  sub_archetype: null
+  display_name: High-frequency trader, algorithm-driven, quantitative strategies
+  model: null
+  decision_mode: systematic
+  role: market_maker_arb
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are a high-frequency trader focused on WTI futures. Your strategies rely on algorithms and rapid execution.
+    Stay alert to market signals and adjust your positions quickly to capitalize on fleeting opportunities.
+  biases:
+    momentum_chasing: 0.9
+    loss_aversion: 0.1
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - options on futures
+    information_sources:
+    - quantitative models
+    - historical data analysis
+    ignores:
+    - long-term market trends
+  behavior:
+    avg_position_pct: 0.1
+    annual_turnover: 1000000.0
+    typical_holding_period_days: 1
+    stop_loss_discipline: high
+    reaction_speed: instant
+  information:
+    primary_sources:
+    - market_data
+    - algorithmic_signals
+    secondary_sources:
+    - news_feeds
+    ignored:
+    - social_media
+    english_capable: true
+  sandbox:
+    instance_count: 30
+    capital_distribution:
+      type: lognormal
+      median_cny: 50000000.0
+      sigma: 1.0
+      floor_cny: 10000000.0
+      ceiling_cny: 100000000.0
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 0.8
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.01
+        max: 0.1
+    risk:
+      max_position_pct: 0.15
+      margin_account_pct: 0.1
+      leverage_max: 5.0
+      stop_loss_threshold: -0.02
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: execute_trade_1pct
+      side: buy
+      pool: cash
+      fraction: 0.01
+    - name: execute_trade_1pct
+      side: sell
+      pool: holdings_in_target
+      fraction: 0.01
+    - name: adjust_position_2pct
+      side: buy
+      pool: cash
+      fraction: 0.02
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+  time_horizon_days:
+  - 1
+  - 7
+- id: industrial_corporate_strategic_holders
+  archetype: 工业/企业战略持有者
+  sub_archetype: null
+  display_name: Industrial Corporate Strategic Holder (¥10M+, strategic reasons)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are a strategic holder in the WTI crude oil market. Your focus is on long-term stability and business
+    alignment. You analyze market trends carefully and prioritize risk management. Your decisions are driven by strategic
+    business needs rather than short-term gains.
+  biases:
+    momentum_chasing: 0.4
+    loss_aversion: 0.5
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy stocks
+    information_sources:
+    - market_research
+    - economic_indicators
+    ignores:
+    - speculative_trends
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - industry_reports
+    - market_analysis
+    secondary_sources:
+    - financial_news
+    ignored:
+    - short_term_fluctuations
+    english_capable: true
+  sandbox:
+    instance_count: 3
+    capital_distribution:
+      type: lognormal
+      median_cny: 100000000
+      sigma: 1.0
+      floor_cny: 10000000
+      ceiling_cny: 1000000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.8
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: pledge_increase
+      side: none
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 3
+      - 5
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: government_state_holders
+  archetype: 政府/国有持有者
+  sub_archetype: null
+  display_name: Government State Holders (large capital, strategic investors)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are a strategic holder in the WTI crude oil market. Your focus is on long-term stability and growth. You
+    analyze government reports and economic forecasts to guide your decisions. You prefer to avoid short-term fluctuations
+    and prioritize sustainable investments.
+  biases:
+    momentum_chasing: 0.3
+    loss_aversion: 0.4
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - energy sector stocks
+    information_sources:
+    - official publications
+    - financial institutions
+    ignores:
+    - speculative trends
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: slow
+  information:
+    primary_sources:
+    - government reports
+    - economic forecasts
+    secondary_sources:
+    - industry analysis
+    - market news
+    ignored:
+    - short-term market noise
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 50000000
+      sigma: 1.0
+      floor_cny: 50000000
+      ceiling_cny: 100000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.95
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.0
+      leverage_max: 1.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 1.0
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: pledge_increase
+      side: none
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 3
+      - 5
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
+- id: cross_holding_related_party_holders
+  archetype: 交叉持股/关联方持有者
+  sub_archetype: null
+  display_name: Cross Holding Related Party Holders (corporate structures, strategic investors)
+  model: null
+  decision_mode: strategic
+  role: strategic_holder
+  market_share:
+    by_volume: 0.125
+    citations:
+    - source_id: fallback
+      note: auto-fallback, no source
+  voice_prompt: You are part of a complex corporate structure, holding WTI futures strategically. Your focus is on long-term
+    stability and risk management. Stay informed about market trends and corporate performance to make informed decisions.
+  biases:
+    momentum_chasing: 0.2
+    loss_aversion: 0.3
+  knowledge:
+    typical_holdings:
+    - WTI futures
+    - related corporate equities
+    information_sources:
+    - financial analysts
+    - corporate disclosures
+    ignores:
+    - speculative trends
+  behavior:
+    avg_position_pct: 1.0
+    annual_turnover: 0.1
+    typical_holding_period_days: 365
+    stop_loss_discipline: high
+    reaction_speed: medium
+  information:
+    primary_sources:
+    - corporate reports
+    - industry analysis
+    secondary_sources:
+    - financial news
+    - market research
+    ignored:
+    - short-term market noise
+    english_capable: true
+  sandbox:
+    instance_count: 5
+    capital_distribution:
+      type: lognormal
+      median_cny: 500000000
+      sigma: 1.0
+      floor_cny: 100000000
+      ceiling_cny: 10000000000
+    initial_position_distribution:
+      type: bernoulli
+      prob_holding: 1.0
+      position_size_pct_when_holding:
+        type: uniform
+        min: 0.5
+        max: 1.0
+    risk:
+      max_position_pct: 1.0
+      margin_account_pct: 0.1
+      leverage_max: 2.0
+      stop_loss_threshold: -0.1
+      stop_loss_discipline: 0.9
+    action_space:
+    - name: do_nothing
+      side: none
+      pool: none
+      fraction: 0.95
+    - name: increase_holding_2pct
+      side: none
+      pool: holdings_in_target
+      fraction: 0.02
+    - name: block_sale_5pct
+      side: none
+      pool: holdings_in_target
+      fraction: 0.05
+    reaction_lag_rounds:
+      type: discrete
+      values:
+      - 1
+      - 2
+      - 3
+  contributes_to_sentiment_mean: false
+  contributes_to_strategic_signal: true
