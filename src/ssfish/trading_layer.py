@@ -1,0 +1,363 @@
+"""Pure-Python trading layer — the math core used by the OASIS engine.
+
+This module is intentionally framework-agnostic. No OASIS, no CAMEL, no
+asyncio. It only knows about:
+
+  - `Agent` dataclass: one stochastic trader instance (capital, cash, holdings)
+  - `spawn_agents(persona, current_price)`: sample N agents from the persona's
+    capital + holdings distributions
+  - `apply_action(agent, action_spec, current_price)`: execute one action,
+    mutating the agent's cash + holdings
+  - `normalize_action_distribution(raw, expected)`: clean up an LLM-returned
+    distribution (clip negatives, drop unknowns, rescale to sum 1.0)
+  - `apply_distribution_to_agent_pop(persona, agents, distribution, ...)`:
+    sample one action per agent from the distribution, apply it, return a
+    `ClassFlowResult` with the aggregated net flow + histogram
+  - `ClassFlowResult` dataclass: aggregated round result per persona class
+
+The Phase II `oasis_engine` calls `apply_distribution_to_agent_pop` after
+each round's OASIS social step, once per trader, using the distributions
+collected via `oasis_trading_tool.OrderCollector` from each trader's
+`submit_order_distribution` tool call.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Any
+
+from .output_filter import sanitize_text
+from .persona import Persona
+
+
+log = logging.getLogger(__name__)
+
+
+# Tolerance for action_distribution normalization. Outside this band we still
+# normalize but log a warning.
+NORMALIZATION_TOLERANCE = 0.05
+
+
+# ─────────────────────── Stochastic agent state ───────────────────────
+
+
+@dataclass
+class Agent:
+    """One stochastic trader instance, persistent across rounds.
+
+    Capital is immutable, holdings + cash mutate as the agent buys / sells.
+    `holdings_value` is derived from `holdings_shares × current_price`
+    (computed on demand).
+    """
+
+    persona_id: str
+    capital: float                  # immutable: NAV at spawn time, in event currency
+    cash: float                     # mutable: shrinks on buy, grows on sell
+    holdings_shares: float          # mutable: in shares of the target instrument
+    max_holdings_value: float       # immutable: capital × max_position_pct
+
+    def holdings_value(self, current_price: float) -> float:
+        return self.holdings_shares * current_price
+
+    def nav(self, current_price: float) -> float:
+        return self.cash + self.holdings_value(current_price)
+
+    def pnl(self, current_price: float) -> float:
+        return self.nav(current_price) - self.capital
+
+    def buy_headroom(self, current_price: float) -> float:
+        """Remaining buy capacity given the persona's max_position_pct cap."""
+        return max(0.0, self.max_holdings_value - self.holdings_value(current_price))
+
+
+def _sample_capital(spec: dict[str, Any], rng: random.Random) -> float:
+    dtype = spec.get("type", "fixed")
+    if dtype == "lognormal":
+        median = float(spec["median_cny"])
+        sigma = float(spec["sigma"])
+        if median <= 0 or sigma <= 0:
+            raise ValueError(
+                f"lognormal median_cny and sigma must be > 0, got {median}, {sigma}"
+            )
+        mu = math.log(median)
+        val = rng.lognormvariate(mu, sigma)
+        floor = float(spec.get("floor_cny", 0.0))
+        ceiling = float(spec.get("ceiling_cny", float("inf")))
+        return max(floor, min(ceiling, val))
+    if dtype == "uniform":
+        return rng.uniform(float(spec["min_cny"]), float(spec["max_cny"]))
+    if dtype == "fixed":
+        return float(spec["value_cny"])
+    raise ValueError(f"Unknown capital_distribution type: {dtype!r}")
+
+
+def _sample_position_pct(spec: dict[str, Any], rng: random.Random) -> float:
+    if not spec:
+        return 0.0
+    dtype = spec.get("type", "none")
+    if dtype == "none":
+        return 0.0
+    if dtype == "fixed":
+        return float(spec.get("value", 0.0))
+    if dtype == "bernoulli":
+        prob = float(spec.get("prob_holding", 0.5))
+        if rng.random() > prob:
+            return 0.0
+        size_spec = spec.get(
+            "position_size_pct_when_holding",
+            {"type": "uniform", "min": 0.05, "max": 0.30},
+        )
+        size_type = size_spec.get("type", "uniform")
+        if size_type == "uniform":
+            return rng.uniform(float(size_spec["min"]), float(size_spec["max"]))
+        if size_type == "fixed":
+            return float(size_spec["value"])
+        raise ValueError(f"Unknown position size spec type: {size_type!r}")
+    raise ValueError(f"Unknown initial_position_distribution type: {dtype!r}")
+
+
+def spawn_agents(persona: Persona, current_price: float, rng: random.Random) -> list[Agent]:
+    """Sample N agent instances from a persona's sandbox config.
+
+    Same RNG-deterministic semantics as the legacy sandbox.spawn_agents:
+    feeding the same `rng` and same persona produces the same agent population.
+    """
+    sandbox = persona.sandbox
+    if sandbox is None:
+        raise ValueError(
+            f"persona '{persona.id}' has no sandbox config; cannot spawn agents"
+        )
+    if current_price <= 0:
+        raise ValueError(f"current_price must be > 0, got {current_price}")
+    if sandbox.instance_count <= 0:
+        raise ValueError(
+            f"persona '{persona.id}' sandbox.instance_count must be > 0, "
+            f"got {sandbox.instance_count}"
+        )
+
+    max_position_pct = float(sandbox.risk.get("max_position_pct", 1.0))
+    max_position_pct = max(0.0, min(1.0, max_position_pct))
+
+    agents: list[Agent] = []
+    for _ in range(sandbox.instance_count):
+        capital = _sample_capital(sandbox.capital_distribution, rng)
+        position_pct = _sample_position_pct(sandbox.initial_position_distribution, rng)
+        position_pct = max(0.0, min(1.0, position_pct))
+        holdings_value = capital * position_pct
+        holdings_shares = holdings_value / current_price
+        cash = capital - holdings_value
+        agents.append(
+            Agent(
+                persona_id=persona.id,
+                capital=capital,
+                cash=cash,
+                holdings_shares=holdings_shares,
+                max_holdings_value=capital * max_position_pct,
+            )
+        )
+    return agents
+
+
+# ─────────────────────── Action application ───────────────────────
+
+
+def apply_action(
+    agent: Agent, action_spec: dict[str, Any], current_price: float
+) -> float:
+    """Apply one action_spec to one agent. Mutates state. Returns order amount.
+
+    Order amount is in event currency, positive for buy, negative for sell,
+    zero for hold or insufficient capacity. The buy path is capped by
+    `agent.buy_headroom(current_price)` so the persona's max_position_pct
+    constraint is enforced.
+    """
+    side = action_spec.get("side", "none")
+    pool = action_spec.get("pool", "none")
+    try:
+        fraction = float(action_spec.get("fraction", 0.0))
+    except (TypeError, ValueError):
+        fraction = 0.0
+
+    if side == "none" or fraction <= 0:
+        return 0.0
+
+    if pool == "holdings_in_target":
+        if agent.holdings_shares <= 0:
+            return 0.0
+        shares_to_act = agent.holdings_shares * fraction
+        amount = shares_to_act * current_price
+    elif pool == "cash":
+        if agent.cash <= 0:
+            return 0.0
+        amount = agent.cash * fraction
+        shares_to_act = amount / current_price
+    else:
+        return 0.0
+
+    if side == "sell":
+        agent.holdings_shares -= shares_to_act
+        agent.cash += amount
+        return -amount
+    if side == "buy":
+        headroom = agent.buy_headroom(current_price)
+        if headroom <= 0:
+            return 0.0
+        if amount > headroom:
+            amount = headroom
+            shares_to_act = amount / current_price
+        agent.holdings_shares += shares_to_act
+        agent.cash -= amount
+        return +amount
+    return 0.0
+
+
+def normalize_action_distribution(
+    raw: dict[str, float], expected_actions: list[str]
+) -> tuple[dict[str, float], str | None]:
+    """Clip negatives, drop unknown keys, normalize to sum 1.0.
+
+    Returns (clean_distribution, optional_warning_string).
+    """
+    expected_set = set(expected_actions)
+    warnings: list[str] = []
+
+    unknown = set(raw.keys()) - expected_set
+    if unknown:
+        warnings.append(f"unknown actions dropped: {sorted(unknown)}")
+    cleaned = {k: v for k, v in raw.items() if k in expected_set}
+
+    negatives = {k: v for k, v in cleaned.items() if v < 0}
+    if negatives:
+        warnings.append(f"negative probabilities clipped: {sorted(negatives)}")
+    cleaned = {k: max(0.0, v) for k, v in cleaned.items()}
+
+    for action in expected_actions:
+        cleaned.setdefault(action, 0.0)
+
+    total = sum(cleaned.values())
+    if total <= 0:
+        warnings.append("distribution sum was zero, defaulting to uniform")
+        n = len(expected_actions)
+        normalized = {action: 1.0 / n for action in expected_actions}
+    else:
+        if abs(total - 1.0) > NORMALIZATION_TOLERANCE:
+            warnings.append(f"sum was {total:.4f}, renormalized to 1.0")
+        normalized = {k: v / total for k, v in cleaned.items()}
+
+    return normalized, "; ".join(warnings) if warnings else None
+
+
+# ─────────────────────── Round result dataclass ───────────────────────
+
+
+@dataclass
+class ClassFlowResult:
+    """One persona class's contribution to a round.
+
+    The Phase I `oasis_engine` calls `decide_orders(persona, ...)` once per
+    trading persona per round and collects these into a list to feed Kyle.
+    """
+
+    persona_id: str
+    net_flow: float
+    action_histogram: dict[str, int]
+    n_agents: int
+    rationale: str = ""
+    raw_distribution: dict[str, float] = field(default_factory=dict)
+    normalized_distribution: dict[str, float] = field(default_factory=dict)
+    normalization_warning: str | None = None
+    confidence: float = 0.5
+    system_fingerprint: str | None = None
+
+
+# ─────────────────────── Distribution application (pure math) ───────────────────────
+
+
+def apply_distribution_to_agent_pop(
+    persona: Persona,
+    agents: list[Agent],
+    distribution: dict[str, float],
+    current_price: float,
+    rng: random.Random,
+    *,
+    rationale: str = "",
+    confidence: float = 0.5,
+    raw_distribution: dict[str, float] | None = None,
+    system_fingerprint: str | None = None,
+) -> ClassFlowResult:
+    """Pure-math: sample one action per agent from `distribution`, apply it,
+    return aggregated ClassFlowResult. Does NOT make any LLM calls.
+
+    This is the function both `decide_orders` (LLM path) and the Phase II
+    unified-decision path (OASIS tool-call path) call to turn a normalized
+    distribution into actual per-agent mutations + net flow.
+
+    Mutates `agents` in place: their cash + holdings reflect the round's trades.
+
+    Args:
+        persona: trading persona (must have sandbox + action_space)
+        agents: pre-spawned agent population; mutated in place
+        distribution: dict of action_name → probability. Will be normalized
+            via `normalize_action_distribution` before sampling.
+        current_price: instrument price, in event currency
+        rng: shared sampling RNG
+        rationale: optional LLM rationale string (attached to the result)
+        confidence: optional LLM confidence (attached to the result)
+        raw_distribution: optional raw pre-normalization dict for audit
+        system_fingerprint: optional LLM provider fingerprint for reproducibility
+    """
+    sandbox = persona.sandbox
+    if sandbox is None:
+        raise ValueError(
+            f"apply_distribution_to_agent_pop: persona '{persona.id}' has no sandbox"
+        )
+
+    expected_names = [a["name"] for a in sandbox.action_space]
+    normalized, warning = normalize_action_distribution(distribution, expected_names)
+    if warning:
+        log.info(
+            "persona %s: distribution normalization: %s",
+            persona.id, warning,
+        )
+
+    spec_by_name = {a["name"]: a for a in sandbox.action_space}
+    actions = list(normalized.keys())
+    weights = list(normalized.values())
+    sampled_names = rng.choices(actions, weights=weights, k=len(agents))
+
+    net_flow = 0.0
+    histogram: dict[str, int] = {}
+    for agent, action_name in zip(agents, sampled_names):
+        spec = spec_by_name.get(action_name)
+        histogram[action_name] = histogram.get(action_name, 0) + 1
+        if spec is None:
+            continue
+        order = apply_action(agent, spec, current_price)
+        net_flow += order
+
+    return ClassFlowResult(
+        persona_id=persona.id,
+        net_flow=net_flow,
+        action_histogram=histogram,
+        n_agents=len(agents),
+        rationale=sanitize_text(rationale),
+        raw_distribution=raw_distribution or dict(distribution),
+        normalized_distribution=normalized,
+        normalization_warning=warning,
+        confidence=max(0.0, min(1.0, confidence)),
+        system_fingerprint=system_fingerprint,
+    )
+
+
+__all__ = [
+    "Agent",
+    "ClassFlowResult",
+    "NORMALIZATION_TOLERANCE",
+    "apply_action",
+    "apply_distribution_to_agent_pop",
+    "normalize_action_distribution",
+    "spawn_agents",
+]

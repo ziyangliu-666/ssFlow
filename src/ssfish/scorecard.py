@@ -22,7 +22,7 @@ from typing import Any, Iterator
 from .config import settings
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS simulations (
@@ -66,7 +66,16 @@ CREATE TABLE IF NOT EXISTS simulations (
     class_pnl_json           TEXT,
     strategic_signals_json   TEXT,
     lambda_used              REAL,
-    adv_used                 REAL
+    adv_used                 REAL,
+    -- Added in schema v4 (Phase H Concordia rewrite): the cascade event log,
+    -- a flat JSON list of every InfoEvent emitted across all rounds.
+    info_event_log_json      TEXT,
+    -- Added in schema v5 (Phase I OASIS rewrite): the publication log replaces
+    -- info_event_log; a structured list of every Publication across all rounds
+    -- (news_brief, research_note, policy_statement, social_post, etc.)
+    publication_log_json     TEXT,
+    -- Path to the OASIS SQLite db that stored all the social state for this sim
+    oasis_db_path            TEXT
 );
 """
 
@@ -99,6 +108,17 @@ _V3_MIGRATIONS_SQL = [
     "ALTER TABLE simulations ADD COLUMN adv_used REAL",
 ]
 
+# v4 adds the cascade event log column (Phase H Concordia rewrite).
+_V4_MIGRATIONS_SQL = [
+    "ALTER TABLE simulations ADD COLUMN info_event_log_json TEXT",
+]
+
+# v5 adds the publication log + oasis db path columns (Phase I OASIS rewrite).
+_V5_MIGRATIONS_SQL = [
+    "ALTER TABLE simulations ADD COLUMN publication_log_json TEXT",
+    "ALTER TABLE simulations ADD COLUMN oasis_db_path TEXT",
+]
+
 
 def _idempotent_alter_columns(
     conn: sqlite3.Connection, statements: list[str]
@@ -128,6 +148,16 @@ def _migrate_to_v3(conn: sqlite3.Connection) -> None:
     _idempotent_alter_columns(conn, _V3_MIGRATIONS_SQL)
 
 
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Idempotently add v4 cascade event log column."""
+    _idempotent_alter_columns(conn, _V4_MIGRATIONS_SQL)
+
+
+def _migrate_to_v5(conn: sqlite3.Connection) -> None:
+    """Idempotently add v5 publication log + oasis db path columns."""
+    _idempotent_alter_columns(conn, _V5_MIGRATIONS_SQL)
+
+
 # ─────────────────────── Connection helper ───────────────────────
 
 
@@ -147,6 +177,8 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.executescript(SCHEMA_SQL)
         _migrate_to_v2(conn)
         _migrate_to_v3(conn)
+        _migrate_to_v4(conn)
+        _migrate_to_v5(conn)
         # Indexes created AFTER migrations so the mode-index can find its column
         conn.executescript(INDEX_SQL)
         yield conn
@@ -189,21 +221,34 @@ def insert_sandbox_simulation(
     simulation_id: str | None = None,
     round_fingerprints: list[list[str | None]] | None = None,
     llm_seed: int | None = None,
+    info_event_log: list[dict[str, Any]] | None = None,
+    publication_log: list[dict[str, Any]] | None = None,
+    oasis_db_path: str | None = None,
 ) -> str:
-    """Insert one sandbox-mode simulation row. Returns the simulation_id.
+    """Insert one Concordia-engine simulation row. Returns the simulation_id.
 
     Sentiment-mode columns (sentiment_mean, implied_move_*, blind_spots_json)
-    are NULL for sandbox runs. Sandbox-specific columns (price_trajectory_json,
-    class_pnl_json, lambda_used, adv_used, etc.) are populated.
+    are NULL — they're legacy from the pre-Phase-B era.
+    Sandbox-specific columns (price_trajectory_json, class_pnl_json,
+    lambda_used, adv_used) carry the Concordia engine outputs.
+    Phase H adds info_event_log_json carrying the cascade events from
+    `result.info_event_log`.
 
-    `mode` column is set to 'sandbox'.
+    `mode` column is set to 'concordia' (was 'sandbox' pre-Phase-H, but
+    the engine now runs through Concordia so we relabel for clarity).
     """
     sim_id = simulation_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    # round_fingerprints for sandbox is a list of lists (one inner list per
-    # round, one fingerprint per persona class). Stringify the whole thing.
     fingerprints_json = (
         json.dumps(round_fingerprints) if round_fingerprints is not None else None
+    )
+    info_log_json = (
+        json.dumps(info_event_log, ensure_ascii=False)
+        if info_event_log is not None else None
+    )
+    publication_log_json = (
+        json.dumps(publication_log, ensure_ascii=False)
+        if publication_log is not None else None
     )
     with _connect() as conn:
         conn.execute(
@@ -216,8 +261,9 @@ def insert_sandbox_simulation(
                 round_fingerprints_json, llm_seed,
                 mode, initial_price, final_price, cumulative_delta_pct,
                 price_trajectory_json, class_pnl_json, strategic_signals_json,
-                lambda_used, adv_used
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                lambda_used, adv_used, info_event_log_json,
+                publication_log_json, oasis_db_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sim_id, event_ticker, event_date, event_type,
@@ -225,11 +271,12 @@ def insert_sandbox_simulation(
                 seed, n_personas, n_rounds,
                 full_report_path, cost_usd, elapsed_seconds, now,
                 fingerprints_json, llm_seed,
-                'sandbox', initial_price, final_price, cumulative_delta_pct,
+                'oasis', initial_price, final_price, cumulative_delta_pct,
                 json.dumps(price_trajectory),
                 json.dumps(class_pnl, ensure_ascii=False),
                 json.dumps(strategic_signals, ensure_ascii=False) if strategic_signals else None,
-                lambda_used, adv_used,
+                lambda_used, adv_used, info_log_json,
+                publication_log_json, oasis_db_path,
             ),
         )
     return sim_id

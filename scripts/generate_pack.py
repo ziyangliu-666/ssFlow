@@ -2,7 +2,7 @@
 """CLI for the persona pack calibration pipeline.
 
 End-to-end: web research → LLM class extraction → parallel persona
-generation → assemble v2 yaml → load-validate → write to disk.
+generation → assemble v3 yaml → load-validate → write to disk.
 
 Examples:
 

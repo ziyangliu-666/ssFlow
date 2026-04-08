@@ -68,6 +68,43 @@
       font-size: 12px;
       display: none;
     }
+    #feed_panel {
+      margin-top: 12px;
+      padding: 14px 18px;
+      background: #f0f7ff;
+      border-left: 3px solid #2c66d4;
+      border-radius: 3px;
+      display: none;
+    }
+    #feed_panel h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: #2c66d4;
+    }
+    .pub_event {
+      font-size: 13px;
+      margin: 4px 0;
+      padding: 4px 8px;
+      background: #fff;
+      border-radius: 3px;
+      border-left: 2px solid #6e9eea;
+    }
+    .pub_event .meta {
+      color: #888;
+      font-size: 11px;
+      margin-right: 6px;
+    }
+    .pub_event .ctype {
+      display: inline-block;
+      padding: 1px 6px;
+      background: #e0e8f5;
+      color: #2c66d4;
+      border-radius: 2px;
+      font-size: 10px;
+      font-weight: 600;
+      margin-right: 6px;
+      text-transform: uppercase;
+    }
     .muted { color: #888; font-size: 12px; }
     .warning { color: #d62728; font-size: 12px; margin-top: 6px; }
   </style>
@@ -163,6 +200,11 @@
     <button id="run_btn">运行 sandbox 推演 (~18-30s, ~$0.02)</button>
     <button id="back_btn" class="secondary">← Back to step 1</button>
     <span class="muted" id="run_status"></span>
+  </div>
+
+  <div id="feed_panel">
+    <h3>Information ecosystem — publications across rounds</h3>
+    <div id="pub_events"></div>
   </div>
 
   <div id="report"></div>
@@ -273,12 +315,33 @@
           body: JSON.stringify(payload),
         });
         const data = await res.json();
+        const feedPanel = $('feed_panel');
+        const pubEvents = $('pub_events');
         if (!res.ok) {
           out.textContent = 'ERROR: ' + JSON.stringify(data, null, 2);
+          feedPanel.style.display = 'none';
         } else {
           out.textContent = data.report_markdown;
           const extra = ` · ${data.initial_price.toFixed(2)} → ${data.final_price.toFixed(2)} (${(data.cumulative_delta_pct * 100).toFixed(2)}%)`;
           status.textContent = `  Cost $${data.cost_usd.toFixed(4)} · ${data.elapsed_seconds.toFixed(1)}s${extra} · sim_id ${data.simulation_id.slice(0, 12)}`;
+
+          // Render the OASIS publication log
+          const pubs = data.publication_log || [];
+          if (pubs.length > 0) {
+            pubEvents.innerHTML = pubs.map(pub => {
+              const escapedText = (pub.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              return `<div class="pub_event">
+                <span class="meta">R${pub.round_idx}</span>
+                <span class="ctype">${pub.content_type}</span>
+                <strong>${pub.author_archetype || pub.author_persona_id}</strong>:
+                ${escapedText}
+              </div>`;
+            }).join('');
+            feedPanel.style.display = 'block';
+          } else {
+            pubEvents.innerHTML = '<div class="muted">No publications were emitted in this run.</div>';
+            feedPanel.style.display = 'block';
+          }
         }
         out.style.display = 'block';
       } catch (err) {

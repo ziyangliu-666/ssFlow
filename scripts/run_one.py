@@ -49,9 +49,9 @@ from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
 from ssfish.event_extractor import extract_event
 from ssfish.llm_client import cost_tracker
+from ssfish.oasis_engine import run_simulation
 from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import render_sandbox_safe_or_quarantine, save_report
-from ssfish.sandbox import run_sandbox_simulation
+from ssfish.report import render_simulation_safe_or_quarantine, save_report
 from ssfish.scorecard import init_db, insert_sandbox_simulation
 
 
@@ -237,26 +237,35 @@ async def amain() -> int:
     init_db()
 
     print(f"# ssFish run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
-    print(f"#   {len(personas)} personas, {args.rounds or settings.n_rounds} rounds, "
-          f"model={settings.default_model}", file=sys.stderr)
+    print(f"#   {len(personas)} personas ({sum(1 for p in personas if p.sandbox is not None)} traders + "
+          f"{sum(1 for p in personas if p.sandbox is None)} info entities), "
+          f"{args.rounds or settings.n_rounds} rounds, model={settings.default_model}",
+          file=sys.stderr)
     print(f"#   context completeness: {event.context_completeness:.0%}", file=sys.stderr)
-    print(f"#   running sandbox simulation...", file=sys.stderr, flush=True)
+    print(f"#   running OASIS simulation...", file=sys.stderr, flush=True)
 
-    result = await run_sandbox_simulation(event, personas, n_rounds=args.rounds)
-    display, ok = render_sandbox_safe_or_quarantine(result)
+    # OASIS engine is async; await it from amain.
+    result = await run_simulation(event, personas, n_rounds=args.rounds)
+    display, ok = render_simulation_safe_or_quarantine(result)
     report_path = save_report(display, result.simulation_id)
 
-    # Collect strategic signals from the last round
-    strategic_signals = {}
-    by_id = {p.id: p for p in personas}
-    if result.rounds:
-        last = result.rounds[-1]
-        for cid, cf in last.class_flows.items():
-            p = by_id.get(cid)
-            if p and p.contributes_to_strategic_signal and cf.strategic_signal:
-                strategic_signals[cid] = cf.strategic_signal
-
-    fingerprints_per_round = [r.fingerprints for r in result.rounds]
+    # Collect publication log for the scorecard
+    publication_log = [
+        {
+            "publication_id": pub.publication_id,
+            "author_persona_id": pub.author_persona_id,
+            "author_archetype": pub.author_archetype,
+            "content_type": pub.content_type,
+            "text": pub.text,
+            "round_idx": pub.round_idx,
+            "authority_weight": pub.authority_weight,
+            "references": pub.references,
+            "oasis_post_id": pub.oasis_post_id,
+            "likes": pub.likes,
+            "reposts": pub.reposts,
+        }
+        for pub in result.all_publications
+    ]
 
     insert_sandbox_simulation(
         event_ticker=event.ticker,
@@ -273,15 +282,17 @@ async def amain() -> int:
         cumulative_delta_pct=result.cumulative_delta_pct,
         price_trajectory=result.price_trajectory,
         class_pnl=result.compute_class_pnl(),
-        strategic_signals=strategic_signals or None,
+        strategic_signals=None,  # Phase I moves strategic signals into publications
         lambda_used=result.lambda_used,
         adv_used=result.adv_value_used,
         full_report_path=str(report_path),
         cost_usd=result.cost_usd,
         elapsed_seconds=result.elapsed_seconds,
         simulation_id=result.simulation_id,
-        round_fingerprints=fingerprints_per_round,
+        round_fingerprints=None,
         llm_seed=result.llm_seed,
+        publication_log=publication_log or None,
+        oasis_db_path=result.oasis_db_path,
     )
 
     print(f"# done in {result.elapsed_seconds:.1f}s, "

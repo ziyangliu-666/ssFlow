@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 market: us-equity
 locale: en-US
 last_updated: 2026-04-08
@@ -11,7 +11,6 @@ last_updated: 2026-04-08
 # full 14-class panel ashare gets. The point is to demonstrate that the same
 # engine + the same loader can run different markets just by swapping yaml.
 #
-# Reference: docs/persona-pack-spec-v1.md §3 (US equity investor structure)
 # Coverage: SIFMA Equity Market Structure Compendium 2024 (retail 17.9% of
 # trading volume, institutional ~82%, ETF 19.6% of total).
 #

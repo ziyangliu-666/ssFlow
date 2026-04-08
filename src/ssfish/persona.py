@@ -28,7 +28,34 @@ from typing import Any
 import yaml
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+
+# Phase I — what social role this persona plays in the information ecosystem.
+# Drives the OASIS agent setup (which actions are available, whether the persona
+# needs a sandbox config, etc.)
+VALID_ENTITY_ROLES = {
+    "trader",       # places orders, may also publish
+    "media",        # news wires, financial press — publishes news_brief
+    "analyst",      # sell-side or buy-side research — publishes research_note
+    "regulator",    # CSRC etc — publishes regulatory_inquiry, rare
+    "policy",       # central bank, NDRC, ministries — publishes policy_statement
+    "kol",          # social media KOLs — publishes social_post frequently
+    "news_wire",    # alias for `media`, kept for clarity in YAML
+    "company_ir",   # corporate investor relations — publishes company_announcement
+}
+
+
+# Whitelist of allowed publication content types. New types added here also
+# need a corresponding prompt template in the publishing component (Phase I plan I7).
+VALID_CONTENT_TYPES = {
+    "news_brief",
+    "research_note",
+    "policy_statement",
+    "regulatory_inquiry",
+    "social_post",
+    "company_announcement",
+}
 
 
 class PersonaSchemaError(ValueError):
@@ -123,6 +150,26 @@ class SandboxConfig:
 
 
 @dataclass
+class PublishConfig:
+    """Per-content-type publishing config for a persona.
+
+    Phase I — drives the OASIS social action loop. A persona with one or more
+    `PublishConfig` entries can produce that content type during the simulation;
+    `trigger_prob` is the base probability of emitting per round (the LLM can
+    still decide to skip), `authority_weight` is how much the published content
+    dominates downstream readers' feeds (high authority = analyst note, low =
+    KOL post). `style_hint` is a short phrase the prompt builder uses to shape
+    the LLM voice (e.g., "中信建投风格, 严谨, 带 DCF").
+    """
+
+    content_type: str             # must be in VALID_CONTENT_TYPES
+    style_hint: str = ""
+    trigger_prob: float = 0.3
+    authority_weight: float = 0.5
+    max_length_chars: int = 240
+
+
+@dataclass
 class StrategicSignalSchema:
     """Schema for strategic personas (产业资本 / 政府队 / 个人大股东).
 
@@ -186,6 +233,25 @@ class Persona:
     # Aggregation flags (default = retail/institutional behavior)
     contributes_to_sentiment_mean: bool = True
     contributes_to_strategic_signal: bool = False
+
+    # ─────────────────────── Phase I — information ecosystem ───────────────────────
+    #
+    # `entity_role` decides what kind of OASIS agent this persona becomes:
+    #   - trader → has a sandbox config + places orders + can optionally publish
+    #   - media / analyst / regulator / policy / kol / company_ir → no sandbox,
+    #     never trades, only publishes content into the OASIS social stream
+    entity_role: str = "trader"
+
+    # Who this persona regularly reads. List of persona ids in the same pack.
+    # Special values:
+    #   - "*"          → follows everyone in the pack (use sparingly: news wires)
+    #   - "__market__" → follows the synthetic market-event broadcaster
+    #                    (Phase I auto-adds this to all traders, no need to set)
+    follows: list[str] = field(default_factory=list)
+
+    # What this persona can publish, and how often. Empty list means
+    # "doesn't publish" (typical for retail traders who only consume).
+    publishes: list[PublishConfig] = field(default_factory=list)
 
     def system_prompt(self) -> str:
         """Render the persona as a system prompt for an LLM call."""
@@ -283,6 +349,71 @@ def _coerce_optional_float(
         ) from exc
 
 
+def _coerce_publishes(data: Any, persona_id: str) -> list[PublishConfig]:
+    """Parse the persona's `publishes` list into PublishConfig dataclasses.
+
+    Tolerates the field being missing entirely (returns empty list).
+    Raises PersonaSchemaError on malformed entries.
+    """
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        raise PersonaSchemaError(
+            f"persona '{persona_id}': publishes must be a list of mappings"
+        )
+    out: list[PublishConfig] = []
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': publishes[{i}] must be a mapping"
+            )
+        ctype = entry.get("content_type")
+        if ctype not in VALID_CONTENT_TYPES:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': publishes[{i}].content_type must be one of "
+                f"{sorted(VALID_CONTENT_TYPES)}, got {ctype!r}"
+            )
+        out.append(
+            PublishConfig(
+                content_type=ctype,
+                style_hint=str(entry.get("style_hint", "")),
+                trigger_prob=float(entry.get("trigger_prob", 0.3)),
+                authority_weight=float(entry.get("authority_weight", 0.5)),
+                max_length_chars=int(entry.get("max_length_chars", 240)),
+            )
+        )
+    return out
+
+
+def _coerce_follows(data: Any, persona_id: str) -> list[str]:
+    """Parse the persona's `follows` list. Just a list of string ids."""
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        raise PersonaSchemaError(
+            f"persona '{persona_id}': follows must be a list of persona ids"
+        )
+    return [str(x) for x in data]
+
+
+def _validate_follows_references(personas: list["Persona"], source: str) -> None:
+    """After loading all personas, verify every `follows` entry references a known id.
+
+    Allows two special values: "*" (follows all) and "__market__" (auto-added).
+    Anything else must be an existing persona id in the same pack.
+    """
+    known_ids = {p.id for p in personas}
+    for p in personas:
+        for ref in p.follows:
+            if ref in ("*", "__market__"):
+                continue
+            if ref not in known_ids:
+                raise PersonaSchemaError(
+                    f"{source}: persona '{p.id}' follows unknown id '{ref}'. "
+                    f"Known ids: {sorted(known_ids)}"
+                )
+
+
 def _coerce_sandbox(data: dict[str, Any], persona_id: str) -> SandboxConfig | None:
     if data is None:
         return None
@@ -360,6 +491,24 @@ def _validate_persona_dict(data: dict[str, Any], idx: int, source: str) -> None:
             f"Persona '{pid}' in {source}: decision_mode must be one of "
             f"{sorted(VALID_DECISION_MODES)}, got {decision_mode!r}"
         )
+    # Phase I — entity_role validation
+    entity_role = data.get("entity_role", "trader")
+    if entity_role not in VALID_ENTITY_ROLES:
+        raise PersonaSchemaError(
+            f"Persona '{pid}' in {source}: entity_role must be one of "
+            f"{sorted(VALID_ENTITY_ROLES)}, got {entity_role!r}"
+        )
+    # Trader requires sandbox; non-trader must NOT have sandbox
+    has_sandbox = data.get("sandbox") is not None
+    if entity_role == "trader" and not has_sandbox:
+        raise PersonaSchemaError(
+            f"Persona '{pid}' in {source}: entity_role=trader requires a sandbox block"
+        )
+    if entity_role != "trader" and has_sandbox:
+        raise PersonaSchemaError(
+            f"Persona '{pid}' in {source}: entity_role={entity_role} must NOT have "
+            f"a sandbox block (non-traders don't place orders)"
+        )
 
 
 def load_personas(path: str | Path) -> list[Persona]:
@@ -367,7 +516,7 @@ def load_personas(path: str | Path) -> list[Persona]:
 
     Expected file structure:
 
-        schema_version: 2
+        schema_version: 3
         market: ashare
         last_updated: 2026-04-08
         data_sources:
@@ -410,7 +559,8 @@ def load_personas(path: str | Path) -> list[Persona]:
     if file_schema != SCHEMA_VERSION:
         raise PersonaSchemaError(
             f"{path}: schema_version {file_schema} != expected {SCHEMA_VERSION}. "
-            f"v1 is no longer supported; rewrite the pack as schema_version 2."
+            f"v1/v2 are no longer supported; rewrite the pack as schema_version "
+            f"{SCHEMA_VERSION}."
         )
 
     personas_raw = raw.get("personas")
@@ -482,8 +632,14 @@ def load_personas(path: str | Path) -> list[Persona]:
                 strategic_signal_schema=strategic_signal_schema,
                 contributes_to_sentiment_mean=contributes_to_sentiment_mean,
                 contributes_to_strategic_signal=contributes_to_strategic_signal,
+                entity_role=p.get("entity_role", "trader"),
+                follows=_coerce_follows(p.get("follows"), p["id"]),
+                publishes=_coerce_publishes(p.get("publishes"), p["id"]),
             )
         )
+
+    # Phase I — second-pass validation now that we know all persona ids
+    _validate_follows_references(personas, str(path))
 
     return personas
 
@@ -511,10 +667,13 @@ __all__ = [
     "Persona",
     "PersonaSchemaError",
     "MarketShare",
+    "PublishConfig",
     "SandboxConfig",
     "StrategicSignalSchema",
     "SCHEMA_VERSION",
+    "VALID_CONTENT_TYPES",
     "VALID_DECISION_MODES",
+    "VALID_ENTITY_ROLES",
     "load_personas",
     "persona_set_hash",
 ]

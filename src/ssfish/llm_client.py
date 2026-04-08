@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from openai import AsyncOpenAI, APIError, RateLimitError
+from openai import APIError, AsyncOpenAI, OpenAI, RateLimitError
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -134,6 +134,7 @@ cost_tracker.load_prior()
 
 _client: AsyncOpenAI | None = None
 _client_lock = asyncio.Lock()
+_sync_client: OpenAI | None = None
 
 
 async def get_client() -> AsyncOpenAI:
@@ -146,6 +147,23 @@ async def get_client() -> AsyncOpenAI:
                     base_url=settings.openai_base_url,
                 )
     return _client
+
+
+def get_sync_client() -> OpenAI:
+    """Sync OpenAI client for blocking call sites.
+
+    Used by sync code paths (e.g., `trading_layer.apply_distribution_to_agent_pop`
+    helpers and async-test harnesses) that need a blocking OpenAI client
+    without spinning up an asyncio loop. Shares the same `cost_tracker`
+    singleton as the async client.
+    """
+    global _sync_client
+    if _sync_client is None:
+        _sync_client = OpenAI(
+            api_key=settings.openai_api_key.get_secret_value(),
+            base_url=settings.openai_base_url,
+        )
+    return _sync_client
 
 
 # ─────────────────────── Public API ───────────────────────
@@ -219,6 +237,65 @@ async def chat(
     ):
         with attempt:
             response = await client.chat.completions.create(**kwargs)
+
+    usage = response.usage
+    prompt_tokens = (usage.prompt_tokens or 0) if usage is not None else 0
+    completion_tokens = (usage.completion_tokens or 0) if usage is not None else 0
+    if usage is not None:
+        cost_tracker.record(model, prompt_tokens, completion_tokens)
+
+    content = response.choices[0].message.content or ""
+    return ChatResponse(
+        content=content,
+        model=model,
+        system_fingerprint=getattr(response, "system_fingerprint", None),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def chat_sync(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int = 2000,
+    json_mode: bool = False,
+    seed: int | None = None,
+) -> ChatResponse:
+    """Synchronous twin of `chat()`. Same semantics, blocks instead of awaits.
+
+    Shares the cost_tracker singleton with the async path so cumulative
+    cost remains correct regardless of which path called.
+    """
+    _check_budget()
+    model = model or settings.default_model
+    temperature = settings.temperature if temperature is None else temperature
+    client = get_sync_client()
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    if seed is not None:
+        kwargs["seed"] = seed
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(**kwargs)
+            break
+        except (APIError, RateLimitError) as exc:
+            last_exc = exc
+            if attempt == 2:
+                raise
+            import time
+            time.sleep(min(16, 2 ** attempt))
+    else:  # pragma: no cover - loop always breaks or raises
+        raise last_exc  # type: ignore[misc]
 
     usage = response.usage
     prompt_tokens = (usage.prompt_tokens or 0) if usage is not None else 0
@@ -317,6 +394,60 @@ async def chat_json(
     )
 
 
+def chat_json_sync(
+    messages: list[dict[str, str]],
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int = 2000,
+    retries: int = 2,
+    seed: int | None = None,
+) -> JsonChatResult:
+    """Synchronous twin of `chat_json()`. Same fallback parser chain.
+
+    Used by sync code paths that need structured JSON output.
+    """
+    last_response: ChatResponse | None = None
+    for attempt in range(retries + 1):
+        try:
+            response = chat_sync(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                json_mode=(attempt == 0),
+                seed=seed,
+            )
+        except APIError as exc:
+            if attempt == 0 and "response_format" in str(exc).lower():
+                response = chat_sync(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=False,
+                    seed=seed,
+                )
+            else:
+                raise
+
+        last_response = response
+        parsed = _parse_json_with_fallbacks(response.content)
+        if parsed is not None:
+            return JsonChatResult(
+                parsed=parsed,
+                model=response.model,
+                system_fingerprint=response.system_fingerprint,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
+            )
+
+    last_raw = last_response.content if last_response else ""
+    raise ValueError(
+        f"Failed to parse JSON after {retries + 1} attempts. Last raw output (truncated): "
+        f"{last_raw[:500]}"
+    )
+
+
 def _parse_json_with_fallbacks(raw: str) -> dict[str, Any] | list[Any] | None:
     """Try a chain of increasingly lenient JSON parsers.
 
@@ -367,6 +498,9 @@ __all__ = [
     "PRICING_PER_M",
     "chat",
     "chat_json",
+    "chat_json_sync",
+    "chat_sync",
     "cost_tracker",
     "get_client",
+    "get_sync_client",
 ]

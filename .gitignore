@@ -17,6 +17,10 @@ build/
 reports/
 predictions/
 
+# OASIS runtime logs (the framework hardcodes ./log as its log dir
+# in env.py and platform.py, so it reappears on every sim run).
+log/
+
 # OS / editor
 .DS_Store
 .idea/

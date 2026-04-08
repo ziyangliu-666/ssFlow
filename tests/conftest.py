@@ -39,11 +39,11 @@ def _isolate_env(monkeypatch, tmp_path):
 
 @pytest.fixture
 def sample_personas_yaml(tmp_path):
-    """Write a minimal valid persona pack v2 YAML file and return its path."""
+    """Write a minimal valid persona pack v3 YAML file and return its path."""
     p = tmp_path / "personas.yaml"
     p.write_text(
         """
-schema_version: 2
+schema_version: 3
 market: ashare
 last_updated: 2026-04-08
 data_sources:

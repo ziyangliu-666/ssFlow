@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 market: crude-oil-wti
 locale: en-US
 last_updated: 2026-04-08
@@ -11,7 +11,6 @@ last_updated: 2026-04-08
 # Dealer, Managed Money, Other Reportables) — this pack expands those into
 # 10 archetypes representing the actual decision-making units.
 #
-# Reference: docs/persona-pack-spec-v1.md §4 (commodity market structure)
 # Coverage: CFTC Disaggregated COT, Oxford Energy speculative positions,
 # Money Managers + Other ranged 35-46% of OI 2020-2025.
 #

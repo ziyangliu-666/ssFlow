@@ -27,9 +27,9 @@ from ssfish.config import settings
 from ssfish.event import VALID_EVENT_TYPES, Event
 from ssfish.event_extractor import extract_event
 from ssfish.llm_client import BudgetExceeded, cost_tracker
+from ssfish.oasis_engine import run_simulation
 from ssfish.persona import load_personas, persona_set_hash
-from ssfish.report import render_sandbox_safe_or_quarantine, save_report
-from ssfish.sandbox import run_sandbox_simulation
+from ssfish.report import render_simulation_safe_or_quarantine, save_report
 from ssfish.scorecard import init_db, insert_sandbox_simulation
 
 from .auth import require_password
@@ -134,27 +134,33 @@ def create_app() -> Flask:
             return jsonify({"error": "personas_load_failed", "detail": str(exc)}), 500
 
         try:
-            result = asyncio.run(run_sandbox_simulation(event, personas))
+            # OASIS engine is async; Flask is sync, so wrap in asyncio.run.
+            result = asyncio.run(run_simulation(event, personas))
         except BudgetExceeded as exc:
             return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
         except Exception as exc:
-            log.exception("sandbox simulation failed")
+            log.exception("OASIS simulation failed")
             return jsonify({"error": "simulation_failed", "detail": str(exc)}), 500
 
-        display, ok = render_sandbox_safe_or_quarantine(result)
+        display, ok = render_simulation_safe_or_quarantine(result)
         report_path = save_report(display, result.simulation_id)
 
-        # Strategic signals from final round
-        strategic_signals = {}
-        by_id = {p.id: p for p in personas}
-        if result.rounds:
-            last = result.rounds[-1]
-            for cid, cf in last.class_flows.items():
-                p = by_id.get(cid)
-                if p and p.contributes_to_strategic_signal and cf.strategic_signal:
-                    strategic_signals[cid] = cf.strategic_signal
-
-        fingerprints_per_round = [r.fingerprints for r in result.rounds]
+        publication_log = [
+            {
+                "publication_id": pub.publication_id,
+                "author_persona_id": pub.author_persona_id,
+                "author_archetype": pub.author_archetype,
+                "content_type": pub.content_type,
+                "text": pub.text,
+                "round_idx": pub.round_idx,
+                "authority_weight": pub.authority_weight,
+                "references": pub.references,
+                "oasis_post_id": pub.oasis_post_id,
+                "likes": pub.likes,
+                "reposts": pub.reposts,
+            }
+            for pub in result.all_publications
+        ]
         class_pnl = result.compute_class_pnl()
 
         sim_id = insert_sandbox_simulation(
@@ -172,15 +178,17 @@ def create_app() -> Flask:
             cumulative_delta_pct=result.cumulative_delta_pct,
             price_trajectory=result.price_trajectory,
             class_pnl=class_pnl,
-            strategic_signals=strategic_signals or None,
+            strategic_signals=None,
             lambda_used=result.lambda_used,
             adv_used=result.adv_value_used,
             full_report_path=str(report_path),
             cost_usd=result.cost_usd,
             elapsed_seconds=result.elapsed_seconds,
             simulation_id=result.simulation_id,
-            round_fingerprints=fingerprints_per_round,
+            round_fingerprints=None,
             llm_seed=result.llm_seed,
+            publication_log=publication_log or None,
+            oasis_db_path=result.oasis_db_path,
         )
 
         return jsonify({
@@ -192,7 +200,7 @@ def create_app() -> Flask:
             "cumulative_delta_pct": result.cumulative_delta_pct,
             "price_trajectory": result.price_trajectory,
             "class_pnl": class_pnl,
-            "strategic_signals": strategic_signals or None,
+            "publication_log": publication_log,
             "lambda_used": result.lambda_used,
             "adv_used": result.adv_value_used,
             "elapsed_seconds": result.elapsed_seconds,

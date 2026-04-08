@@ -1,12 +1,22 @@
-schema_version: 2
+schema_version: 3
 market: my-market           # required: short slug for this market (ashare, us-equity, etc.)
 locale: en-US               # required: IETF language tag
 last_updated: 2026-04-08    # required: ISO date when data sources were last refreshed
 
 # ssFish persona pack template — copy this file and customize for a new market.
 # See personas/SCHEMA.md for the full field reference.
-# See personas/ashare.yaml for a polished 14-persona example.
-# See personas/us-equity-v1.yaml or personas/crude-oil-wti-v1.yaml for sketches.
+# See personas/ashare.yaml for a polished 30-entity example
+# (14 traders + 16 information entities).
+#
+# Schema v3 supports two kinds of personas:
+#   1. TRADER personas (entity_role: trader, with sandbox config) — actually
+#      place orders that flow into the Kyle price impact calculation.
+#   2. INFORMATION personas (entity_role: media | analyst | regulator |
+#      policy | kol | company_ir, no sandbox) — only publish content into
+#      the OASIS social stream. Traders read their posts via follow graph.
+#
+# A good pack covers BOTH: traders for the order book side, info entities
+# for the information ecosystem that traders read and react to.
 
 # ── Data sources (at least 1; aim for 5-10 for a polished pack) ────────
 data_sources:
@@ -20,8 +30,11 @@ data_sources:
 # ── Personas (at least 1; aim for 8-15 covering all major participant classes) ──
 personas:
 
-  - id: example_persona_id
-    archetype: Example Archetype Label
+  # ═══════════════════════════════════════════════════════════════
+  # EXAMPLE 1: a TRADER persona (has sandbox, actually trades)
+  # ═══════════════════════════════════════════════════════════════
+  - id: example_trader
+    archetype: Example Trader Archetype Label
     sub_archetype: example_sub_category    # optional
     display_name: One-line human description (capital range, age, info source)
 
@@ -40,7 +53,19 @@ personas:
     #   foreign_active | passive_buyer
     role: directional_speculator
 
+    # entity_role (Phase I addition): decides what kind of OASIS agent this is
+    entity_role: trader
+
     model: null    # null = use settings.default_model
+
+    # ── follows: who this persona reads in its OASIS feed ──
+    # List of other persona ids in the same pack. Special values:
+    #   "*"          - follows everyone (use for news aggregators only)
+    #   "__market__" - follows the synthetic price-update broadcaster
+    #                  (auto-added to all traders, don't list explicitly)
+    follows:
+      - example_news_wire
+      - example_analyst
 
     # ── Market share (must set at least one dimension) ──
     market_share:
@@ -142,4 +167,80 @@ personas:
       reaction_lag_rounds:
         type: discrete
         values: [0, 0, 1, 1, 2]  # how many rounds before this class reacts
-                                  # informational; not yet used by run_sandbox v1
+                                  # informational; not yet used by the engine
+
+    # ── Optional: this trader class also publishes (e.g., fund managers
+    # give media interviews). Skip this block for retail traders who don't
+    # publish anything.
+    publishes:
+      - content_type: research_note
+        style_hint: "季报口吻, 策略观点"
+        trigger_prob: 0.2            # 20% chance of publishing per round
+        authority_weight: 0.5
+        max_length_chars: 280
+
+
+  # ═══════════════════════════════════════════════════════════════
+  # EXAMPLE 2: an INFORMATION persona (no sandbox, only publishes)
+  # ═══════════════════════════════════════════════════════════════
+  - id: example_news_wire
+    archetype: Example Financial News Wire
+    display_name: 快讯媒体 (real-time financial news, 24/7)
+    decision_mode: discretionary
+    role: information_intermediary
+    entity_role: media          # media | news_wire (same thing)
+
+    market_share:
+      by_volume: 0.0            # info entities don't trade
+      citations:
+        - source_id: example-source-1
+          note: "info intermediary, not a trader"
+
+    # News wires typically aggregate everything — use "*"
+    follows: ["*"]
+
+    voice_prompt: |
+      Objective, short, factual news-wire tone. Report what happened
+      without giving opinions. Reference specific numbers. No advice.
+
+    publishes:
+      - content_type: news_brief
+        style_hint: "快讯口吻, 一句话, 客观陈述, 含具体数字"
+        trigger_prob: 0.6       # publishes most rounds (news wires are busy)
+        authority_weight: 0.7
+        max_length_chars: 180
+
+    # NO sandbox block — this persona doesn't trade
+
+
+  # ═══════════════════════════════════════════════════════════════
+  # EXAMPLE 3: an ANALYST persona (publishes research, no trading)
+  # ═══════════════════════════════════════════════════════════════
+  - id: example_analyst
+    archetype: Example Sell-Side Analyst
+    display_name: 卖方研究 (industry coverage analyst, buy/hold recs)
+    decision_mode: discretionary
+    role: information_intermediary
+    entity_role: analyst
+
+    market_share:
+      by_volume: 0.0
+      citations:
+        - source_id: example-source-1
+
+    follows:
+      - example_news_wire           # reads news wires
+
+    voice_prompt: |
+      Rigorous, data-driven sell-side analyst. Cites specific numbers,
+      gives reference ranges (not price targets). Tracks competitor data.
+      Uses descriptive language ("leaning constructive") not prescriptive.
+
+    publishes:
+      - content_type: research_note
+        style_hint: "卖方研究风格, 严谨, 带数据, 给参考区间"
+        trigger_prob: 0.4
+        authority_weight: 0.8
+        max_length_chars: 320
+
+    # NO sandbox block

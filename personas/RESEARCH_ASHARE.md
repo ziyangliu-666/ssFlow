@@ -9,8 +9,9 @@
 > `market_share` fields in `personas/ashare.yaml` to match. Both files
 > should always be consistent.
 >
-> Cross-reference: `docs/persona-pack-spec-v1.md §2` has the same data
-> in spec-document form. This file is the runtime / contributor reference.
+> This file is the runtime / contributor reference for A-share panel
+> composition. Update here first when public investor-structure data
+> refreshes, then update `personas/ashare.yaml` to match.
 
 ## TL;DR (the four most important numbers)
 

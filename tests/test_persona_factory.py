@@ -320,7 +320,7 @@ class TestAssembleAndEmit:
             for c in research.classes
         ]
         pack = assemble_pack(research, blocks)
-        assert pack["schema_version"] == 2
+        assert pack["schema_version"] == 3
         assert pack["market"] == "test-market"
         assert pack["locale"] == "en-US"
         assert len(pack["personas"]) == 2
