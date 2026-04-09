@@ -412,8 +412,6 @@ async function onStart () {
 .eyebrow {
   font-size: 11px;
   color: var(--ss-fg-muted);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   margin-bottom: 18px;
 }
 
