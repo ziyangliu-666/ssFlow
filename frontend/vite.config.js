@@ -39,7 +39,14 @@ export default defineConfig({
       // router path `/reports/<id>`, which otherwise got 500'd by the
       // proxy before the SPA could even boot.
       '/report/':            { target: 'http://localhost:5001', changeOrigin: true },
+      // Same trailing-slash trick: the backend timeline endpoint lives
+      // at `/simulation/<id>/timeline`. The SPA route is `/replay/<id>`,
+      // so there's no collision, but the trailing slash keeps the proxy
+      // strictly scoped to API calls.
+      '/simulation/':        { target: 'http://localhost:5001', changeOrigin: true },
       '/cost':               { target: 'http://localhost:5001', changeOrigin: true },
+      '/distill':            { target: 'http://localhost:5001', changeOrigin: true },
+      '/sandbox':            { target: 'http://localhost:5001', changeOrigin: true },
     },
   },
   build: {
