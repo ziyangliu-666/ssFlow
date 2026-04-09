@@ -421,8 +421,10 @@ def create_app() -> Flask:
         if not personas:
             return jsonify({"error": "no_resolved_personas"}), 400
 
-        # Entity graph (optional — Entity State Sandbox mode)
+        # Entity graph + instrument universe + round schedule (optional)
         entity_graph_data = payload.get("entity_graph")
+        instrument_universe_data = payload.get("instrument_universe")
+        round_schedule_data = payload.get("round_schedule")
 
         # Stash everything in the store. The actual run happens when the
         # client opens the SSE GET.
@@ -435,6 +437,8 @@ def create_app() -> Flask:
                 "seed": seed,
                 "base_personas_path": base_personas_path,
                 "entity_graph": entity_graph_data,
+                "instrument_universe": instrument_universe_data,
+                "round_schedule": round_schedule_data,
             },
             session_id=session_id,
         )
@@ -491,6 +495,26 @@ def create_app() -> Flask:
                 log.warning("Failed to rebuild entity graph, running without: %s", exc)
                 entity_graph = None
 
+        # Rebuild InstrumentUniverse from stashed data (if present)
+        instrument_universe = None
+        iu_data = sim_payload.get("instrument_universe")
+        if iu_data:
+            try:
+                from ssflow.instrument import InstrumentUniverse
+                instrument_universe = InstrumentUniverse.from_serializable(iu_data)
+            except Exception as exc:
+                log.warning("Failed to rebuild instrument universe: %s", exc)
+
+        # Rebuild RoundSchedule from stashed data (if present)
+        round_schedule = None
+        rs_data = sim_payload.get("round_schedule")
+        if rs_data:
+            try:
+                from ssflow.round_schedule import RoundSchedule
+                round_schedule = RoundSchedule.from_serializable(rs_data)
+            except Exception as exc:
+                log.warning("Failed to rebuild round schedule: %s", exc)
+
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=2000)
         # Capture the full event log in-memory so we can persist it to
         # reports/<sim_id>.events.json when the simulation finishes —
@@ -507,6 +531,8 @@ def create_app() -> Flask:
                         seed=seed,
                         event_sink=TeeSink(QueueSink(q), event_log),
                         entity_graph=entity_graph,
+                        instrument_universe=instrument_universe,
+                        round_schedule=round_schedule,
                     )
                 )
                 # Render + persist the report

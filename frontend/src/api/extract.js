@@ -20,3 +20,36 @@ export async function fetchPersonaTemplate (decisionMode = 'discretionary') {
   const r = await http.post('/personas/template', { decision_mode: decisionMode })
   return r.data
 }
+
+/**
+ * Distill: from a topic string, identify related instruments + build round schedule.
+ * Returns { instrument_universe, round_schedule }.
+ */
+export async function runDistill ({ topic, market, eventTicker, eventPrice, eventDate }) {
+  const r = await http.post('/distill', {
+    topic: topic || '',
+    market: market || 'ashare',
+    event_ticker: eventTicker || undefined,
+    event_price: eventPrice || undefined,
+    event_date: eventDate || '',
+  })
+  session.instrumentUniverse = r.data.instrument_universe
+  session.roundSchedule = r.data.round_schedule
+  return r.data
+}
+
+/**
+ * Generate sandbox: from a topic, build an EntityGraph (template-only or LLM-tuned).
+ * Returns the serialized EntityGraph.
+ */
+export async function generateSandbox ({ topic, market, currentPrice, useLlm, entityOverrides }) {
+  const r = await http.post('/sandbox/generate', {
+    topic: topic || '',
+    market: market || 'ashare',
+    current_price: currentPrice || 0,
+    use_llm: useLlm || false,
+    entity_overrides: entityOverrides || undefined,
+  })
+  session.entityGraph = r.data
+  return r.data
+}

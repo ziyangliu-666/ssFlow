@@ -2,7 +2,7 @@ import { http } from './client'
 import { session } from '../store/session'
 
 // POST the (event + personas) payload, get back a one-shot stream_id.
-export async function initSimulationStream ({ event, personas, nRounds, seed, basePersonasPath, entityGraph }) {
+export async function initSimulationStream ({ event, personas, nRounds, seed, basePersonasPath, entityGraph, instrumentUniverse, roundSchedule }) {
   const payload = {
     session_id: session.sessionId,
     event,
@@ -12,6 +12,8 @@ export async function initSimulationStream ({ event, personas, nRounds, seed, ba
     base_personas_path: basePersonasPath || 'personas/ashare.yaml',
   }
   if (entityGraph) payload.entity_graph = entityGraph
+  if (instrumentUniverse) payload.instrument_universe = instrumentUniverse
+  if (roundSchedule) payload.round_schedule = roundSchedule
   const r = await http.post('/simulate-stream/init', payload)
   return r.data
 }

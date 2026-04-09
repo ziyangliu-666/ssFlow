@@ -11,13 +11,21 @@
       @drop.prevent="onDrop"
     >
       <div class="wrap">
-        <div class="eyebrow">A-share sandbox · 群体仿真</div>
-        <h1>
-          看一条消息如何<span class="ripple">ripple</span>进一个价格<span class="period">。</span>
+        <div class="eyebrow">A 股沙盘 · 群体推演</div>
+        <h1 aria-label="一条消息，如何在市场里发酵。">
+          一条消息，如何在市场里<span class="verb-slot">
+            <transition name="rip">
+              <span
+                class="accent-verb"
+                :key="currentVerb"
+                aria-live="polite"
+              >{{ currentVerb }}</span>
+            </transition>
+          </span><span class="period">。</span>
         </h1>
         <p class="sub">
-          拖入研报 / 新闻 / 财报，写下你想跟踪的走势。ssFlow 会抽出要研究的对象、推荐相关角色，
-          分轮推演群体行为如何把消息折叠进价格。
+          拖入研报、新闻、财报，写下你想跟踪的走势。ssFlow 会抽出要研究的对象、
+          推荐相关角色，逐轮推演群体行为如何把消息折价成一段行情。
         </p>
 
         <div class="composer" :class="{ focused: isFocused, 'drag-over': isDragOver }">
@@ -105,8 +113,8 @@
               :disabled="!canSubmit || loading"
               @click="onStart"
             >
-              <span v-if="!loading">RUN EXTRACT →</span>
-              <span v-else>EXTRACTING…</span>
+              <span v-if="!loading">开始抽取 →</span>
+              <span v-else>抽取中…</span>
             </button>
           </div>
         </div>
@@ -120,20 +128,19 @@
             <div class="err-title">{{ errorTitle }}</div>
             <div class="err-detail">{{ errorMessage }}</div>
             <div v-if="errorIs401" class="err-hint">
-              <em>Set your auth password</em> via the <strong>Settings</strong>
-              button at the bottom of the sidebar, then try again.
+              去<strong>设置</strong>填一下<em>认证密码</em>（左侧边栏底部），再试一次。
             </div>
           </div>
           <button
             class="err-dismiss"
             type="button"
-            aria-label="Dismiss error"
+            aria-label="关闭错误提示"
             @click="dismissError"
           >×</button>
         </div>
 
         <div class="examples">
-          <div class="examples-h">Try an example</div>
+          <div class="examples-h">试试这些例子</div>
           <div class="examples-list">
             <button
               v-for="(ex, i) in examples"
@@ -173,6 +180,14 @@ const loading = ref(false)
 const status = ref('')
 const errorStatus = ref(0)  // HTTP status of the last failure, 0 if none
 
+// Rotating accent verb — the signature gesture on Home. Cycles every
+// 2.8s through a native A-share editorial verb pool. Paused entirely
+// when the user has prefers-reduced-motion set.
+const verbs = ['发酵', '消化', '兑现', '搅动', '推演']
+const verbIdx = ref(0)
+const currentVerb = computed(() => verbs[verbIdx.value % verbs.length])
+let verbTimer = null
+
 const placeholder = '描述你想跟踪的市场走势，或拖入研报 / 新闻 / 财报 PDF…\n\n例：BYD Q1 2026 财报营收 +18% beat 但毛利率 -2.3pp miss，想看市场会怎么反应'
 
 const examples = [
@@ -197,11 +212,11 @@ const canSubmit = computed(() => {
 const errorMessage = computed(() => session.lastError || '')
 const errorIs401 = computed(() => errorStatus.value === 401)
 const errorTitle = computed(() => {
-  if (errorIs401.value) return 'Authentication failed'
-  if (errorStatus.value === 429) return 'Rate limited'
-  if (errorStatus.value >= 500) return 'Server error'
-  if (errorStatus.value === 0 && errorMessage.value) return 'Network error'
-  if (errorMessage.value) return 'Request failed'
+  if (errorIs401.value) return '认证失败'
+  if (errorStatus.value === 429) return '请求过多'
+  if (errorStatus.value >= 500) return '服务端错误'
+  if (errorStatus.value === 0 && errorMessage.value) return '网络错误'
+  if (errorMessage.value) return '请求失败'
   return ''
 })
 
@@ -217,10 +232,17 @@ onMounted(() => {
   }
   // ⌘K / Ctrl+K from anywhere on the page focuses the composer.
   window.addEventListener('keydown', onGlobalKeydown)
+  // Rotating verb — skip entirely if the user has reduced-motion on,
+  // so we don't emit unnecessary DOM churn for motion-sensitive users.
+  const mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)')
+  if (!mq || !mq.matches) {
+    verbTimer = setInterval(() => { verbIdx.value++ }, 2800)
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  if (verbTimer) clearInterval(verbTimer)
 })
 
 function onGlobalKeydown (e) {
@@ -298,10 +320,10 @@ async function onStart () {
 
     await ensureSession()
     if (files.value.length > 0) {
-      status.value = 'uploading files…'
+      status.value = '上传文件中…'
       await uploadFiles(files.value)
     }
-    status.value = 'analyzing… (LLM classify + synthesize)'
+    status.value = '分析中…（LLM 分类 + 合成）'
 
     // Strip the detected URLs out of the prompt text we send to the backend
     // (they go in the `urls` field instead). Keep the remaining narrative.
@@ -314,7 +336,29 @@ async function onStart () {
       prompt: strippedPrompt,
       urls,
     })
-    status.value = 'done. opening setup…'
+
+    // After extraction, automatically distill the instrument universe
+    // and generate the entity sandbox. These run in parallel.
+    const ep = session.eventProposal || {}
+    const topic = ep.event_text || strippedPrompt
+    const ticker = ep.ticker || ''
+    const price = ep.current_price || 0
+    const market = ep.market || 'ashare'
+    const eventDate = ep.event_date || ''
+
+    status.value = '提炼关联标的…'
+    try {
+      const { runDistill, generateSandbox } = await import('../api/extract')
+      await Promise.all([
+        runDistill({ topic, market, eventTicker: ticker, eventPrice: price, eventDate }),
+        generateSandbox({ topic, market, currentPrice: price }),
+      ])
+    } catch (distillErr) {
+      // Non-fatal: if distill/sandbox fails, proceed without them
+      console.warn('Distill/sandbox failed (non-fatal):', distillErr)
+    }
+
+    status.value = '完成，进入确认…'
     router.push({ name: 'Setup' })
   } catch (err) {
     console.error(err)
@@ -331,7 +375,7 @@ async function onStart () {
         err?.response?.data?.detail ||
         err?.response?.data?.error ||
         err?.message ||
-        'request failed'
+        '请求失败'
     }
   } finally {
     loading.value = false
@@ -381,15 +425,56 @@ h1 {
   letter-spacing: -0.01em;
   margin-bottom: 14px;
 }
-h1 .ripple {
-  font-family: 'Fraunces', Georgia, serif;
-  font-style: italic;
-  font-weight: 500;
-  color: var(--ss-accent);
-  font-size: 0.95em;
+/* Signature gesture — one Noto Serif SC headline with one orange
+   verb inline. We use weight 600 + color for emphasis (no italic —
+   synthesized italic on CJK is ugly). The verb rotates through a
+   native A-share vocabulary pool; see the component script. */
+
+/* The verb sits inside a fixed-size "slot" so the slot-machine
+   transition (incoming verb slides up from below, outgoing slides
+   up and out the top) doesn't shift the rest of the headline. All
+   verbs in the pool are exactly 2 CJK characters wide, so a 2-char
+   slot is enough. overflow:hidden clips the verbs as they slide. */
+h1 .verb-slot {
+  display: inline-block;
+  position: relative;
+  width: 2.16em;          /* 2 CJK chars at the headline font-size */
+  height: 1.18em;          /* matches h1 line-height */
+  vertical-align: baseline;
   margin: 0 0.08em;
+  overflow: hidden;
+}
+h1 .accent-verb {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
+  color: var(--ss-accent);
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  white-space: nowrap;
+  /* keep the baseline aligned with the surrounding headline */
+  line-height: 1.18;
 }
 h1 .period { color: var(--ss-fg-muted); }
+
+/* Slot-machine slide: outgoing verb translates up & out the top,
+   incoming verb translates up from the bottom into the slot. Both
+   are absolutely positioned inside .verb-slot so they overlap during
+   the transition (no out-in mode — both elements are present). */
+.rip-enter-active,
+.rip-leave-active {
+  transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.5s ease;
+}
+.rip-enter-from { transform: translateY(100%); opacity: 0; }
+.rip-leave-to   { transform: translateY(-100%); opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .rip-enter-active,
+  .rip-leave-active {
+    transition: none;
+  }
+  .rip-enter-from { transform: none; opacity: 1; }
+  .rip-leave-to   { transform: none; opacity: 1; }
+}
 
 .sub {
   font-size: 14px;
@@ -610,8 +695,9 @@ h1 .period { color: var(--ss-fg-muted); }
   line-height: 1.5;
 }
 .err-hint em {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-style: normal;
+  font-weight: 600;
   color: var(--ss-accent);
 }
 .err-hint strong { font-weight: 600; }

@@ -20,6 +20,83 @@
           </div>
         </div>
 
+        <!-- INSTRUMENT UNIVERSE (if distilled) -->
+        <section v-if="instrumentUniverse" class="universe-section">
+          <div class="section-h">
+            <span class="t">标的宇宙</span>
+            <span class="tag">{{ universeInstruments.length }} 个标的</span>
+          </div>
+          <div class="universe-grid">
+            <div
+              v-for="inst in universeInstruments"
+              :key="inst.ticker"
+              class="inst-card"
+              :class="{ primary: inst.relationship === 'primary' }"
+            >
+              <div class="inst-h">
+                <span class="inst-name">{{ inst.name }}</span>
+                <span class="inst-ticker mono">{{ inst.ticker }}</span>
+              </div>
+              <div class="inst-meta">
+                <span class="inst-rel">{{ relLabel(inst.relationship) }}</span>
+                <span class="inst-price mono">{{ inst.price_currency || '¥' }}{{ inst.current_price?.toFixed(2) || '—' }}</span>
+              </div>
+              <div v-if="inst.kline_30d && inst.kline_30d.length" class="inst-kline">
+                <svg :viewBox="`0 0 120 30`" preserveAspectRatio="none" class="mini-chart">
+                  <polyline
+                    :points="miniKline(inst.kline_30d)"
+                    fill="none"
+                    :stroke="inst.relationship === 'primary' ? 'var(--ss-accent)' : 'var(--ss-fg-muted)'"
+                    stroke-width="1.2"
+                    vector-effect="non-scaling-stroke"
+                  />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ENTITY GRAPH (if generated) -->
+        <section v-if="entityGraph && entityGraph.entities" class="entity-section">
+          <div class="section-h">
+            <span class="t">实体沙盘</span>
+            <span class="tag">{{ Object.keys(entityGraph.entities).length }} 个实体</span>
+          </div>
+          <div class="entity-grid">
+            <div
+              v-for="(ent, eid) in entityGraph.entities"
+              :key="eid"
+              class="ent-card"
+            >
+              <div class="ent-h">
+                <span class="ent-name">{{ ent.display_name }}</span>
+                <span class="ent-type">{{ entTypeLabel(ent.entity_type) }}</span>
+              </div>
+              <div class="ent-state">
+                <div v-for="(val, key) in ent.state" :key="key" class="state-row">
+                  <span class="var-label">{{ (ent.state_labels && ent.state_labels[key]) || key }}</span>
+                  <span class="var-value mono">{{ typeof val === 'number' ? (val === Math.floor(val) ? val : val.toFixed(2)) : val }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ROUND SCHEDULE (if generated) -->
+        <section v-if="roundSchedule && roundSchedule.rounds" class="schedule-section">
+          <div class="section-h">
+            <span class="t">时间轴</span>
+            <span class="tag">{{ roundSchedule.rounds.length }} 轮</span>
+          </div>
+          <div class="schedule-row">
+            <span
+              v-for="(rd, i) in roundSchedule.rounds"
+              :key="rd.id"
+              class="round-chip mono"
+            >{{ rd.label }}</span>
+          </div>
+        </section>
+
         <div class="cols">
           <!-- EVENT -->
           <section class="event-col">
@@ -111,6 +188,51 @@ const seed = ref(42)
 const loading = ref(false)
 const status = ref('')
 const activeFilter = ref('all')
+
+// Entity sandbox + multi-instrument data from session
+const instrumentUniverse = computed(() => session.instrumentUniverse || null)
+const entityGraph = computed(() => session.entityGraph || null)
+const roundSchedule = computed(() => session.roundSchedule || null)
+
+const universeInstruments = computed(() => {
+  if (!instrumentUniverse.value) return []
+  const u = instrumentUniverse.value
+  const all = [u.primary, ...(u.related || [])]
+  return all.filter(Boolean)
+})
+
+// If we have a round schedule, use its round count as default
+onMounted(() => {
+  if (session.roundSchedule && session.roundSchedule.rounds) {
+    nRounds.value = session.roundSchedule.rounds.length
+  }
+})
+
+const REL_LABELS = {
+  primary: '主体', supplier: '供应商', competitor: '竞品', customer: '客户',
+  sector_etf: '板块ETF', upstream: '上游', downstream: '下游', peer: '同行',
+  opposing: '对立', index: '指数', other: '其他',
+}
+function relLabel (r) { return REL_LABELS[r] || r }
+
+const ENT_TYPE_LABELS = {
+  company: '公司', supplier: '供应商', dealer: '经销商', regulator: '监管',
+  trader_class: '交易者', government: '政府', other: '市场环境', custom: '自定义',
+}
+function entTypeLabel (t) { return ENT_TYPE_LABELS[t] || t }
+
+function miniKline (bars) {
+  if (!bars.length) return ''
+  const closes = bars.map(b => b.close || 0)
+  const min = Math.min(...closes)
+  const max = Math.max(...closes)
+  const span = (max - min) || 1
+  return closes.map((c, i) => {
+    const x = (i / Math.max(1, closes.length - 1)) * 120
+    const y = 28 - ((c - min) / span) * 26
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
 
 // One-way sync on mount: copy the session state into local editable refs.
 onMounted(() => {
@@ -216,6 +338,8 @@ async function onStart () {
       seed: seed.value,
       basePersonasPath: session.basePersonasPath,
       entityGraph: session.entityGraph || undefined,
+      instrumentUniverse: session.instrumentUniverse || undefined,
+      roundSchedule: session.roundSchedule || undefined,
     })
     status.value = '正在连接 stream…'
     // Remember the stream id so the rail's Simulate step can navigate
@@ -397,6 +521,98 @@ async function onStart () {
   font-size: 12px;
   border: 1px dashed var(--ss-line);
   border-radius: 8px;
+}
+
+/* Instrument Universe */
+.universe-section, .entity-section, .schedule-section {
+  margin-bottom: 24px;
+}
+.universe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.inst-card {
+  border: 1px solid var(--ss-line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.inst-card.primary {
+  border-left: 3px solid var(--ss-accent);
+}
+.inst-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+.inst-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+.inst-ticker { font-size: 11px; color: var(--ss-fg-faint); }
+.inst-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.inst-rel {
+  color: var(--ss-fg-muted);
+  font-size: 10px;
+}
+.inst-price { color: var(--ss-fg); }
+.inst-kline { height: 30px; }
+.mini-chart { width: 100%; height: 30px; display: block; }
+
+/* Entity sandbox */
+.entity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.ent-card {
+  border: 1px solid var(--ss-line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.ent-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.ent-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ent-type { font-size: 10px; color: var(--ss-fg-faint); text-transform: uppercase; }
+.ent-state {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+}
+.state-row { display: contents; }
+.var-label { font-size: 11px; color: var(--ss-fg-muted); }
+.var-value { font-size: 11px; text-align: right; color: var(--ss-fg); }
+
+/* Round schedule */
+.schedule-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.round-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--ss-line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  background: #fff;
 }
 
 /* Bottom bar */
