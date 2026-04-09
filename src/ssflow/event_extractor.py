@@ -33,6 +33,7 @@ from typing import Any
 
 from .event import VALID_EVENT_TYPES, Event
 from .llm_client import JsonChatResult, chat_json
+from .market_data import MarketQuote, fetch_market_quote
 from .persona_factory import (
     KNOWN_MARKETS,
     fetch_corpus,
@@ -356,6 +357,47 @@ async def extract_event(
         classification.get("event_type"),
     )
 
+    # Stage 0a.5: authoritative market data lookup
+    #
+    # Before firing off the (slow, hit-or-miss) web research in Stage 0b,
+    # query a real market data API for the current price + 20-day ADV
+    # of the classified ticker. For A-share this hits Sina Finance; for
+    # US equity / HK / futures / crypto it hits yfinance.
+    #
+    # The result is treated as authoritative — Stage 0c's synthesize
+    # prompt no longer has to guess prices from scraped news, which was
+    # the #1 reason current_price came back null. Web research still
+    # runs for context (consensus, sector, recent action) but the
+    # numeric fields are locked in here.
+    market_quote: MarketQuote | None = None
+    ticker_for_quote = classification.get("ticker") or ""
+    market_for_quote = classification.get("market") or ""
+    if ticker_for_quote or market_for_quote:
+        try:
+            market_quote = await fetch_market_quote(
+                market_for_quote,
+                ticker_for_quote,
+                instrument_hint=classification.get("instrument"),
+            )
+            if market_quote and market_quote.is_populated:
+                log.info(
+                    "[extract] market data: %s %s → price=%.4f adv=%.0f (%s) via %s",
+                    market_quote.market, market_quote.ticker,
+                    market_quote.current_price, market_quote.adv_value,
+                    market_quote.price_currency, market_quote.source,
+                )
+            else:
+                log.info(
+                    "[extract] market data: no authoritative quote for "
+                    "%s/%s (quote=%s)",
+                    market_for_quote, ticker_for_quote, market_quote,
+                )
+        except Exception as exc:
+            log.warning(
+                "[extract] market data fetch crashed: %s", exc,
+            )
+            market_quote = None
+
     # Stage 0b: research (or skip if caller supplied a corpus)
     if pre_fetched_corpus is not None:
         sources = [
@@ -390,6 +432,40 @@ async def extract_event(
     confidence["prices"] = synth.get("confidence_prices", 0.0)
     confidence["context"] = synth.get("confidence_context", 0.0)
 
+    # Price + ADV priority: real market API > LLM synthesis > None.
+    # If the authoritative quote populated both fields, use them and
+    # bump price confidence to 1.0. Otherwise fall back to whatever
+    # the synthesize stage dug out of the scraped corpus.
+    if market_quote and market_quote.current_price and market_quote.current_price > 0:
+        final_price = float(market_quote.current_price)
+        price_source = f"api:{market_quote.source}"
+        confidence["prices"] = 1.0
+    else:
+        final_price = synth.get("current_price")
+        price_source = "llm:synth"
+
+    if market_quote and market_quote.adv_value and market_quote.adv_value > 0:
+        final_adv = float(market_quote.adv_value)
+        adv_source = f"api:{market_quote.source}"
+    else:
+        final_adv = synth.get("adv_value")
+        adv_source = "llm:synth"
+
+    # Currency: market_quote wins (it was set by the API), else synth,
+    # else classification hint.
+    final_currency = (
+        (market_quote.price_currency if market_quote and market_quote.current_price else None)
+        or synth.get("currency_used")
+        or classification.get("price_currency", "USD")
+    )
+
+    warnings = list(synth.get("warnings", []))
+    if market_quote and market_quote.is_populated:
+        warnings.append(
+            f"Price + ADV sourced from {market_quote.source} "
+            f"(last trade {market_quote.last_trade_date or 'unknown'})."
+        )
+
     proposal = EventProposal(
         ticker=ticker,
         instrument=instrument,
@@ -400,21 +476,23 @@ async def extract_event(
         prior_consensus=synth.get("prior_consensus", ""),
         recent_price_action=synth.get("recent_price_action", ""),
         sector_context=synth.get("sector_context", ""),
-        current_price=synth.get("current_price"),
-        adv_value=synth.get("adv_value"),
-        price_currency=synth.get("currency_used") or classification.get("price_currency", "USD"),
+        current_price=final_price,
+        adv_value=final_adv,
+        price_currency=final_currency,
         confidence=confidence,
         suggested_personas_path=synth.get("suggested_personas_path"),
         extracted_at=today,
         raw_input=raw_input,
         sources_consulted=[s["url"] for s in sources],
-        extraction_warnings=synth.get("warnings", []),
+        extraction_warnings=warnings,
     )
 
     log.info(
-        "[extract] DONE: %s · %s · price=%s adv=%s confidence_prices=%.2f",
+        "[extract] DONE: %s · %s · price=%s (src=%s) adv=%s (src=%s) "
+        "confidence_prices=%.2f",
         proposal.market, proposal.instrument,
-        proposal.current_price, proposal.adv_value,
+        proposal.current_price, price_source,
+        proposal.adv_value, adv_source,
         confidence.get("prices", 0.0),
     )
     return proposal

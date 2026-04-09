@@ -78,17 +78,17 @@ def _ensure_upload_root() -> Path:
 
 
 def _spa_root() -> Path | None:
-    """Pick the directory to serve as the web frontend root.
+    """Return the Vite build output directory, or None if not built.
 
-    Prefers `frontend/dist` (Vite build output) when present, falls back
-    to the legacy `web/` directory. Returns None if neither exists.
+    The legacy hand-written `web/` directory was removed in 2026-04-09.
+    If `frontend/dist/index.html` doesn't exist, the user is expected
+    to either run `npx vite` in `frontend/` (dev mode on :5173) or
+    `npm run build` to produce a fresh `frontend/dist` (prod mode served
+    directly by Flask on :5001).
     """
     dist = settings.project_root / "frontend" / "dist"
     if (dist / "index.html").exists():
         return dist
-    legacy = settings.project_root / "web"
-    if (legacy / "index.html").exists():
-        return legacy
     return None
 
 

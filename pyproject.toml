@@ -22,6 +22,17 @@ dependencies = [
     # Provides the social ecosystem layer (follow graph + feed + 21 social actions).
     # Our trading layer sits on top via oasis_engine.py.
     "camel-oasis>=0.2.5",
+    # Document ingestion for the new /upload + /extract endpoints.
+    # pymupdf handles PDFs (multi-column reports); trafilatura extracts the
+    # main body from HTML / URLs (strips nav + ads + comments).
+    "pymupdf>=1.24.0",
+    "trafilatura>=1.12.0",
+    # Market data fetchers (market_data.py) — Sina Finance (hit directly
+    # via httpx, no library) for A-share; yfinance for US equity, HK,
+    # crypto, commodities. akshare stays available as a fallback for
+    # exotic A-share lookups but is not imported on the hot path.
+    "yfinance>=0.2.40",
+    "akshare>=1.12.0",
 ]
 
 [project.optional-dependencies]
