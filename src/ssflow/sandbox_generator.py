@@ -123,12 +123,15 @@ def generate_sandbox(
 
     # ── Step 1: LLM identifies real entities ──
     slots_desc = _format_slots(template)
-    identify_response = chat_json_sync(
-        system=_IDENTIFY_SYSTEM,
-        user=_IDENTIFY_USER_TEMPLATE.format(
+    _raw = chat_json_sync([
+        {"role": "system", "content": _IDENTIFY_SYSTEM},
+        {"role": "user", "content": _IDENTIFY_USER_TEMPLATE.format(
             topic=topic, market=market, slots_description=slots_desc,
-        ),
-    )
+        )},
+    ])
+    identify_response = _raw.parsed if hasattr(_raw, 'parsed') else _raw
+    if not isinstance(identify_response, dict):
+        identify_response = {}
 
     entity_map = identify_response.get("entities", {})
     log.info("Sandbox generator: identified %d entities", len(entity_map))
@@ -276,15 +279,17 @@ def _tune_config(
         ensure_ascii=False, indent=2,
     )
 
-    return chat_json_sync(
-        system=_TUNE_SYSTEM,
-        user=_TUNE_USER_TEMPLATE.format(
+    _raw = chat_json_sync([
+        {"role": "system", "content": _TUNE_SYSTEM},
+        {"role": "user", "content": _TUNE_USER_TEMPLATE.format(
             topic=topic,
             entities_json=entities_json,
             flows_json=flows_json,
             thresholds_json=thresholds_json,
-        ),
-    )
+        )},
+    ])
+    result = _raw.parsed if hasattr(_raw, 'parsed') else _raw
+    return result if isinstance(result, dict) else {}
 
 
 def _apply_tune_overrides(

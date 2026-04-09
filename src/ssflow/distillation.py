@@ -85,7 +85,13 @@ async def distill(
         user_prompt = f"事件主题: {topic}\n市场: {market}\n请识别主体标的和关联标的。"
 
     try:
-        llm_result = chat_json_sync(system=_DISTILL_SYSTEM, user=user_prompt)
+        llm_response = chat_json_sync([
+            {"role": "system", "content": _DISTILL_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ])
+        llm_result = llm_response.parsed if hasattr(llm_response, 'parsed') else llm_response
+        if not isinstance(llm_result, dict):
+            llm_result = {}
     except Exception as exc:
         log.warning("Distillation LLM call failed: %s", exc)
         llm_result = {}
