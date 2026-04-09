@@ -573,7 +573,7 @@ async function onStart () {
   background: #fff;
 }
 .inst-card.primary {
-  border-left: 3px solid var(--ss-accent);
+  border-color: var(--ss-accent);
 }
 .inst-h {
   display: flex;

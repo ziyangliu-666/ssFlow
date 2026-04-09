@@ -452,7 +452,7 @@ function statusClass (s) {
   border: 1px solid var(--ss-line);
   background: #fff;
   border-radius: 8px;
-  border-left: 3px solid var(--ss-accent);
+  border-top: 2px solid var(--ss-accent);
 }
 .ctx-title {
   font-family: 'Noto Serif SC', serif;

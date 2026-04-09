@@ -550,9 +550,9 @@ onMounted(() => {
 .state .auth-hint {
   margin-top: 14px;
   padding: 12px 14px;
-  border-left: 3px solid var(--ss-accent);
   background: var(--ss-accent-soft);
-  border-radius: 0 6px 6px 0;
+  border: 1px solid var(--ss-accent);
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.6;
   color: var(--ss-fg);
@@ -786,9 +786,8 @@ onMounted(() => {
 .rnd-pill.on .rp-delta.bad { color: #fff; opacity: 0.9; }
 
 .rnd-detail {
-  border: 1px solid var(--ss-line);
-  border-left: 3px solid var(--ss-accent);
-  border-radius: 0 8px 8px 0;
+  border: 1px solid var(--ss-accent);
+  border-radius: 8px;
   background: #fff;
   padding: 16px 18px;
 }
@@ -1046,7 +1045,7 @@ onMounted(() => {
 }
 
 .report-body :deep(blockquote) {
-  border-left: 2px solid var(--ss-accent);
+  border-left: 2px solid var(--ss-line-strong);
   padding: 4px 0 4px 18px;
   margin: 18px 0;
   font-family: 'Noto Serif SC', serif;

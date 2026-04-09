@@ -97,9 +97,9 @@ function formatVal (v) {
   padding: 10px 14px;
   position: relative;
 }
-.entity-card.type-company { border-left: 3px solid var(--ss-accent); }
-.entity-card.type-trader { border-left: 3px solid var(--ss-fg-muted); }
-.entity-card.type-other { border-left: 3px solid var(--ss-line-strong); }
+.entity-card.type-company { border-color: var(--ss-accent); }
+.entity-card.type-trader { border-color: var(--ss-fg-muted); }
+.entity-card.type-other { border-color: var(--ss-line-strong); }
 
 .entity-h {
   display: flex;

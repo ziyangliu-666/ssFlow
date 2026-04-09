@@ -656,7 +656,7 @@ h1 .period { color: var(--ss-fg-muted); }
   gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--ss-bad);
-  border-left: 3px solid var(--ss-bad);
+  border-color: var(--ss-bad);
   background: #fbecec;
   border-radius: 8px;
 }

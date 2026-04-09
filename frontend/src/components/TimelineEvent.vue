@@ -316,7 +316,7 @@ function priceDeltaClass (v) {
   margin-right: 4px;
 }
 .threshold-line {
-  border-left: 3px solid var(--ss-accent);
+  border-left: 2px solid var(--ss-line-strong);
   padding-left: 10px;
 }
 

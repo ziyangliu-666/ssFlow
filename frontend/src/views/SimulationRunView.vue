@@ -589,11 +589,10 @@ onBeforeUnmount(() => {
 /* Error recovery panel (replaces the price/flow panels when
    phase === 'error'). Dignified state with concrete actions. */
 .err-panel {
-  border: 1px solid var(--ss-line);
-  border-left: 3px solid var(--ss-bad);
+  border: 1px solid var(--ss-bad);
   background: #fff;
   padding: 18px 18px 16px;
-  border-radius: 0 8px 8px 0;
+  border-radius: 8px;
   margin-top: 6px;
 }
 .err-panel .err-body {
