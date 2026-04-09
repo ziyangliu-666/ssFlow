@@ -798,8 +798,8 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 .control-bar .ctl {
-  width: 32px;
-  height: 32px;
+  min-width: 44px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

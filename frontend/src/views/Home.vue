@@ -587,8 +587,8 @@ h1 .period { color: var(--ss-fg-muted); }
   padding: 10px 12px 12px 12px;
 }
 .tool {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
