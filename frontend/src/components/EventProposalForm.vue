@@ -1,50 +1,50 @@
 <template>
   <div class="form">
     <div class="field">
-      <label>INSTRUMENT</label>
+      <label>标的</label>
       <input v-model="local.instrument" />
     </div>
 
     <div class="two">
       <div class="field">
-        <label>TICKER</label>
+        <label>代码</label>
         <input v-model="local.ticker" />
       </div>
       <div class="field">
-        <label>MARKET</label>
+        <label>市场</label>
         <input v-model="local.market" />
       </div>
     </div>
 
     <div class="two">
       <div class="field">
-        <label>EVENT TYPE</label>
+        <label>事件类型</label>
         <input v-model="local.event_type" />
       </div>
       <div class="field">
-        <label>DATE (YYYY-MM-DD)</label>
+        <label>日期 (YYYY-MM-DD)</label>
         <input v-model="local.event_date" />
       </div>
     </div>
 
     <div class="two">
       <div class="field">
-        <label>CURRENT PRICE</label>
+        <label>现价</label>
         <input v-model.number="local.current_price" type="number" step="0.01" />
       </div>
       <div class="field">
-        <label>CURRENCY</label>
+        <label>币种</label>
         <input v-model="local.price_currency" />
       </div>
     </div>
 
     <div class="field">
-      <label>ADV (same currency as price)</label>
+      <label>日均成交额 (同币种)</label>
       <input v-model.number="local.adv_value" type="number" />
     </div>
 
     <div class="field">
-      <label>EVENT TEXT</label>
+      <label>事件描述</label>
       <textarea v-model="local.event_text" rows="3" />
     </div>
 
@@ -53,20 +53,20 @@
       class="more-toggle"
       @click="moreOpen = !moreOpen"
     >
-      {{ moreOpen ? '− 收起上下文' : '+ 上下文（consensus / price action / sector）' }}
+      {{ moreOpen ? '− 收起上下文' : '+ 补充上下文（市场共识 / 近期走势 / 板块）' }}
     </button>
 
     <div v-if="moreOpen" class="more-block">
       <div class="field">
-        <label>PRIOR CONSENSUS</label>
+        <label>市场共识</label>
         <textarea v-model="local.prior_consensus" rows="2" />
       </div>
       <div class="field">
-        <label>RECENT PRICE ACTION</label>
+        <label>近期走势</label>
         <textarea v-model="local.recent_price_action" rows="2" />
       </div>
       <div class="field">
-        <label>SECTOR CONTEXT</label>
+        <label>板块背景</label>
         <textarea v-model="local.sector_context" rows="2" />
       </div>
     </div>

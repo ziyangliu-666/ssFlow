@@ -18,7 +18,7 @@
           class="title-edit"
           @click.stop
         />
-        <h3 v-else class="archetype">{{ local.archetype || '(unnamed)' }}</h3>
+        <h3 v-else class="archetype">{{ local.archetype || '(未命名)' }}</h3>
         <input
           v-if="expanded"
           v-model="local.display_name"
@@ -28,11 +28,11 @@
         <span v-else class="display-name">{{ local.display_name }}</span>
       </div>
       <span class="count-chip" v-if="isTrader">×{{ local.instance_count || 0 }}</span>
-      <span class="count-chip" v-else>info</span>
+      <span class="count-chip" v-else>信息源</span>
       <button
         class="x"
         type="button"
-        :aria-label="`Remove ${local.archetype || 'persona'}`"
+        :aria-label="`移除 ${local.archetype || '角色'}`"
         @click.stop="$emit('remove')"
       >×</button>
     </header>
@@ -49,21 +49,21 @@
     <div v-if="expanded" class="body" @click.stop>
       <div v-if="isTrader" class="row3">
         <label>
-          <span>INSTANCE COUNT</span>
+          <span>实例数</span>
           <input v-model.number="local.instance_count" type="number" min="1" />
         </label>
         <label>
-          <span>资金量 (CNY median)</span>
+          <span>资金量 (CNY 中位数)</span>
           <input v-model.number="local.capital_median_cny" type="number" min="0" />
         </label>
         <label>
-          <span>初始持仓 prob (0–1)</span>
+          <span>初始持仓概率 (0–1)</span>
           <input v-model.number="local.prob_holding" type="number" min="0" max="1" step="0.05" />
         </label>
       </div>
 
       <label class="block">
-        <span>VOICE PROMPT</span>
+        <span>语气提示</span>
         <textarea v-model="local.voice_prompt" rows="6" />
       </label>
     </div>

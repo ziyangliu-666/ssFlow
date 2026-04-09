@@ -50,6 +50,22 @@ Always cross-reference these when implementing. They are the visual contract.
 All four HTML files are standalone — open any of them in a browser to see
 the intended layout at 1:1 fidelity.
 
+## Voice — zh-primary, native, not translated
+
+The product ships **Chinese-primary for all UI chrome.** Audience is
+A-share, CNY, Chinese personas, Chinese examples, Chinese extracted
+reports. Headlines, labels, buttons, empty states, error banners,
+filter chips, footer disclaimers — all Chinese.
+
+**Native, not translated.** Write each language from scratch using
+native vocabulary and idiom. Do NOT direct-translate English
+metaphors into Chinese. The zh and en headlines on the same page can
+say completely different things as long as both express the intent.
+
+**Leave in Latin script:** tickers (`BYD`, `300750`), prices (`¥390.80`),
+percentages (`+56.69%`), dates (`2026-04-09`), simulation IDs, small
+domain-symbol labels (`ADV`, `λ`), and the `ssFlow` brand mark.
+
 ## Typography roles
 
 Four type families, each with a single job. Do not cross the streams.
@@ -88,20 +104,52 @@ brand mark in the sidebar + the one headline accent word is fine (they're in
 different visual zones). A page with an orange button + orange active step +
 orange brand + orange text accent is over-saturated — pick one loud use.
 
-## The signature gesture — italic colored word inside a headline
+## The signature gesture — colored accent word inside a headline
 
 This is ssFlow's visual fingerprint. Every page has one Noto Serif SC headline
-with exactly one Fraunces italic orange word embedded in it:
+with exactly one orange accent word embedded in it. The product ships
+Chinese-primary (see "Voice" below), so the accent is a **Noto Serif SC
+weight-600 character in `--ss-accent` orange** — no italic, because
+synthesized italic on CJK looks bad. Fraunces italic is reserved for
+Latin-only accents (the `ssFlow` brand mark, small eyebrow text, and
+number callouts like `*-3.5%*`).
 
 | Page | Headline |
 |---|---|
-| Home | 看一条消息如何 *ripple* 进一个价格。 |
-| Setup | Confirm what to *simulate*. |
-| Run | Watching it *ripple*. |
-| Report | A sharp miss on margins, absorbed into a *-3.5%* day. |
+| Home | 一条消息，如何在市场里 *发酵*。 |
+| Setup | 确认要 *推演* 的事件。 |
+| Run | 看它 *发酵*。 |
+| Replay | 重播 *消化*。 |
+| Report | 业绩端利空，被市场折价 *-3.5%* 吸收。 |
+
+**Rotating verb pool.** On Home, Run, and Replay, the accent word cycles
+every 2.8s through a native A-share editorial pool:
+`发酵 → 消化 → 兑现 → 搅动 → 推演`. All five are 2-character verbs so
+the layout is stable by construction. The cycle is disabled entirely
+under `prefers-reduced-motion`. Implementation: `<transition
+mode="out-in">` with `.rip-enter-*` + `.rip-leave-*` fade/slide.
 
 When you write a new page, follow the pattern. Pick the one word or number
-that carries the page's meaning and set it in Fraunces italic orange.
+that carries the page's meaning and set it in the accent class (Noto
+Serif SC 600 + `--ss-accent`, or Fraunces italic + `--ss-accent` if the
+accent is a Latin number or the brand).
+
+### English reference pool (not shipped)
+
+If an English surface is ever added (i18n toggle, global landing page,
+developer docs), use this pool as the canonical equivalent. It is NOT
+a translation of the zh pool — both are written natively in their
+language. EN uses Fraunces italic as the accent typography.
+
+| Page | Headline |
+|---|---|
+| Home | Watch a headline *ripple* into a price. |
+| Setup | Confirm what to *simulate*. |
+| Run | Watching it *ripple*. |
+| Replay | Replay the *ripple*. |
+| Report | A sharp miss on margins, absorbed into a *-3.5%* day. |
+
+**Rotating verb pool (EN):** `ripple → fold → bleed → echo → cascade`.
 
 ## Layout — persistent left sidebar
 
@@ -173,7 +221,8 @@ before being sent to `/extract` (they go in the `urls` field instead).
 
 Checklist:
 - [ ] Wrap it in a flex container alongside `<WorkflowRail />`
-- [ ] Pick ONE headline with ONE Fraunces italic orange word
+- [ ] Pick ONE headline with ONE orange accent word (Noto Serif SC 600
+      for a CJK verb, Fraunces italic for a Latin number / the brand)
 - [ ] Use Noto Serif SC for CJK headings, Inter for body, JetBrains Mono for
       numbers — no exceptions
 - [ ] No topbar with a `STEP` tag — the rail already does that

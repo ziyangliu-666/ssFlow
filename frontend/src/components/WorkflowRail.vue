@@ -6,8 +6,8 @@
       aria-label="ssFlow home"
     >ss<em>Flow</em></router-link>
 
-    <nav class="rail-nav" aria-label="Workflow steps">
-      <div class="rail-title">WORKFLOW</div>
+    <nav class="rail-nav" aria-label="推演流程">
+      <div class="rail-title">流程</div>
       <ol class="rail-list">
         <li
           v-for="s in steps"
@@ -46,22 +46,22 @@
       <div class="ctx-title">{{ contextCard.title }}</div>
       <div class="ctx-body">
         <div class="ctx-row" v-if="contextCard.ticker">
-          <span class="ctx-k">Ticker</span>
+          <span class="ctx-k">代码</span>
           <span class="ctx-v mono">{{ contextCard.ticker }}</span>
         </div>
         <div class="ctx-row" v-if="contextCard.instrument">
           <span class="ctx-v serif">{{ contextCard.instrument }}</span>
         </div>
         <div class="ctx-row" v-if="contextCard.market">
-          <span class="ctx-k">Market</span>
+          <span class="ctx-k">市场</span>
           <span class="ctx-v mono">{{ contextCard.market }}</span>
         </div>
         <div class="ctx-row" v-if="contextCard.eventType">
-          <span class="ctx-k">Event</span>
+          <span class="ctx-k">事件</span>
           <span class="ctx-v mono">{{ contextCard.eventType }}</span>
         </div>
         <div class="ctx-row" v-if="contextCard.price">
-          <span class="ctx-k">Price</span>
+          <span class="ctx-k">价格</span>
           <span class="ctx-v mono">{{ contextCard.price }}</span>
         </div>
       </div>
@@ -83,17 +83,17 @@
           <circle cx="12" cy="12" r="3" />
           <path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24" />
         </svg>
-        {{ showAuth ? 'Hide auth' : 'Settings' }}
+        {{ showAuth ? '收起密码' : '设置' }}
       </button>
       <input
         v-if="showAuth"
         v-model="session.password"
         class="auth-input"
         type="password"
-        placeholder="SSFLOW_PASSWORD"
+        placeholder="认证密码"
       />
       <span class="disclaimer">
-        <em>Research tool</em> · not investment advice
+        <em>研究工具</em> · 非投资建议
       </span>
     </div>
   </aside>
@@ -127,16 +127,18 @@ const steps = computed(() => {
   // (or re-running) a simulation.
   const confirmTo = hasEvent && hasPersonas ? '/setup' : ''
 
-  // Simulate is navigable ONLY while a stream is actively running
-  // (session.activeStreamId is set). Once the sim finishes the
-  // stream id is one-shot + TTL'd on the backend, so we disable
-  // re-entry and point the user at Report instead. If they're
-  // currently on /run, keep the step clickable as "stay here".
+  // Simulate is navigable while a stream is actively running
+  // (session.activeStreamId is set) OR when a prior simulation has
+  // completed (session.lastSimulationId is set). In the completed
+  // case it points at /replay/:id, which re-plays the persisted
+  // event log — the original stream id is one-shot and expired.
   const simulateTo = session.activeStreamId
     ? `/run/${session.activeStreamId}`
-    : ''
+    : session.lastSimulationId
+      ? `/replay/${session.lastSimulationId}`
+      : ''
   const simulateTooltip = !session.activeStreamId && session.lastSimulationId
-    ? 'Simulation finished — open Report instead'
+    ? '推演已完成，可重播'
     : ''
 
   // Report is navigable once a simulation has completed at least
@@ -148,9 +150,9 @@ const steps = computed(() => {
   return [
     {
       num: '01',
-      label: 'Seed',
+      label: '开始',
       sub: session.uploadedFiles.length
-        ? `${session.uploadedFiles.length} file${session.uploadedFiles.length === 1 ? '' : 's'}`
+        ? `${session.uploadedFiles.length} 个文件`
         : '文件 + 描述',
       done: !onHome && (hasEvent || session.uploadedFiles.length > 0),
       active: onHome,
@@ -158,22 +160,22 @@ const steps = computed(() => {
     },
     {
       num: '02',
-      label: 'Confirm',
+      label: '确认',
       sub: hasEvent
-        ? `${session.personasProposed.length} personas`
+        ? `${session.personasProposed.length} 个角色`
         : '抽取结果',
       done: onRun || onReport,
       active: onSetup,
       to: confirmTo,
-      tooltip: hasEvent ? '' : 'Run EXTRACT first',
+      tooltip: hasEvent ? '' : '先抽取一次',
     },
     {
       num: '03',
-      label: 'Simulate',
+      label: '推演',
       sub: onRun
-        ? 'running…'
+        ? '推演中…'
         : session.lastSimulationId
-          ? 'last run done'
+          ? '可重播'
           : '群体推演',
       done: onReport || (!!session.lastSimulationId && !onRun),
       active: onRun,
@@ -182,16 +184,16 @@ const steps = computed(() => {
     },
     {
       num: '04',
-      label: 'Report',
+      label: '报告',
       sub: onReport
-        ? 'done'
+        ? '当前'
         : session.lastSimulationId
-          ? 'view last'
-          : '价格 · P&L',
+          ? '查看上次'
+          : '价格 · 盈亏',
       done: false,
       active: onReport,
       to: reportTo,
-      tooltip: reportTo ? '' : 'No completed simulation yet',
+      tooltip: reportTo ? '' : '还没有完成的推演',
     },
   ]
 })
@@ -203,18 +205,18 @@ const contextCard = computed(() => {
   const onReport = route.name === 'Report'
   const onRun = route.name === 'Run'
 
-  let title = 'Current event'
+  let title = '当前事件'
   let footnote = ''
 
   if (onReport) {
-    title = 'Last simulation'
+    title = '上次推演'
     footnote = session.lastSimulationId
       ? `${session.lastSimulationId.slice(0, 14)}…`
       : ''
   } else if (onRun) {
-    title = 'Running now'
+    title = '推演中'
   } else if (ep) {
-    title = 'Current event'
+    title = '当前事件'
   }
 
   const price = ep && ep.current_price
@@ -236,7 +238,7 @@ function currencySymbol (cur) {
   return { CNY: '¥', USD: '$', EUR: '€', JPY: '¥', HKD: 'HK$', BTC: '₿' }[cur] || '$'
 }
 
-const authTitle = computed(() => (session.password ? 'Auth saved' : 'Enter auth password'))
+const authTitle = computed(() => (session.password ? '密码已保存' : '填入认证密码'))
 
 function statusClass (s) {
   if (s.active) return 'active'
@@ -453,11 +455,12 @@ function statusClass (s) {
   border-left: 3px solid var(--ss-accent);
 }
 .ctx-title {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
   font-size: 11px;
+  font-weight: 600;
   color: var(--ss-fg-muted);
   margin-bottom: 8px;
+  letter-spacing: 0.02em;
 }
 .ctx-body {
   display: flex;
@@ -548,8 +551,9 @@ function statusClass (s) {
 .auth-input:focus { border-color: var(--ss-accent); }
 
 .disclaimer em {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-style: normal;
+  font-weight: 500;
   color: var(--ss-fg-muted);
 }
 </style>

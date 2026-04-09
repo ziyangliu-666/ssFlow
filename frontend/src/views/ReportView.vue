@@ -2,32 +2,47 @@
   <div class="report">
     <WorkflowRail>
       <template #foot-extra>
-        <button class="aside-btn primary" type="button" @click="$router.push('/')">+ New sim</button>
-        <button class="aside-btn" type="button" :disabled="!markdown" @click="downloadReport">↓ Download .md</button>
+        <button
+          class="aside-btn primary"
+          type="button"
+          @click="$router.push('/')"
+        >+ 新推演</button>
+        <button
+          class="aside-btn"
+          type="button"
+          :disabled="!markdown"
+          @click="openReplay"
+        >▶ 重播推演</button>
+        <button
+          class="aside-btn"
+          type="button"
+          :disabled="!markdown"
+          @click="downloadReport"
+        >↓ 下载 .md</button>
       </template>
     </WorkflowRail>
 
     <main class="main">
       <div v-if="loading" class="state">
-        <p class="mono">loading report…</p>
+        <p class="mono">加载中…</p>
       </div>
 
       <div v-else-if="errorMsg" class="state bad">
-        <h1>Can't load this <span class="accent">report</span>.</h1>
+        <h1>无法加载这份<span class="accent">报告</span>。</h1>
         <p class="mono">{{ errorMsg }}</p>
         <p v-if="errorStatus === 401" class="auth-hint">
-          Looks like your auth password isn't set or it's wrong.
-          Click <em>Settings</em> in the sidebar, enter the password, and reload.
+          认证密码没设或填错了。
+          点左侧边栏的<em>设置</em>填一下密码，然后刷新。
         </p>
         <div class="state-actions">
-          <button class="back" type="button" @click="load">↻ Retry</button>
-          <button class="back ghost" type="button" @click="$router.push('/')">← Back to Seed</button>
+          <button class="back" type="button" @click="load">↻ 重试</button>
+          <button class="back ghost" type="button" @click="$router.push('/')">← 返回开始</button>
         </div>
       </div>
 
       <div v-else-if="markdown" class="wrap">
         <div class="kicker">
-          Simulation report
+          推演报告
           <code>{{ shortId }}</code>
           <span v-if="meta?.event_ticker"> · {{ meta.event_ticker }}</span>
           <span v-if="meta?.event_date"> · {{ meta.event_date }}</span>
@@ -36,22 +51,22 @@
         <!-- Summary strip: 4 cells driven by the structured summary JSON -->
         <div v-if="summary" class="summary">
           <div class="cell">
-            <div class="k">FINAL PRICE</div>
+            <div class="k">收盘价</div>
             <div class="v mono" :class="deltaClass">{{ formatPrice(summary.final_price) }}</div>
-            <div class="sub">from {{ formatPrice(summary.initial_price) }} open</div>
+            <div class="sub">开盘 {{ formatPrice(summary.initial_price) }}</div>
           </div>
           <div class="cell">
-            <div class="k">Δ %</div>
+            <div class="k">涨跌幅</div>
             <div class="v mono" :class="deltaClass">{{ formatPct(summary.delta_pct) }}</div>
-            <div class="sub">{{ meta?.n_rounds || 0 }} rounds</div>
+            <div class="sub">共 {{ meta?.n_rounds || 0 }} 轮</div>
           </div>
           <div class="cell">
-            <div class="k">NET P&amp;L</div>
+            <div class="k">总盈亏</div>
             <div class="v mono" :class="netFlowClass">{{ formatMoney(summary.net_flow_total) }}</div>
-            <div class="sub">across all classes</div>
+            <div class="sub">跨全部分组</div>
           </div>
           <div class="cell">
-            <div class="k">WINNING CLASS</div>
+            <div class="k">领先分组</div>
             <div
               class="v winning"
               v-if="summary.winning_class"
@@ -61,21 +76,182 @@
             </div>
             <div class="v" v-else>—</div>
             <div class="sub" v-if="summary.winning_class">
-              {{ formatMoney(summary.winning_class.pnl) }} realized
+              实现 {{ formatMoney(summary.winning_class.pnl) }}
             </div>
           </div>
         </div>
 
+        <!-- Round-by-round inspector — the "I want to see what
+             happened in round 2 without playing anything back" view.
+             Consumes the same /simulation/:id/timeline endpoint as
+             the replay view. Lazy-loaded on mount; shows a compact
+             pill bar + the selected round's publications / trades /
+             price delta / class flows. -->
+        <section v-if="rounds.length" class="rounds">
+          <header class="rounds-h">
+            <span class="rh-title">逐轮回看</span>
+            <span v-if="timelineSource === 'reconstructed'" class="rh-tag">
+              部分数据
+            </span>
+            <div class="rh-spacer" />
+            <button
+              type="button"
+              class="rh-replay"
+              @click="openReplay"
+            >▶ 完整重播</button>
+          </header>
+          <div class="rnd-pills">
+            <button
+              v-for="r in rounds"
+              :key="r.idx"
+              type="button"
+              class="rnd-pill"
+              :class="{ on: selectedRound === r.idx }"
+              @click="selectedRound = r.idx"
+            >
+              <span class="rp-idx mono">R{{ r.idx }}</span>
+              <span
+                class="rp-delta mono"
+                :class="r.deltaClass"
+              >{{ r.deltaLabel }}</span>
+            </button>
+          </div>
+
+          <div v-if="currentRoundDetail" class="rnd-detail">
+            <div class="rd-head">
+              <span class="rd-price mono">
+                {{ formatPrice(currentRoundDetail.priceBefore) }}
+                →
+                <strong :class="currentRoundDetail.deltaClass">{{
+                  formatPrice(currentRoundDetail.priceAfter)
+                }}</strong>
+              </span>
+              <span
+                class="rd-delta mono"
+                :class="currentRoundDetail.deltaClass"
+              >{{ currentRoundDetail.deltaLabel }}</span>
+              <span class="rd-counts mono">
+                {{ currentRoundDetail.publications.length }} 篇
+                · {{ currentRoundDetail.trades.length }} 单
+              </span>
+            </div>
+
+            <div class="rd-cols">
+              <!-- Publications column -->
+              <div class="rd-col">
+                <div class="rd-col-h">
+                  <em>想法 / 发布</em>
+                  <span class="mono">{{
+                    currentRoundDetail.publications.length
+                  }}</span>
+                </div>
+                <div
+                  v-if="!currentRoundDetail.publications.length"
+                  class="rd-empty"
+                >（本轮无发布）</div>
+                <ul v-else class="rd-list">
+                  <li
+                    v-for="(p, i) in currentRoundDetail.publications"
+                    :key="'p' + i"
+                    class="rd-pub"
+                  >
+                    <span class="pub-type mono">{{
+                      p.content_type || 'social_post'
+                    }}</span>
+                    <span class="pub-who">{{
+                      p.archetype || p.persona_id
+                    }}</span>
+                    <div v-if="p.text" class="pub-text">
+                      {{ truncateText(p.text, 200) }}
+                    </div>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- Trades column -->
+              <div class="rd-col">
+                <div class="rd-col-h">
+                  <em>交易</em>
+                  <span class="mono">{{
+                    currentRoundDetail.trades.length
+                  }}</span>
+                </div>
+                <div
+                  v-if="!currentRoundDetail.trades.length"
+                  class="rd-empty"
+                >（本轮无交易记录）</div>
+                <ul v-else class="rd-list">
+                  <li
+                    v-for="(t, i) in currentRoundDetail.trades"
+                    :key="'t' + i"
+                    class="rd-trade"
+                  >
+                    <div class="trade-h">
+                      <span class="trade-who">{{
+                        t.archetype || t.persona_id
+                      }}</span>
+                    </div>
+                    <div class="trade-dist">
+                      <span
+                        v-for="(v, k) in t.distribution || {}"
+                        :key="k"
+                        class="td-item"
+                      >
+                        <span class="td-k">{{ k }}</span>
+                        <span class="td-v mono">{{
+                          (v * 100).toFixed(0)
+                        }}%</span>
+                      </span>
+                    </div>
+                    <div v-if="t.rationale" class="trade-rationale">
+                      “{{ truncateText(t.rationale, 140) }}”
+                    </div>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- Class flows column -->
+              <div class="rd-col">
+                <div class="rd-col-h">
+                  <em>分组流向</em>
+                  <span class="mono">{{
+                    currentRoundDetail.flows.length
+                  }}</span>
+                </div>
+                <div
+                  v-if="!currentRoundDetail.flows.length"
+                  class="rd-empty"
+                >（本轮无分组流向）</div>
+                <ul v-else class="rd-list">
+                  <li
+                    v-for="(f, i) in currentRoundDetail.flows"
+                    :key="'f' + i"
+                    class="rd-flow"
+                  >
+                    <span class="flow-who">{{
+                      f.archetype || f.persona_id
+                    }}</span>
+                    <span
+                      class="flow-val mono"
+                      :class="f.cls"
+                    >{{ f.label }}</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <article class="report-body" v-html="rendered"></article>
 
         <div class="footnote">
-          <em>Research tool only.</em> This report describes a simulation, not a forecast.
-          Actual market behaviour may differ. ssFlow does not provide investment advice.
+          <em>研究工具。</em>这是一份推演记录，不是对行情的预测。
+          实际市场走势可能有出入。ssFlow 不构成投资建议。
           <span v-if="meta?.cost_usd !== undefined" class="cost-tag">
-            · cost ${{ meta.cost_usd?.toFixed(4) }}
+            · 成本 ${{ meta.cost_usd?.toFixed(4) }}
           </span>
           <span v-if="meta?.elapsed_seconds !== undefined" class="cost-tag">
-            · {{ meta.elapsed_seconds?.toFixed(1) }}s
+            · 耗时 {{ meta.elapsed_seconds?.toFixed(1) }}s
           </span>
         </div>
       </div>
@@ -85,11 +261,13 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { http } from '../api/client'
 import WorkflowRail from '../components/WorkflowRail.vue'
 
 const props = defineProps({ simulationId: { type: String, required: true } })
+const router = useRouter()
 
 const markdown = ref('')
 const summary = ref(null)
@@ -97,6 +275,14 @@ const meta = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
 const errorStatus = ref(0)
+
+// Round-by-round inspector state. Populated by fetching the same
+// /simulation/:id/timeline endpoint the replay view uses. Fetch is
+// non-blocking — the main report renders from the /report response,
+// and the inspector fades in once the timeline fetch completes.
+const timelineEvents = ref([])
+const timelineSource = ref('full')
+const selectedRound = ref(0)
 
 const rendered = computed(() => {
   if (!markdown.value) return ''
@@ -155,6 +341,116 @@ function truncate (s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s
 }
 
+function truncateText (s, n) {
+  if (!s) return ''
+  const trimmed = s.replace(/\s+/g, ' ').trim()
+  return trimmed.length > n ? trimmed.slice(0, n - 1) + '…' : trimmed
+}
+
+// Group the flat timeline into per-round buckets. Each round carries
+// its publications (persona_thought events), trades, flows, and the
+// price_updated delta. round_start tells us price_before; price_updated
+// tells us price_after and delta_pct.
+const rounds = computed(() => {
+  if (!timelineEvents.value.length) return []
+  const buckets = new Map() // round_idx → {publications, trades, flows, priceBefore, priceAfter, delta}
+  for (const e of timelineEvents.value) {
+    const r = e.round_idx
+    if (typeof r !== 'number') continue
+    if (!buckets.has(r)) {
+      buckets.set(r, {
+        idx: r,
+        publications: [],
+        trades: [],
+        flows: [],
+        priceBefore: null,
+        priceAfter: null,
+        delta: 0,
+      })
+    }
+    const b = buckets.get(r)
+    switch (e.type) {
+      case 'round_start':
+        b.priceBefore = e.current_price
+        break
+      case 'persona_thought':
+        b.publications.push(e)
+        break
+      case 'trade_submitted':
+        b.trades.push(e)
+        break
+      case 'class_flow_computed':
+        b.flows.push(e)
+        break
+      case 'price_updated':
+        if (b.priceBefore == null) b.priceBefore = e.price_before
+        b.priceAfter = e.price_after
+        b.delta = e.delta_pct || 0
+        break
+    }
+  }
+  const out = Array.from(buckets.values()).sort((a, b) => a.idx - b.idx)
+  // Back-fill missing priceBefore from the prior round's priceAfter.
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].priceBefore == null && out[i - 1].priceAfter != null) {
+      out[i].priceBefore = out[i - 1].priceAfter
+    }
+  }
+  // Decorate for the pill row
+  return out.map((b) => {
+    const cls = b.delta > 0 ? 'good' : b.delta < 0 ? 'bad' : ''
+    return {
+      ...b,
+      deltaClass: cls,
+      deltaLabel: formatPct(b.delta),
+    }
+  })
+})
+
+const currentRoundDetail = computed(() => {
+  const r = rounds.value.find((x) => x.idx === selectedRound.value)
+  if (!r) return null
+  // Decorate flows with the good/bad class and a signed label so the
+  // template stays dumb.
+  const flows = (r.flows || []).map((f) => {
+    const net = f.net_flow || 0
+    const cls = net > 0 ? 'good' : net < 0 ? 'bad' : ''
+    return {
+      ...f,
+      cls,
+      label: formatFlow(net),
+    }
+  })
+  return {
+    ...r,
+    flows,
+  }
+})
+
+async function loadTimeline () {
+  try {
+    const r = await http.get(
+      `/simulation/${encodeURIComponent(props.simulationId)}/timeline`,
+    )
+    timelineEvents.value = r.data?.events || []
+    timelineSource.value = r.data?.source || 'full'
+  } catch (err) {
+    // Timeline fetch is best-effort — if it fails the main report
+    // still renders, we just hide the round inspector.
+    timelineEvents.value = []
+  }
+}
+
+function formatFlow (v) {
+  if (typeof v !== 'number') return '—'
+  const sym = currencySymbol(meta.value?.price_currency || 'CNY')
+  const sign = v >= 0 ? '+' : '−'
+  const absV = Math.abs(v)
+  if (absV >= 1e8) return sign + sym + (absV / 1e8).toFixed(2) + '亿'
+  if (absV >= 1e4) return sign + sym + (absV / 1e4).toFixed(2) + '万'
+  return sign + sym + absV.toFixed(0)
+}
+
 async function load () {
   loading.value = true
   errorMsg.value = ''
@@ -183,6 +479,10 @@ async function load () {
   }
 }
 
+function openReplay () {
+  router.push({ name: 'Replay', params: { simulationId: props.simulationId } })
+}
+
 function downloadReport () {
   if (!markdown.value) return
   const blob = new Blob([markdown.value], { type: 'text/markdown' })
@@ -194,7 +494,10 @@ function downloadReport () {
   URL.revokeObjectURL(url)
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadTimeline()
+})
 </script>
 
 <style scoped>
@@ -234,10 +537,10 @@ onMounted(load)
   margin-bottom: 12px;
 }
 .state.bad h1 .accent {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
   color: var(--ss-accent);
-  font-weight: 500;
+  margin: 0 0.08em;
 }
 .state .mono {
   font-family: 'JetBrains Mono', monospace;
@@ -255,8 +558,9 @@ onMounted(load)
   color: var(--ss-fg);
 }
 .state .auth-hint em {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-style: normal;
+  font-weight: 600;
   color: var(--ss-accent);
 }
 .state-actions {
@@ -402,6 +706,262 @@ onMounted(load)
   border-color: var(--ss-fg);
 }
 .aside-btn.primary:hover:not(:disabled) { background: var(--ss-accent); border-color: var(--ss-accent); }
+
+/* Round-by-round inspector — sits between the summary strip and the
+   report body. Click R0/R1/… to inspect a round without playing back. */
+.rounds {
+  margin: 0 0 36px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ss-line);
+}
+.rounds-h {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.rh-title {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 15px;
+  color: var(--ss-fg);
+}
+.rh-tag {
+  padding: 1px 6px;
+  font-size: 9px;
+  background: var(--ss-accent-soft);
+  color: var(--ss-accent);
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.rh-spacer { flex: 1; }
+.rh-replay {
+  font-size: 11px;
+  padding: 6px 12px;
+  border: 1px solid var(--ss-fg);
+  background: #fff;
+  color: var(--ss-fg);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.rh-replay:hover { background: var(--ss-fg); color: #fff; }
+
+.rnd-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.rnd-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--ss-line-strong);
+  background: #fff;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.rnd-pill:hover { border-color: var(--ss-accent); }
+.rnd-pill.on {
+  background: var(--ss-fg);
+  border-color: var(--ss-fg);
+  color: #fff;
+}
+.rnd-pill .rp-idx {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+}
+.rnd-pill .rp-delta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.rnd-pill .rp-delta.good { color: var(--ss-good); }
+.rnd-pill .rp-delta.bad  { color: var(--ss-bad); }
+.rnd-pill.on .rp-delta.good,
+.rnd-pill.on .rp-delta.bad { color: #fff; opacity: 0.9; }
+
+.rnd-detail {
+  border: 1px solid var(--ss-line);
+  border-left: 3px solid var(--ss-accent);
+  border-radius: 0 8px 8px 0;
+  background: #fff;
+  padding: 16px 18px;
+}
+.rd-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--ss-line);
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.rd-price {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  color: var(--ss-fg);
+  font-variant-numeric: tabular-nums;
+}
+.rd-price strong.good { color: var(--ss-good); }
+.rd-price strong.bad  { color: var(--ss-bad); }
+.rd-delta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.rd-delta.good { background: #e7f5ec; color: var(--ss-good); }
+.rd-delta.bad  { background: #fbecec; color: var(--ss-bad); }
+.rd-counts {
+  font-size: 10px;
+  color: var(--ss-fg-faint);
+  margin-left: auto;
+}
+
+.rd-cols {
+  display: grid;
+  grid-template-columns: 2fr 1.4fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 860px) {
+  .rd-cols { grid-template-columns: 1fr; gap: 14px; }
+}
+.rd-col {
+  min-width: 0;
+}
+.rd-col-h {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--ss-line);
+}
+.rd-col-h em {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--ss-fg);
+}
+.rd-col-h .mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ss-fg-faint);
+  margin-left: auto;
+}
+.rd-empty {
+  font-size: 11px;
+  color: var(--ss-fg-faint);
+  padding: 4px 0;
+}
+.rd-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.rd-pub {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--ss-line);
+}
+.rd-pub:last-child { border-bottom: 0; }
+.rd-pub .pub-type {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 6px;
+  background: var(--ss-bg-soft);
+  border: 1px solid var(--ss-line);
+  border-radius: 3px;
+  color: var(--ss-fg-muted);
+  font-family: 'JetBrains Mono', monospace;
+  margin-right: 6px;
+  align-self: flex-start;
+}
+.rd-pub .pub-who {
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+}
+.rd-pub .pub-text {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ss-fg);
+}
+
+.rd-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--ss-line);
+}
+.rd-trade:last-child { border-bottom: 0; }
+.trade-who {
+  font-size: 11px;
+  color: var(--ss-fg);
+  font-weight: 500;
+}
+.trade-dist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 10px;
+}
+.td-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.td-k { color: var(--ss-fg-muted); }
+.td-v {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--ss-fg);
+  font-weight: 600;
+}
+.trade-rationale {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  border-left: 2px solid var(--ss-line-strong);
+  padding-left: 8px;
+  line-height: 1.5;
+}
+
+.rd-flow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--ss-line);
+  font-size: 11px;
+}
+.rd-flow:last-child { border-bottom: 0; }
+.flow-who {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ss-fg);
+}
+.rd-flow .flow-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.rd-flow .flow-val.good { color: var(--ss-good); }
+.rd-flow .flow-val.bad  { color: var(--ss-bad); }
 
 /* Report body — restyled markdown render */
 .report-body {
@@ -555,8 +1115,9 @@ onMounted(load)
   color: var(--ss-fg-faint);
 }
 .footnote em {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-style: normal;
+  font-weight: 500;
   color: var(--ss-fg-muted);
 }
 </style>
