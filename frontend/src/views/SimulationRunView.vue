@@ -252,6 +252,11 @@ function handleEvent (type, payload) {
     case 'simulation_done':
       phase.value = 'done'
       finalSimId.value = payload.simulation_id || ''
+      // Remember the sim id so the rail Report step can link to it
+      // from any page; clear the active stream id since the SSE
+      // channel is one-shot and can't be resumed.
+      if (finalSimId.value) session.lastSimulationId = finalSimId.value
+      session.activeStreamId = ''
       if (sse.value) sse.value.close()
       setTimeout(() => {
         if (finalSimId.value && phase.value === 'done') {

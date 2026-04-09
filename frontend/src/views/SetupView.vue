@@ -217,6 +217,9 @@ async function onStart () {
       basePersonasPath: session.basePersonasPath,
     })
     status.value = 'opening stream…'
+    // Remember the stream id so the rail's Simulate step can navigate
+    // back to it during the active run.
+    session.activeStreamId = r.stream_id
     router.push({ name: 'Run', params: { streamId: r.stream_id } })
   } catch (err) {
     console.error(err)

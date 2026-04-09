@@ -7,6 +7,7 @@ import { reactive, watch } from 'vue'
 
 const LS_PASSWORD_KEY = 'ssflow.password'
 const LS_SESSION_KEY = 'ssflow.session'
+const LS_LAST_SIM_KEY = 'ssflow.lastSim'
 
 const initial = {
   password: localStorage.getItem(LS_PASSWORD_KEY) || '',
@@ -18,6 +19,10 @@ const initial = {
   personasProposed: [],  // partial dicts
   basePersonasPath: 'personas/ashare.yaml',
   ingestedDocs: [],
+  // IDs we remember so the workflow rail can navigate to the right
+  // route when the user clicks a past step.
+  activeStreamId: '',          // set when /simulate-stream/init succeeds
+  lastSimulationId: localStorage.getItem(LS_LAST_SIM_KEY) || '',
   lastError: '',
 }
 
@@ -43,6 +48,11 @@ watch(() => session.sessionId, (val) => {
   }
 })
 
+watch(() => session.lastSimulationId, (val) => {
+  if (val) localStorage.setItem(LS_LAST_SIM_KEY, val)
+  else localStorage.removeItem(LS_LAST_SIM_KEY)
+})
+
 export function resetSession () {
   session.sessionId = ''
   session.uploadedFiles = []
@@ -52,5 +62,7 @@ export function resetSession () {
   session.personasProposed = []
   session.basePersonasPath = 'personas/ashare.yaml'
   session.ingestedDocs = []
+  session.activeStreamId = ''
+  session.lastSimulationId = ''
   session.lastError = ''
 }

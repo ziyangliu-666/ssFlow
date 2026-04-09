@@ -12,17 +12,61 @@
         <li
           v-for="s in steps"
           :key="s.num"
-          :class="statusClass(s)"
+          :class="[statusClass(s), s.to ? 'linked' : 'disabled']"
           :aria-current="s.active ? 'step' : undefined"
         >
-          <span class="dot" aria-hidden="true">{{ s.num }}</span>
-          <div class="cell">
-            <span class="label">{{ s.label }}</span>
-            <span class="sub">{{ s.sub }}</span>
+          <router-link
+            v-if="s.to"
+            :to="s.to"
+            class="step-link"
+            :title="s.tooltip || ''"
+          >
+            <span class="dot" aria-hidden="true">{{ s.num }}</span>
+            <div class="cell">
+              <span class="label">{{ s.label }}</span>
+              <span class="sub">{{ s.sub }}</span>
+            </div>
+          </router-link>
+          <div v-else class="step-link" :title="s.tooltip || ''" aria-disabled="true">
+            <span class="dot" aria-hidden="true">{{ s.num }}</span>
+            <div class="cell">
+              <span class="label">{{ s.label }}</span>
+              <span class="sub">{{ s.sub }}</span>
+            </div>
           </div>
         </li>
       </ol>
     </nav>
+
+    <!-- Current event card — fills the space between the workflow
+         rail and the footer with context about what the user is
+         currently working on. Only visible once there's something
+         to show (an extracted event or a remembered sim id). -->
+    <div v-if="contextCard" class="ctx-card">
+      <div class="ctx-title">{{ contextCard.title }}</div>
+      <div class="ctx-body">
+        <div class="ctx-row" v-if="contextCard.ticker">
+          <span class="ctx-k">Ticker</span>
+          <span class="ctx-v mono">{{ contextCard.ticker }}</span>
+        </div>
+        <div class="ctx-row" v-if="contextCard.instrument">
+          <span class="ctx-v serif">{{ contextCard.instrument }}</span>
+        </div>
+        <div class="ctx-row" v-if="contextCard.market">
+          <span class="ctx-k">Market</span>
+          <span class="ctx-v mono">{{ contextCard.market }}</span>
+        </div>
+        <div class="ctx-row" v-if="contextCard.eventType">
+          <span class="ctx-k">Event</span>
+          <span class="ctx-v mono">{{ contextCard.eventType }}</span>
+        </div>
+        <div class="ctx-row" v-if="contextCard.price">
+          <span class="ctx-k">Price</span>
+          <span class="ctx-v mono">{{ contextCard.price }}</span>
+        </div>
+      </div>
+      <div v-if="contextCard.footnote" class="ctx-foot">{{ contextCard.footnote }}</div>
+    </div>
 
     <div class="rail-foot">
       <slot name="foot-extra" />
@@ -65,10 +109,41 @@ const showAuth = ref(false)
 
 const steps = computed(() => {
   const hasEvent = !!session.eventProposal
+  const hasPersonas = (session.personasProposed || []).length > 0
   const onSetup = route.name === 'Setup'
   const onRun = route.name === 'Run'
   const onReport = route.name === 'Report'
   const onHome = route.name === 'Home'
+
+  // Seed is always navigable — it's the entry point, takes you back
+  // to Home where the composer lives. The existing session is
+  // preserved so the user can tweak the prompt + resubmit without
+  // losing uploaded files.
+  const seedTo = '/'
+
+  // Confirm is navigable when an extraction has produced an
+  // event_proposal. Clicking it takes the user back to /setup where
+  // they can edit the proposal or the persona list before running
+  // (or re-running) a simulation.
+  const confirmTo = hasEvent && hasPersonas ? '/setup' : ''
+
+  // Simulate is navigable ONLY while a stream is actively running
+  // (session.activeStreamId is set). Once the sim finishes the
+  // stream id is one-shot + TTL'd on the backend, so we disable
+  // re-entry and point the user at Report instead. If they're
+  // currently on /run, keep the step clickable as "stay here".
+  const simulateTo = session.activeStreamId
+    ? `/run/${session.activeStreamId}`
+    : ''
+  const simulateTooltip = !session.activeStreamId && session.lastSimulationId
+    ? 'Simulation finished — open Report instead'
+    : ''
+
+  // Report is navigable once a simulation has completed at least
+  // once in this session.
+  const reportTo = session.lastSimulationId
+    ? `/reports/${session.lastSimulationId}`
+    : ''
 
   return [
     {
@@ -79,6 +154,7 @@ const steps = computed(() => {
         : '文件 + 描述',
       done: !onHome && (hasEvent || session.uploadedFiles.length > 0),
       active: onHome,
+      to: seedTo,
     },
     {
       num: '02',
@@ -88,23 +164,77 @@ const steps = computed(() => {
         : '抽取结果',
       done: onRun || onReport,
       active: onSetup,
+      to: confirmTo,
+      tooltip: hasEvent ? '' : 'Run EXTRACT first',
     },
     {
       num: '03',
       label: 'Simulate',
-      sub: onRun ? 'running…' : '群体推演',
-      done: onReport,
+      sub: onRun
+        ? 'running…'
+        : session.lastSimulationId
+          ? 'last run done'
+          : '群体推演',
+      done: onReport || (!!session.lastSimulationId && !onRun),
       active: onRun,
+      to: simulateTo,
+      tooltip: simulateTooltip,
     },
     {
       num: '04',
       label: 'Report',
-      sub: onReport ? 'done' : '价格 · P&L',
+      sub: onReport
+        ? 'done'
+        : session.lastSimulationId
+          ? 'view last'
+          : '价格 · P&L',
       done: false,
       active: onReport,
+      to: reportTo,
+      tooltip: reportTo ? '' : 'No completed simulation yet',
     },
   ]
 })
+
+const contextCard = computed(() => {
+  const ep = session.eventProposal
+  if (!ep && !session.lastSimulationId) return null
+
+  const onReport = route.name === 'Report'
+  const onRun = route.name === 'Run'
+
+  let title = 'Current event'
+  let footnote = ''
+
+  if (onReport) {
+    title = 'Last simulation'
+    footnote = session.lastSimulationId
+      ? `${session.lastSimulationId.slice(0, 14)}…`
+      : ''
+  } else if (onRun) {
+    title = 'Running now'
+  } else if (ep) {
+    title = 'Current event'
+  }
+
+  const price = ep && ep.current_price
+    ? (currencySymbol(ep.price_currency || 'CNY') + Number(ep.current_price).toFixed(2))
+    : ''
+
+  return {
+    title,
+    ticker: ep?.ticker || '',
+    instrument: ep?.instrument || '',
+    market: ep?.market || '',
+    eventType: ep?.event_type || '',
+    price,
+    footnote,
+  }
+})
+
+function currencySymbol (cur) {
+  return { CNY: '¥', USD: '$', EUR: '€', JPY: '¥', HKD: 'HK$', BTC: '₿' }[cur] || '$'
+}
 
 const authTitle = computed(() => (session.password ? 'Auth saved' : 'Enter auth password'))
 
@@ -209,11 +339,33 @@ function statusClass (s) {
   background: var(--ss-line-strong);
 }
 .rail-list li {
+  position: relative;
+  padding: 0;
+  list-style: none;
+}
+.step-link {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
-  position: relative;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  outline: none;
+}
+.rail-list li.linked .step-link {
+  cursor: pointer;
+}
+.rail-list li.linked .step-link:hover {
+  background: rgba(255, 106, 0, 0.06);
+}
+.rail-list li.linked .step-link:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ss-accent);
+}
+.rail-list li.disabled .step-link {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 @media (max-width: 860px) {
@@ -290,6 +442,66 @@ function statusClass (s) {
   color: #fff;
 }
 .done .label { color: var(--ss-fg); }
+
+/* Context card — fills the space between workflow rail and footer */
+.ctx-card {
+  margin-top: 32px;
+  padding: 14px 12px;
+  border: 1px solid var(--ss-line);
+  background: #fff;
+  border-radius: 8px;
+  border-left: 3px solid var(--ss-accent);
+}
+.ctx-title {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  margin-bottom: 8px;
+}
+.ctx-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ctx-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ctx-k {
+  font-size: 9px;
+  color: var(--ss-fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-width: 40px;
+}
+.ctx-v { color: var(--ss-fg); }
+.ctx-v.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+.ctx-v.serif {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 12px;
+  font-weight: 500;
+}
+.ctx-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ss-line);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ss-fg-faint);
+}
+
+@media (max-width: 860px) {
+  /* On narrow, the rail is a horizontal strip — hide the context
+     card so it doesn't overflow the strip. */
+  .ctx-card { display: none; }
+}
 
 .rail-foot {
   margin-top: auto;
