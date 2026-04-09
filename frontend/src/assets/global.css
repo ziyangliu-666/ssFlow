@@ -84,8 +84,6 @@ textarea {
   font-size: 11px;
   color: var(--ss-fg-muted);
   background: #fff;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 .chip.accent {
   background: var(--ss-accent-soft);
@@ -123,8 +121,6 @@ textarea {
   color: #fff;
   font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
