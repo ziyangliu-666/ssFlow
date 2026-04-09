@@ -4,7 +4,7 @@
 
     <main
       class="main"
-      aria-label="Seed the simulation"
+      aria-label="输入推演素材"
       :class="{ 'drag-over': isDragOver }"
       @dragover.prevent="onDragOver"
       @dragleave.prevent="onDragLeave"
@@ -37,16 +37,16 @@
               v-for="(sf, i) in serverFiles"
               :key="'sf' + i"
               class="chip restored"
-              :title="'Already uploaded — ' + sf.name"
+              :title="'已上传 — ' + sf.name"
             >
               <svg class="chip-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
               <span class="chip-name">{{ sf.name }}</span>
               <span class="chip-size">{{ formatBytes(sf.size) }}</span>
-              <span class="chip-badge">saved</span>
+              <span class="chip-badge">已上传</span>
               <button
                 class="chip-x"
                 type="button"
-                :aria-label="'Remove saved file ' + sf.name"
+                :aria-label="'移除已上传文件 ' + sf.name"
                 @click="removeServerFile(i)"
               >×</button>
             </span>
@@ -61,7 +61,7 @@
               <button
                 class="chip-x"
                 type="button"
-                :aria-label="'Remove file ' + f.name"
+                :aria-label="'移除文件 ' + f.name"
                 @click="removeFile(i)"
               >×</button>
             </span>
@@ -87,7 +87,7 @@
           />
 
           <div class="composer-foot">
-            <button class="tool" type="button" title="Attach file" @click="triggerInput">
+            <button class="tool" type="button" title="添加文件" @click="triggerInput">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
                    stroke="currentColor" stroke-width="2"
                    stroke-linecap="round" stroke-linejoin="round">
