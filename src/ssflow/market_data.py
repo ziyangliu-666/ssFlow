@@ -234,7 +234,15 @@ async def _fetch_sina_kline_adv(
 
 
 async def fetch_ashare(ticker: str) -> MarketQuote:
-    """A-share: Sina hq for realtime price, Sina K-line for 20-day ADV."""
+    """A-share: Sina hq for realtime price, Sina K-line for 20-day ADV.
+
+    Graceful degradation: Sina K-line is the preferred ADV source (20-day
+    mean of `volume × close`) but that endpoint occasionally drops the
+    connection under load. If it fails, fall back to today's intraday
+    turnover from the realtime hq call — it's a single-day proxy,
+    imperfect for newly-listed or post-halt days, but good enough to
+    avoid showing the user an empty ADV field.
+    """
     quote = MarketQuote(ticker=ticker, market="ashare", source="sina", price_currency="CNY")
     if not _ASHARE_TICKER_RE.match(ticker):
         quote.diagnostics["error"] = f"ticker {ticker!r} is not a 6-digit code"
@@ -251,8 +259,15 @@ async def fetch_ashare(ticker: str) -> MarketQuote:
         quote.diagnostics["name"] = realtime.get("name")
         quote.diagnostics["prev_close"] = realtime.get("prev_close")
         quote.diagnostics["intraday_open"] = realtime.get("open")
-    if adv is not None:
+    if adv is not None and adv > 0:
         quote.adv_value = float(adv)
+        quote.diagnostics["adv_source"] = "sina_kline_20d"
+    elif realtime and realtime.get("turnover_cny", 0) > 0:
+        # K-line endpoint failed — use today's turnover as a weak
+        # single-day ADV estimate. Stamp the diagnostic so downstream
+        # can tell this was a fallback.
+        quote.adv_value = float(realtime["turnover_cny"])
+        quote.diagnostics["adv_source"] = "sina_realtime_1d_fallback"
 
     return quote
 
@@ -261,7 +276,17 @@ async def fetch_ashare(ticker: str) -> MarketQuote:
 
 
 def _fetch_yfinance_sync(symbol: str) -> tuple[float | None, float | None, str]:
-    """Blocking yfinance lookup. Returns (price, adv_value_in_currency, currency)."""
+    """Blocking yfinance lookup. Returns (price, adv_value_in_currency, currency).
+
+    ADV calculation depends on `quoteType`:
+      EQUITY / ETF / INDEX     → Volume column is shares, ADV = volume × close
+      CRYPTOCURRENCY            → Volume column is ALREADY in quote currency
+                                  (e.g. USD for BTC-USD), ADV = volume as-is
+      FUTURE                    → Volume column is contracts; we skip the ADV
+                                  multiplication and leave it raw (good enough
+                                  for lambda calibration purposes, the sandbox
+                                  uses a per-market lambda override anyway)
+    """
     try:
         import yfinance as yf  # lazy import — heavy
     except ImportError:
@@ -273,28 +298,44 @@ def _fetch_yfinance_sync(symbol: str) -> tuple[float | None, float | None, str]:
         fast = getattr(ticker_obj, "fast_info", None)
         price = None
         currency = "USD"
+        quote_type = ""
         if fast:
             try:
                 price = float(fast.get("last_price") or fast.get("last_close") or 0) or None
                 currency = fast.get("currency") or "USD"
+                quote_type = (fast.get("quoteType") or "").upper()
             except Exception:
                 pass
 
         # Fallback to .info if fast_info is empty
-        if not price:
-            info = ticker_obj.info
-            price = info.get("regularMarketPrice") or info.get("previousClose")
-            currency = info.get("currency") or currency
+        if not price or not quote_type:
+            try:
+                info = ticker_obj.info
+                price = price or info.get("regularMarketPrice") or info.get("previousClose")
+                currency = currency or info.get("currency") or "USD"
+                quote_type = quote_type or (info.get("quoteType") or "").upper()
+            except Exception:
+                pass
 
-        # ADV = 20-day avg volume (in shares) × price
+        # Compute ADV from 20-day history
         hist = ticker_obj.history(period="1mo", interval="1d", auto_adjust=False)
         if hist is not None and not hist.empty:
             vols = hist["Volume"].dropna()
             closes = hist["Close"].dropna()
-            if len(vols) > 0 and len(closes) > 0:
+            if len(vols) > 0:
                 mean_volume = float(vols.tail(20).mean())
-                mean_price = float(closes.tail(20).mean())
-                adv_value = mean_volume * mean_price
+                if quote_type in ("CRYPTOCURRENCY", "CRYPTO"):
+                    # Volume is already in quote currency (USD)
+                    adv_value = mean_volume
+                elif quote_type == "FUTURE":
+                    # Volume is contract count — we skip the multiply
+                    # since contract multipliers vary. Use price × volume
+                    # as an order-of-magnitude approximation.
+                    adv_value = mean_volume * float(closes.tail(20).mean()) if len(closes) else None
+                else:
+                    # EQUITY / ETF / INDEX: volume is shares, multiply by price
+                    mean_price = float(closes.tail(20).mean()) if len(closes) else 0
+                    adv_value = mean_volume * mean_price if mean_price > 0 else None
                 return price, adv_value, currency
 
         return price, None, currency
@@ -345,6 +386,15 @@ async def fetch_market_quote(
     find any data. Returns a populated MarketQuote on success, and a
     partially-populated one (is_populated=False) if only part of the
     data came back.
+
+    Fallback routing: if the caller-supplied `market` is missing or
+    unrecognised (e.g. the LLM classification produced "other"), try
+    to guess from the ticker shape:
+        6 digits            → ashare
+        1-5 uppercase       → us-equity
+        4-5 digits + .HK    → hk-equity
+        5 digits only       → hk-equity (leading zeros)
+        crypto tickers      → btc-spot / eth-spot
     """
     market_norm = (market or "").strip().lower()
     ticker_norm = (ticker or "").strip()
@@ -364,9 +414,87 @@ async def fetch_market_quote(
             return None
         return await fetch_yfinance(symbol, market_norm)
 
-    # Unknown market → no data
-    log.info("fetch_market_quote: no fetcher for market=%s", market_norm)
+    # Unknown / unsupported market → try to infer from ticker shape.
+    inferred_market, inferred_symbol = _infer_market_from_ticker(
+        ticker_norm, instrument_hint
+    )
+    if inferred_market:
+        log.info(
+            "fetch_market_quote: market=%r unrecognised, inferred %s from "
+            "ticker %r (symbol=%s)",
+            market_norm, inferred_market, ticker_norm, inferred_symbol,
+        )
+        if inferred_market == "ashare":
+            return await fetch_ashare(inferred_symbol)
+        if inferred_market in _YFINANCE_TRANSFORMERS:
+            symbol = _YFINANCE_TRANSFORMERS[inferred_market](inferred_symbol)
+            return await fetch_yfinance(symbol or inferred_symbol, inferred_market)
+
+    log.info("fetch_market_quote: no fetcher for market=%s ticker=%s",
+             market_norm, ticker_norm)
     return None
+
+
+def _infer_market_from_ticker(
+    ticker: str,
+    instrument_hint: str | None = None,
+) -> tuple[str | None, str]:
+    """Best-effort guess at the market from ticker shape OR instrument
+    name hint.
+
+    Returns (inferred_market, symbol_to_use) or (None, ticker) if no
+    guess fits. `symbol_to_use` is the cleaned-up ticker that should be
+    passed to the fetcher (e.g. strip suffix, uppercase, etc).
+    """
+    t = (ticker or "").strip().upper()
+    hint = (instrument_hint or "").lower()
+
+    # 1. Crypto: check name hints first so "" ticker + "Bitcoin" still
+    #    resolves. Then check explicit ticker patterns.
+    if "bitcoin" in hint:
+        return ("btc-spot", "BTC-USD")
+    if "ethereum" in hint:
+        return ("eth-spot", "ETH-USD")
+    if t in ("BTC", "BTC-USD", "BITCOIN"):
+        return ("btc-spot", "BTC-USD")
+    if t in ("ETH", "ETH-USD", "ETHEREUM"):
+        return ("eth-spot", "ETH-USD")
+
+    if not t:
+        return (None, "")
+
+    # 2. Commodities / futures
+    if t in ("CL=F", "WTI", "CRUDE"):
+        return ("crude-oil-wti", "CL=F")
+    if t in ("BZ=F", "BRENT"):
+        return ("crude-oil-brent", "BZ=F")
+    if t in ("GC=F", "GOLD", "XAU"):
+        return ("gold-spot", "GC=F")
+
+    # 3. Hong Kong: explicit .HK suffix or common 4-5 digit HK codes
+    #    (HK codes are 4-5 digits but A-share codes are 6 digits, so
+    #    only 4-5 digits is unambiguous; leading zero 05-digit is HK).
+    if t.endswith(".HK"):
+        return ("hk-equity", t)
+    # HK 5-digit stripped (e.g. "00700" tencent)
+    if re.match(r"^0\d{4}$", t) and len(t) == 5:
+        return ("hk-equity", f"{t}.HK")
+
+    # 4. A-share: exactly 6 digits
+    if re.match(r"^\d{6}$", t):
+        return ("ashare", t)
+
+    # 5. US equity: 1-5 uppercase letters (could be extended tickers too)
+    if re.match(r"^[A-Z]{1,5}$", t):
+        return ("us-equity", t)
+
+    # 6. Japan: 4 digits + .T (7203.T for Toyota) — but a plain
+    #    4-digit ticker collides with many things, so only match
+    #    when the suffix is present.
+    if t.endswith(".T") and re.match(r"^\d{4}\.T$", t):
+        return ("jp-equity", t)
+
+    return (None, ticker)
 
 
 # ─────────────────────── Helpers ───────────────────────

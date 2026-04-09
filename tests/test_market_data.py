@@ -15,6 +15,7 @@ import pytest
 from ssflow.market_data import (
     MarketQuote,
     _ashare_prefix,
+    _infer_market_from_ticker,
     fetch_ashare,
     fetch_market_quote,
 )
@@ -160,8 +161,43 @@ async def test_fetch_ashare_gracefully_handles_dead_sina():
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_quote_unknown_market_returns_none():
-    q = await fetch_market_quote("other", "300750")
+async def test_fetch_market_quote_unknown_market_with_ashare_ticker_falls_back():
+    """When LLM classifies market as 'other' but ticker is 6 digits,
+    fall back to A-share."""
+    fake_quote = MarketQuote(
+        ticker="300750",
+        market="ashare",
+        source="sina",
+        current_price=391.3,
+        adv_value=1.3e10,
+        price_currency="CNY",
+    )
+    with patch("ssflow.market_data.fetch_ashare", AsyncMock(return_value=fake_quote)) as m:
+        q = await fetch_market_quote("other", "300750")
+    m.assert_awaited_once_with("300750")
+    assert q is fake_quote
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_quote_unknown_market_with_us_ticker_falls_back():
+    """When market is unclear but ticker is 1-5 uppercase letters,
+    fall back to us-equity via yfinance."""
+    fake_quote = MarketQuote(
+        ticker="NVDA",
+        market="us-equity",
+        source="yfinance",
+        current_price=182.08,
+        adv_value=3e10,
+    )
+    with patch("ssflow.market_data.fetch_yfinance", AsyncMock(return_value=fake_quote)) as m:
+        q = await fetch_market_quote("", "NVDA")
+    m.assert_awaited_once()
+    assert q is fake_quote
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_quote_completely_unknown_returns_none():
+    q = await fetch_market_quote("", "12abc34")
     assert q is None
 
 
@@ -197,6 +233,43 @@ async def test_fetch_market_quote_normalizes_market_case():
         q2 = await fetch_market_quote("SSE", "300750")
     assert q1 is fake_quote
     assert q2 is fake_quote
+
+
+# ─────────────────────── Shape inference ───────────────────────
+
+
+def test_infer_ashare_from_6digit():
+    assert _infer_market_from_ticker("300750")[0] == "ashare"
+    assert _infer_market_from_ticker("002594")[0] == "ashare"
+    assert _infer_market_from_ticker("600519")[0] == "ashare"
+    assert _infer_market_from_ticker("000001")[0] == "ashare"
+
+
+def test_infer_us_equity_from_uppercase():
+    assert _infer_market_from_ticker("NVDA")[0] == "us-equity"
+    assert _infer_market_from_ticker("AAPL")[0] == "us-equity"
+    assert _infer_market_from_ticker("TSLA")[0] == "us-equity"
+    assert _infer_market_from_ticker("F")[0] == "us-equity"
+    # Lowercase still gets upper-cased
+    assert _infer_market_from_ticker("aapl")[0] == "us-equity"
+
+
+def test_infer_hk_equity_from_suffix():
+    assert _infer_market_from_ticker("0700.HK") == ("hk-equity", "0700.HK")
+    # Bare 5-digit HK code gets .HK appended
+    assert _infer_market_from_ticker("00700") == ("hk-equity", "00700.HK")
+
+
+def test_infer_btc_from_name():
+    assert _infer_market_from_ticker("BTC")[0] == "btc-spot"
+    assert _infer_market_from_ticker("BTC-USD")[0] == "btc-spot"
+    assert _infer_market_from_ticker("", "Bitcoin spot")[0] == "btc-spot"
+
+
+def test_infer_returns_none_for_unknown():
+    assert _infer_market_from_ticker("RANDOM STRING")[0] is None
+    assert _infer_market_from_ticker("123")[0] is None
+    assert _infer_market_from_ticker("")[0] is None
 
 
 # ─────────────────────── Live smoke test (gated) ───────────────────────
