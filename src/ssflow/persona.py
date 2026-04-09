@@ -242,6 +242,13 @@ class Persona:
     #     never trades, only publishes content into the OASIS social stream
     entity_role: str = "trader"
 
+    # ─────────────────────── Entity State Sandbox ───────────────────────
+    #
+    # Links this persona to an Entity in the EntityGraph. When set, the
+    # persona's system prompt is augmented per-round with the entity's
+    # current state ("处境"). Set by the sandbox generator at Setup time.
+    entity_id: str | None = None
+
     # Who this persona regularly reads. List of persona ids in the same pack.
     # Special values:
     #   - "*"          → follows everyone in the pack (use sparingly: news wires)

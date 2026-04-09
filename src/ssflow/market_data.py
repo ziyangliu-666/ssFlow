@@ -507,9 +507,112 @@ def _safe_float(s: str) -> float:
         return 0.0
 
 
+async def fetch_market_quotes(
+    market: str,
+    tickers: list[str],
+    *,
+    instrument_hint: str | None = None,
+) -> dict[str, MarketQuote | None]:
+    """Fetch quotes for multiple tickers in parallel.
+
+    Returns a dict mapping ticker → MarketQuote (or None on failure).
+    """
+    import asyncio as _asyncio
+    tasks = [
+        fetch_market_quote(market, t, instrument_hint=instrument_hint)
+        for t in tickers
+    ]
+    results = await _asyncio.gather(*tasks, return_exceptions=True)
+    out: dict[str, MarketQuote | None] = {}
+    for ticker, result in zip(tickers, results):
+        if isinstance(result, Exception):
+            log.warning("fetch_market_quotes: %s failed: %s", ticker, result)
+            out[ticker] = None
+        else:
+            out[ticker] = result
+    return out
+
+
+async def fetch_kline_30d(
+    ticker: str, market: str = "ashare"
+) -> list[dict[str, Any]]:
+    """Fetch 30-day daily K-line data for a ticker.
+
+    Returns a list of {date, open, high, low, close, volume} dicts.
+    Returns an empty list on failure.
+    """
+    if market in ("ashare", "a-share", "cn-equity", "sse", "szse"):
+        return await _fetch_sina_kline_bars(ticker, lookback_days=30)
+    # For non-A-share markets, try yfinance
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        hist = t.history(period="1mo", interval="1d", auto_adjust=False)
+        if hist is None or hist.empty:
+            return []
+        bars = []
+        for dt, row in hist.iterrows():
+            bars.append({
+                "date": dt.strftime("%Y-%m-%d"),
+                "open": float(row.get("Open", 0)),
+                "high": float(row.get("High", 0)),
+                "low": float(row.get("Low", 0)),
+                "close": float(row.get("Close", 0)),
+                "volume": int(row.get("Volume", 0)),
+            })
+        return bars
+    except Exception as exc:
+        log.warning("fetch_kline_30d yfinance failed for %s: %s", ticker, exc)
+        return []
+
+
+async def _fetch_sina_kline_bars(
+    ticker: str, lookback_days: int = 30
+) -> list[dict[str, Any]]:
+    """Fetch daily OHLCV bars from Sina."""
+    sina_prefix, _ = _ashare_prefix(ticker)
+    url = (
+        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "CN_MarketData.getKLineData"
+    )
+    params = {
+        "symbol": f"{sina_prefix}{ticker}",
+        "scale": "240",
+        "ma": "no",
+        "datalen": str(lookback_days),
+    }
+    try:
+        async with httpx.AsyncClient(headers=_SINA_HEADERS, timeout=8.0) as client:
+            r = await client.get(url, params=params, follow_redirects=True)
+        if r.status_code != 200:
+            return []
+        rows = r.json()
+        if not isinstance(rows, list):
+            return []
+        bars = []
+        for row in rows:
+            try:
+                bars.append({
+                    "date": str(row.get("day", "")),
+                    "open": float(row.get("open", 0)),
+                    "high": float(row.get("high", 0)),
+                    "low": float(row.get("low", 0)),
+                    "close": float(row.get("close", 0)),
+                    "volume": int(float(row.get("volume", 0))),
+                })
+            except (TypeError, ValueError):
+                continue
+        return bars
+    except Exception as exc:
+        log.warning("sina kline bars failed for %s: %s", ticker, exc)
+        return []
+
+
 __all__ = [
     "MarketQuote",
+    "fetch_kline_30d",
     "fetch_market_quote",
+    "fetch_market_quotes",
     "fetch_ashare",
     "fetch_yfinance",
 ]

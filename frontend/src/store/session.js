@@ -24,6 +24,12 @@ const initial = {
   activeStreamId: '',          // set when /simulate-stream/init succeeds
   lastSimulationId: localStorage.getItem(LS_LAST_SIM_KEY) || '',
   lastError: '',
+  // Entity State Sandbox
+  entityGraph: null,           // serialized EntityGraph from /sandbox/generate or build_from_template
+  entityStates: {},            // live state updates during sim, keyed by entity_id
+  // Multi-instrument universe
+  instrumentUniverse: null,    // serialized InstrumentUniverse from /distill
+  roundSchedule: null,         // serialized RoundSchedule from /distill
 }
 
 // Restore prior session_id (so a refresh in the middle of editing
@@ -65,4 +71,8 @@ export function resetSession () {
   session.activeStreamId = ''
   session.lastSimulationId = ''
   session.lastError = ''
+  session.entityGraph = null
+  session.entityStates = {}
+  session.instrumentUniverse = null
+  session.roundSchedule = null
 }

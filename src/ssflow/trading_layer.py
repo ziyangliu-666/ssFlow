@@ -44,31 +44,59 @@ NORMALIZATION_TOLERANCE = 0.05
 # ─────────────────────── Stochastic agent state ───────────────────────
 
 
+# When no explicit ticker is given, we use this key for backward compatibility.
+_DEFAULT_TICKER = "_default"
+
+
 @dataclass
 class Agent:
     """One stochastic trader instance, persistent across rounds.
 
     Capital is immutable, holdings + cash mutate as the agent buys / sells.
-    `holdings_value` is derived from `holdings_shares × current_price`
-    (computed on demand).
+
+    Multi-instrument support: `holdings` is a dict[ticker → shares].
+    For backward compatibility, the `holdings_shares` property reads/writes
+    the default ticker entry, and methods accept either a float (single
+    instrument) or a dict[str, float] (multi-instrument prices).
     """
 
     persona_id: str
     capital: float                  # immutable: NAV at spawn time, in event currency
     cash: float                     # mutable: shrinks on buy, grows on sell
-    holdings_shares: float          # mutable: in shares of the target instrument
-    max_holdings_value: float       # immutable: capital × max_position_pct
+    holdings: dict[str, float] = field(default_factory=dict)  # {ticker: shares}
+    max_holdings_value: float = 0.0  # immutable: capital × max_position_pct
 
-    def holdings_value(self, current_price: float) -> float:
-        return self.holdings_shares * current_price
+    @property
+    def holdings_shares(self) -> float:
+        """Backward compat: total shares of the default ticker."""
+        return self.holdings.get(_DEFAULT_TICKER, 0.0)
 
-    def nav(self, current_price: float) -> float:
+    @holdings_shares.setter
+    def holdings_shares(self, value: float) -> None:
+        self.holdings[_DEFAULT_TICKER] = value
+
+    def shares_of(self, ticker: str) -> float:
+        return self.holdings.get(ticker, 0.0)
+
+    def _resolve_prices(self, current_price: float | dict[str, float]) -> dict[str, float]:
+        if isinstance(current_price, dict):
+            return current_price
+        return {_DEFAULT_TICKER: current_price}
+
+    def holdings_value(self, current_price: float | dict[str, float]) -> float:
+        prices = self._resolve_prices(current_price)
+        return sum(
+            self.holdings.get(t, 0.0) * p
+            for t, p in prices.items()
+        )
+
+    def nav(self, current_price: float | dict[str, float]) -> float:
         return self.cash + self.holdings_value(current_price)
 
-    def pnl(self, current_price: float) -> float:
+    def pnl(self, current_price: float | dict[str, float]) -> float:
         return self.nav(current_price) - self.capital
 
-    def buy_headroom(self, current_price: float) -> float:
+    def buy_headroom(self, current_price: float | dict[str, float]) -> float:
         """Remaining buy capacity given the persona's max_position_pct cap."""
         return max(0.0, self.max_holdings_value - self.holdings_value(current_price))
 
@@ -119,11 +147,20 @@ def _sample_position_pct(spec: dict[str, Any], rng: random.Random) -> float:
     raise ValueError(f"Unknown initial_position_distribution type: {dtype!r}")
 
 
-def spawn_agents(persona: Persona, current_price: float, rng: random.Random) -> list[Agent]:
+def spawn_agents(
+    persona: Persona,
+    current_price: float,
+    rng: random.Random,
+    *,
+    primary_ticker: str = _DEFAULT_TICKER,
+) -> list[Agent]:
     """Sample N agent instances from a persona's sandbox config.
 
     Same RNG-deterministic semantics as the legacy sandbox.spawn_agents:
     feeding the same `rng` and same persona produces the same agent population.
+
+    primary_ticker: which ticker to assign initial holdings to. Defaults to
+    _DEFAULT_TICKER for backward compat.
     """
     sandbox = persona.sandbox
     if sandbox is None:
@@ -154,7 +191,7 @@ def spawn_agents(persona: Persona, current_price: float, rng: random.Random) -> 
                 persona_id=persona.id,
                 capital=capital,
                 cash=cash,
-                holdings_shares=holdings_shares,
+                holdings={primary_ticker: holdings_shares},
                 max_holdings_value=capital * max_position_pct,
             )
         )
@@ -165,7 +202,11 @@ def spawn_agents(persona: Persona, current_price: float, rng: random.Random) -> 
 
 
 def apply_action(
-    agent: Agent, action_spec: dict[str, Any], current_price: float
+    agent: Agent,
+    action_spec: dict[str, Any],
+    current_price: float,
+    *,
+    instrument: str = _DEFAULT_TICKER,
 ) -> float:
     """Apply one action_spec to one agent. Mutates state. Returns order amount.
 
@@ -173,6 +214,9 @@ def apply_action(
     zero for hold or insufficient capacity. The buy path is capped by
     `agent.buy_headroom(current_price)` so the persona's max_position_pct
     constraint is enforced.
+
+    instrument: which ticker to trade. Defaults to _DEFAULT_TICKER for
+    backward compat with single-instrument simulations.
     """
     side = action_spec.get("side", "none")
     pool = action_spec.get("pool", "none")
@@ -184,10 +228,12 @@ def apply_action(
     if side == "none" or fraction <= 0:
         return 0.0
 
+    current_shares = agent.holdings.get(instrument, 0.0)
+
     if pool == "holdings_in_target":
-        if agent.holdings_shares <= 0:
+        if current_shares <= 0:
             return 0.0
-        shares_to_act = agent.holdings_shares * fraction
+        shares_to_act = current_shares * fraction
         amount = shares_to_act * current_price
     elif pool == "cash":
         if agent.cash <= 0:
@@ -198,7 +244,7 @@ def apply_action(
         return 0.0
 
     if side == "sell":
-        agent.holdings_shares -= shares_to_act
+        agent.holdings[instrument] = current_shares - shares_to_act
         agent.cash += amount
         return -amount
     if side == "buy":
@@ -208,7 +254,7 @@ def apply_action(
         if amount > headroom:
             amount = headroom
             shares_to_act = amount / current_price
-        agent.holdings_shares += shares_to_act
+        agent.holdings[instrument] = current_shares + shares_to_act
         agent.cash -= amount
         return +amount
     return 0.0
@@ -315,6 +361,39 @@ def apply_distribution_to_agent_pop(
             f"apply_distribution_to_agent_pop: persona '{persona.id}' has no sandbox"
         )
 
+    # ── Free-form path: entire class does the same action ──
+    if "__freeform__" in distribution and raw_distribution:
+        side = raw_distribution.get("side", "hold")
+        qty_pct = float(raw_distribution.get("quantity_pct", 0.0))
+        pool = raw_distribution.get("pool", "")
+
+        if side == "hold" or qty_pct <= 0:
+            freeform_spec = {"side": "none", "pool": "none", "fraction": 0.0}
+        else:
+            if not pool:
+                pool = "cash" if side == "buy" else "holdings_in_target"
+            freeform_spec = {"side": side, "pool": pool, "fraction": qty_pct}
+
+        net_flow = 0.0
+        histogram: dict[str, int] = {"__freeform__": len(agents)}
+        for agent_inst in agents:
+            order = apply_action(agent_inst, freeform_spec, current_price)
+            net_flow += order
+
+        return ClassFlowResult(
+            persona_id=persona.id,
+            net_flow=net_flow,
+            action_histogram=histogram,
+            n_agents=len(agents),
+            rationale=sanitize_text(rationale),
+            raw_distribution=raw_distribution or dict(distribution),
+            normalized_distribution={"__freeform__": 1.0},
+            normalization_warning=None,
+            confidence=max(0.0, min(1.0, confidence)),
+            system_fingerprint=system_fingerprint,
+        )
+
+    # ── Legacy distribution path ──
     expected_names = [a["name"] for a in sandbox.action_space]
     normalized, warning = normalize_action_distribution(distribution, expected_names)
     if warning:
@@ -356,6 +435,7 @@ __all__ = [
     "Agent",
     "ClassFlowResult",
     "NORMALIZATION_TOLERANCE",
+    "_DEFAULT_TICKER",
     "apply_action",
     "apply_distribution_to_agent_pop",
     "normalize_action_distribution",

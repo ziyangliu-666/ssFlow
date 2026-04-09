@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # ── Flask basic auth ───────────────────────────────────────────────────
     flask_password: SecretStr = Field(default=SecretStr("change-me"), alias="SSFLOW_PASSWORD")
 
+    # ── Entity State Sandbox ──────────────────────────────────────────────
+    enable_entity_sandbox: bool = Field(default=True, alias="SSFLOW_ENABLE_ENTITY_SANDBOX")
+
     # ── Project paths ──────────────────────────────────────────────────────
     @property
     def project_root(self) -> Path:

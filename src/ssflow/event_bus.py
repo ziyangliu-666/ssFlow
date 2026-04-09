@@ -39,6 +39,11 @@ EVENT_ROUND_COMPLETE = "round_complete"
 EVENT_SIMULATION_COMPLETE = "simulation_complete"
 EVENT_ERROR = "error"
 
+# Entity State Sandbox events
+EVENT_ENTITY_STATE_UPDATED = "entity_state_updated"
+EVENT_RESOURCE_FLOW_EXECUTED = "resource_flow_executed"
+EVENT_THRESHOLD_FIRED = "threshold_fired"
+
 ALL_EVENT_TYPES: frozenset[str] = frozenset(
     {
         EVENT_SIMULATION_START,
@@ -51,6 +56,9 @@ ALL_EVENT_TYPES: frozenset[str] = frozenset(
         EVENT_ROUND_COMPLETE,
         EVENT_SIMULATION_COMPLETE,
         EVENT_ERROR,
+        EVENT_ENTITY_STATE_UPDATED,
+        EVENT_RESOURCE_FLOW_EXECUTED,
+        EVENT_THRESHOLD_FIRED,
     }
 )
 
@@ -129,6 +137,30 @@ class CallbackSink:
         self._cb(dict(event))
 
 
+class TeeSink:
+    """Fans every event out to multiple downstream sinks.
+
+    Used by the SSE route to emit the live stream to the browser
+    (`QueueSink`) while also capturing the full event log for replay
+    (`ListSink`). A failure in one downstream sink never prevents the
+    others from receiving the event.
+    """
+
+    def __init__(self, *sinks: EventSink) -> None:
+        self._sinks = tuple(s for s in sinks if s is not None)
+
+    def emit(self, event: dict[str, Any]) -> None:
+        for sink in self._sinks:
+            try:
+                sink.emit(event)
+            except Exception as exc:
+                log.warning(
+                    "TeeSink downstream failed (ignored): %s %s",
+                    type(sink).__name__,
+                    exc,
+                )
+
+
 # ─────────────────────── Helpers used by the engine ───────────────────────
 
 
@@ -180,6 +212,7 @@ __all__ = [
     "ListSink",
     "QueueSink",
     "CallbackSink",
+    "TeeSink",
     "make_event",
     "safe_emit",
 ]

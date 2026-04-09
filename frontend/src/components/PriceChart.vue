@@ -2,30 +2,51 @@
   <div class="chart">
     <svg :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" class="svg">
       <defs>
-        <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="var(--ss-accent)" stop-opacity="0.22" />
-          <stop offset="100%" stop-color="var(--ss-accent)" stop-opacity="0" />
+        <linearGradient
+          v-for="(color, ticker) in seriesColors"
+          :key="'grad-' + ticker"
+          :id="gradientId + '-' + ticker"
+          x1="0" y1="0" x2="0" y2="1"
+        >
+          <stop offset="0%" :stop-color="color" stop-opacity="0.08" />
+          <stop offset="100%" :stop-color="color" stop-opacity="0" />
         </linearGradient>
       </defs>
 
-      <polygon
-        v-if="points.length > 1"
-        :points="areaPoints"
-        :fill="`url(#${gradientId})`"
-      />
-      <polyline
-        v-if="points.length > 1"
-        :points="polyPoints"
-        class="line"
-      />
-      <circle
-        v-if="points.length"
-        :cx="lastPoint.x"
-        :cy="lastPoint.y"
-        r="3"
-        class="last"
-      />
+      <!-- Render each series -->
+      <template v-for="(pts, ticker) in allSeries" :key="ticker">
+        <polygon
+          v-if="pts.length > 1"
+          :points="areaFor(pts)"
+          :fill="`url(#${gradientId}-${ticker})`"
+        />
+        <polyline
+          v-if="pts.length > 1"
+          :points="lineFor(pts)"
+          class="line"
+          :style="{ stroke: seriesColors[ticker] || 'var(--ss-accent)' }"
+        />
+        <circle
+          v-if="pts.length"
+          :cx="pts[pts.length - 1].x"
+          :cy="pts[pts.length - 1].y"
+          r="3"
+          :fill="seriesColors[ticker] || 'var(--ss-accent)'"
+        />
+      </template>
     </svg>
+
+    <!-- Legend (only shown for multi-instrument) -->
+    <div v-if="isMulti" class="legend">
+      <span
+        v-for="(color, ticker) in seriesColors"
+        :key="'leg-' + ticker"
+        class="legend-item"
+      >
+        <span class="dot" :style="{ background: color }"></span>
+        <span class="mono">{{ ticker }}</span>
+      </span>
+    </div>
   </div>
 </template>
 
@@ -33,7 +54,10 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  prices: { type: Array, default: () => [] },
+  // Accept either:
+  //   Array<number> — single instrument (backward compat)
+  //   Object { ticker: Array<number> } — multi-instrument
+  prices: { type: [Array, Object], default: () => [] },
 })
 
 const W = 380
@@ -41,32 +65,97 @@ const H = 110
 const padX = 4
 const padY = 8
 
-// Make the gradient id unique per instance (in case multiple charts end up
-// on the same page).
 const gradientId = 'pc-grad-' + Math.random().toString(36).slice(2, 8)
 
-const minPrice = computed(() => (props.prices.length ? Math.min(...props.prices) : 0))
-const maxPrice = computed(() => (props.prices.length ? Math.max(...props.prices) : 1))
+// Palette for up to 6 instruments
+const PALETTE = [
+  'var(--ss-accent)',  // orange — primary
+  '#2563eb',           // blue
+  '#059669',           // green
+  '#7c3aed',           // purple
+  '#dc2626',           // red
+  '#ca8a04',           // yellow
+]
 
-const points = computed(() => {
-  const ps = props.prices
-  if (!ps.length) return []
-  const spanY = (maxPrice.value - minPrice.value) || 1
-  return ps.map((p, i) => {
-    const x = padX + ((W - 2 * padX) * (i / Math.max(1, ps.length - 1)))
-    const y = padY + ((H - 2 * padY) * (1 - (p - minPrice.value) / spanY))
-    return { x, y }
+const isMulti = computed(() => !Array.isArray(props.prices) && typeof props.prices === 'object')
+
+const pricesByTicker = computed(() => {
+  if (Array.isArray(props.prices)) {
+    return { primary: props.prices }
+  }
+  if (typeof props.prices === 'object' && props.prices !== null) {
+    return props.prices
+  }
+  return { primary: [] }
+})
+
+const seriesColors = computed(() => {
+  const tickers = Object.keys(pricesByTicker.value)
+  const colors = {}
+  tickers.forEach((t, i) => {
+    colors[t] = PALETTE[i % PALETTE.length]
   })
+  return colors
 })
-const polyPoints = computed(() => points.value.map((p) => `${p.x},${p.y}`).join(' '))
-const areaPoints = computed(() => {
-  if (!points.value.length) return ''
-  const head = points.value.map((p) => `${p.x},${p.y}`).join(' ')
-  const last = points.value[points.value.length - 1]
-  const first = points.value[0]
-  return `${head} ${last.x},${H} ${first.x},${H}`
+
+// Compute global min/max across ALL series for consistent Y axis
+const globalMin = computed(() => {
+  let min = Infinity
+  for (const ps of Object.values(pricesByTicker.value)) {
+    for (const p of ps) {
+      if (p < min) min = p
+    }
+  }
+  return min === Infinity ? 0 : min
 })
-const lastPoint = computed(() => points.value[points.value.length - 1] || { x: 0, y: 0 })
+
+const globalMax = computed(() => {
+  let max = -Infinity
+  for (const ps of Object.values(pricesByTicker.value)) {
+    for (const p of ps) {
+      if (p > max) max = p
+    }
+  }
+  return max === -Infinity ? 1 : max
+})
+
+// For multi-instrument, normalize prices to % change from initial for fair comparison
+const allSeries = computed(() => {
+  const result = {}
+  const spanY = (globalMax.value - globalMin.value) || 1
+
+  for (const [ticker, ps] of Object.entries(pricesByTicker.value)) {
+    if (!ps.length) { result[ticker] = []; continue }
+
+    // For multi-instrument, use percentage change normalization
+    const useNorm = isMulti.value && ps.length > 0
+    const basePrice = useNorm ? ps[0] : null
+    const normPs = useNorm
+      ? ps.map(p => basePrice > 0 ? ((p / basePrice - 1) * 100) : 0)
+      : ps
+
+    // Recalculate span for normalized values
+    const localMin = Math.min(...normPs)
+    const localMax = Math.max(...normPs)
+    const localSpan = (useNorm ? (localMax - localMin) : spanY) || 1
+    const localBase = useNorm ? localMin : globalMin.value
+
+    result[ticker] = normPs.map((p, i) => ({
+      x: padX + ((W - 2 * padX) * (i / Math.max(1, normPs.length - 1))),
+      y: padY + ((H - 2 * padY) * (1 - (p - localBase) / localSpan)),
+    }))
+  }
+  return result
+})
+
+function lineFor (pts) {
+  return pts.map(p => `${p.x},${p.y}`).join(' ')
+}
+function areaFor (pts) {
+  if (!pts.length) return ''
+  const head = pts.map(p => `${p.x},${p.y}`).join(' ')
+  return `${head} ${pts[pts.length - 1].x},${H} ${pts[0].x},${H}`
+}
 </script>
 
 <style scoped>
@@ -81,11 +170,25 @@ const lastPoint = computed(() => points.value[points.value.length - 1] || { x: 0
 }
 .line {
   fill: none;
-  stroke: var(--ss-accent);
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
-.last {
-  fill: var(--ss-accent);
+.legend {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 0 4px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--ss-fg-muted);
+}
+.legend-item .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
 }
 </style>

@@ -13,28 +13,37 @@
 
       <!-- simulation_start -->
       <div v-if="type === 'simulation_start'" class="t-text">
-        <em>{{ payload.n_personas }} personas</em>, {{ payload.n_rounds }} rounds,
-        initial price <strong class="mono">{{ formatPrice(payload.initial_price) }}</strong>.
+        <em>{{ payload.n_personas }} 个角色</em> · {{ payload.n_rounds }} 轮 ·
+        开盘价 <strong class="mono">{{ formatPrice(payload.initial_price) }}</strong>。
       </div>
 
       <!-- round_start -->
       <div v-else-if="type === 'round_start'" class="t-text">
-        Round <strong>{{ payload.round_idx }}</strong> open at
-        <strong class="mono">{{ formatPrice(payload.current_price) }}</strong>.
+        <template v-if="payload.round_label">
+          <strong>{{ payload.round_label }}</strong>
+        </template>
+        <template v-else>
+          第 <strong>{{ (payload.round_idx ?? 0) + 1 }}</strong> 轮
+        </template>
+        开盘 <strong class="mono">{{ formatPrice(payload.current_price) }}</strong>。
+        <span v-if="payload.hours_since_event" class="mono subdued">
+          (事件后 {{ payload.hours_since_event }}h)
+        </span>
       </div>
 
       <!-- persona_thought -->
       <div v-else-if="type === 'persona_thought'" class="t-text">
         <span v-html="highlightThought(payload.text)"></span>
-        <div class="meta-line">
-          <span v-if="payload.content_type" class="ctype">{{ payload.content_type }}</span>
-          <span class="mono">❤ {{ payload.likes || 0 }} · ↻ {{ payload.reposts || 0 }}</span>
+        <div v-if="payload.content_type && payload.content_type !== 'social_post'" class="meta-line">
+          <span class="ctype">{{ payload.content_type }}</span>
         </div>
       </div>
 
       <!-- trade_submitted -->
       <div v-else-if="type === 'trade_submitted'">
-        <div class="t-text">Submits orders across actions:</div>
+        <div class="t-text">
+          下单分布<span v-if="payload.instrument" class="mono instrument-tag"> · {{ payload.instrument }}</span>：
+        </div>
         <ul class="dist">
           <li v-for="(v, k) in payload.distribution || {}" :key="k">
             <span class="action-name">{{ k }}</span>
@@ -51,12 +60,12 @@
 
       <!-- class_flow_computed -->
       <div v-else-if="type === 'class_flow_computed'" class="t-text flow-line">
-        net flow
+        净流入
         <strong class="mono" :class="flowClass(payload.net_flow)">
           {{ formatFlow(payload.net_flow) }}
         </strong>
-        across {{ payload.n_agents }} agents
-        <span v-if="payload.held" class="held-chip">HELD</span>
+        · {{ payload.n_agents }} 人
+        <span v-if="payload.held" class="held-chip">持仓不动</span>
       </div>
 
       <!-- price_updated -->
@@ -69,17 +78,17 @@
             {{ payload.delta_pct >= 0 ? '+' : '' }}{{ (payload.delta_pct * 100).toFixed(2) }}%
           </span>
         </div>
-        <div class="meta-line mono">net flow {{ formatFlow(payload.net_flow_total) }}</div>
+        <div class="meta-line mono">总净流入 {{ formatFlow(payload.net_flow_total) }}</div>
       </div>
 
       <!-- round_complete -->
       <div v-else-if="type === 'round_complete'" class="t-text subdued">
-        Round {{ payload.round_idx }} done · {{ payload.publications_count }} pubs · {{ payload.orders_count }} orders
+        第 {{ (payload.round_idx ?? 0) + 1 }} 轮结束 · {{ payload.publications_count }} 篇发布 · {{ payload.orders_count }} 笔订单
       </div>
 
       <!-- simulation_complete / simulation_done -->
       <div v-else-if="type === 'simulation_complete' || type === 'simulation_done'" class="t-text">
-        <strong>Simulation complete.</strong>
+        <strong>推演结束。</strong>
         <div class="meta-line mono">
           {{ formatPrice(payload.initial_price) }} → {{ formatPrice(payload.final_price) }}
           ({{ payload.cumulative_delta_pct !== undefined ? (payload.cumulative_delta_pct * 100).toFixed(2) : '?' }}%)
@@ -87,9 +96,34 @@
         </div>
       </div>
 
+      <!-- resource_flow_executed -->
+      <div v-else-if="type === 'resource_flow_executed'" class="t-text subdued">
+        {{ payload.source_name }} → {{ payload.target_name }}:
+        <strong>{{ payload.resource_type }}</strong> × {{ typeof payload.amount === 'number' ? payload.amount.toFixed(1) : payload.amount }}
+        <span v-if="payload.label" class="ctype">{{ payload.label }}</span>
+      </div>
+
+      <!-- threshold_fired -->
+      <div v-else-if="type === 'threshold_fired'" class="t-text threshold-line">
+        <span class="threshold-marker">⚡</span>
+        <strong>{{ payload.entity_name }}</strong>:
+        {{ payload.description }}
+        <div v-if="payload.effect_event_text" class="meta-line">
+          效果: {{ payload.effect_event_text }}
+        </div>
+      </div>
+
+      <!-- entity_state_updated (usually filtered out, shown in panel) -->
+      <div v-else-if="type === 'entity_state_updated'" class="t-text subdued">
+        {{ payload.entity_name }} 状态更新
+      </div>
+
       <!-- error -->
       <div v-else-if="type === 'error'" class="t-text bad">
-        <strong>{{ payload.code }}</strong> — {{ payload.detail }}
+        <strong v-if="payload.code">{{ payload.code }}</strong>
+        <template v-if="payload.code && payload.detail"> · </template>
+        <span v-if="payload.detail">{{ payload.detail }}</span>
+        <span v-else-if="!payload.code">未知错误（无详情）</span>
       </div>
 
       <!-- Fallback -->
@@ -107,17 +141,20 @@ const props = defineProps({
 })
 
 const KIND_MAP = {
-  simulation_start: 'Simulation start',
-  round_start: 'Round start',
-  persona_thought: 'Thought',
-  trade_submitted: 'Trade',
-  class_flow_computed: 'Class flow',
-  price_updated: 'Price updated',
-  round_complete: 'Round complete',
-  simulation_complete: 'Complete',
-  simulation_done: 'Report ready',
-  external_event_injected: 'External event',
-  error: 'Error',
+  simulation_start: '推演开始',
+  round_start: '轮次开始',
+  persona_thought: '想法',
+  trade_submitted: '交易',
+  class_flow_computed: '分组流向',
+  price_updated: '价格更新',
+  round_complete: '轮次结束',
+  simulation_complete: '推演结束',
+  simulation_done: '报告就绪',
+  external_event_injected: '外部事件',
+  resource_flow_executed: '资源流转',
+  threshold_fired: '阈值触发',
+  entity_state_updated: '实体状态',
+  error: '错误',
 }
 
 const kindLabel = computed(() => KIND_MAP[props.type] || props.type)
@@ -134,6 +171,9 @@ const evClass = computed(() => {
     simulation_complete: 'sim-end',
     simulation_done: 'sim-end',
     external_event_injected: 'ext',
+    resource_flow_executed: 'flow',
+    threshold_fired: 'threshold',
+    entity_state_updated: 'entity',
     error: 'error',
   }
   return m[props.type] || 'misc'
@@ -145,6 +185,9 @@ const markerGlyph = computed(() => {
   if (props.type === 'trade_submitted') return '◆'
   if (props.type === 'class_flow_computed') return '·'
   if (props.type === 'price_updated') return '$'
+  if (props.type === 'threshold_fired') return '⚡'
+  if (props.type === 'resource_flow_executed') return '→'
+  if (props.type === 'entity_state_updated') return '◇'
   if (props.type === 'error') return '!'
   if (props.type === 'simulation_start' || props.type === 'simulation_complete' || props.type === 'simulation_done') return '★'
   return '·'
@@ -153,6 +196,12 @@ const markerGlyph = computed(() => {
 const who = computed(() => {
   if (props.type === 'persona_thought' || props.type === 'trade_submitted' || props.type === 'class_flow_computed') {
     return props.payload.archetype || props.payload.persona_id || ''
+  }
+  if (props.type === 'threshold_fired' || props.type === 'entity_state_updated') {
+    return props.payload.entity_name || ''
+  }
+  if (props.type === 'resource_flow_executed') {
+    return props.payload.source_name || ''
   }
   return ''
 })
@@ -253,6 +302,23 @@ function priceDeltaClass (v) {
   background: #fff;
   color: var(--ss-fg-faint);
 }
+.t-ev.threshold .marker {
+  background: var(--ss-accent);
+  border-color: var(--ss-accent);
+  color: #fff;
+}
+.t-ev.entity .marker {
+  background: #fff;
+  color: var(--ss-fg-faint);
+}
+.threshold-marker {
+  color: var(--ss-accent);
+  margin-right: 4px;
+}
+.threshold-line {
+  border-left: 3px solid var(--ss-accent);
+  padding-left: 10px;
+}
 
 .body { flex: 1; min-width: 0; }
 
@@ -317,6 +383,10 @@ function priceDeltaClass (v) {
   font-size: 9px;
   margin-right: 6px;
   color: var(--ss-fg-muted);
+}
+.instrument-tag {
+  font-size: 11px;
+  color: var(--ss-accent);
 }
 
 /* Trade distribution */

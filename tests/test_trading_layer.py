@@ -69,7 +69,7 @@ class TestAgent:
     def test_holdings_value_derived_from_price(self):
         agent = Agent(
             persona_id="x", capital=1000, cash=500,
-            holdings_shares=10, max_holdings_value=900,
+            holdings={"_default": 10}, max_holdings_value=900,
         )
         assert agent.holdings_value(50.0) == 500
         assert agent.holdings_value(60.0) == 600
@@ -77,7 +77,7 @@ class TestAgent:
     def test_nav_is_cash_plus_holdings(self):
         agent = Agent(
             persona_id="x", capital=1000, cash=500,
-            holdings_shares=10, max_holdings_value=900,
+            holdings={"_default": 10}, max_holdings_value=900,
         )
         assert agent.nav(50.0) == 1000  # 500 cash + 500 holdings
         assert agent.nav(60.0) == 1100  # 500 cash + 600 holdings
@@ -85,7 +85,7 @@ class TestAgent:
     def test_pnl_at_starting_price_is_zero(self):
         agent = Agent(
             persona_id="x", capital=1000, cash=500,
-            holdings_shares=10, max_holdings_value=900,
+            holdings={"_default": 10}, max_holdings_value=900,
         )
         # holdings = 10 shares @ 50 = 500, cash = 500, total = 1000 = capital
         assert agent.pnl(50.0) == 0
@@ -93,7 +93,7 @@ class TestAgent:
     def test_pnl_positive_when_price_rises(self):
         agent = Agent(
             persona_id="x", capital=1000, cash=500,
-            holdings_shares=10, max_holdings_value=900,
+            holdings={"_default": 10}, max_holdings_value=900,
         )
         # Price doubles → holdings double from 500 to 1000
         assert agent.pnl(100.0) == 500
@@ -101,7 +101,7 @@ class TestAgent:
     def test_buy_headroom_capped_by_max_position(self):
         agent = Agent(
             persona_id="x", capital=1000, cash=900,
-            holdings_shares=2, max_holdings_value=500,
+            holdings={"_default": 2}, max_holdings_value=500,
         )
         # holdings_value at price 100 = 200, max = 500, headroom = 300
         assert agent.buy_headroom(100.0) == 300
@@ -163,7 +163,7 @@ class TestApplyAction:
     def _agent(self, cash=1000.0, shares=5.0, max_pct_value=2000.0) -> Agent:
         return Agent(
             persona_id="t", capital=2000.0, cash=cash,
-            holdings_shares=shares, max_holdings_value=max_pct_value,
+            holdings={"_default": shares}, max_holdings_value=max_pct_value,
         )
 
     def test_hold_returns_zero(self):

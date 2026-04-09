@@ -4,18 +4,18 @@
 
     <main class="main">
       <div v-if="!session.eventProposal" class="empty">
-        <h1>No event proposal <span class="accent">yet</span>.</h1>
-        <p>先回到 Seed 页上传文档并点 RUN EXTRACT。</p>
-        <button class="btn" type="button" @click="$router.push('/')">← Back to Seed</button>
+        <h1>还没有<span class="accent">抽取</span>结果。</h1>
+        <p>先回到开始页上传文档并点「开始抽取」。</p>
+        <button class="btn" type="button" @click="$router.push('/')">← 返回开始</button>
       </div>
 
       <div v-else class="wrap">
         <div class="page-h">
           <div>
-            <h1>Confirm what to <span class="accent">simulate</span>.</h1>
+            <h1>确认要<span class="accent">推演</span>的事件。</h1>
             <p class="sub">
               ssFlow 从你的材料里抽出了这些字段和角色。所有内容<em>可编辑</em>。
-              不满意就改，或者加新的 persona。满意就点底部 RUN。
+              不满意就改，或者添加新的角色。满意就点底部「开始推演」。
             </p>
           </div>
         </div>
@@ -24,7 +24,7 @@
           <!-- EVENT -->
           <section class="event-col">
             <div class="section-h">
-              <span class="t">Event proposal</span>
+              <span class="t">事件</span>
               <span class="tag">{{ eventTag }}</span>
             </div>
             <EventProposalForm v-model="event" />
@@ -33,9 +33,9 @@
           <!-- PERSONAS -->
           <section class="persona-col">
             <div class="section-h">
-              <span class="t">Personas</span>
-              <span class="tag">{{ personas.length }} active</span>
-              <button class="add-btn" type="button" @click="addPersona">+ Add persona</button>
+              <span class="t">角色</span>
+              <span class="tag">{{ personas.length }} 个</span>
+              <button class="add-btn" type="button" @click="addPersona">+ 添加角色</button>
             </div>
 
             <div class="filter-row">
@@ -52,7 +52,7 @@
             </div>
 
             <div v-if="!personas.length" class="persona-empty">
-              No personas proposed. Add one to continue.
+              暂无角色，请添加。
             </div>
             <div v-else class="persona-grid">
               <PersonaCard
@@ -70,11 +70,11 @@
 
     <footer v-if="session.eventProposal" class="bottom-bar">
       <div class="foot-meta">
-        <span><em>Rounds</em></span>
+        <span><em>轮数</em></span>
         <input v-model.number="nRounds" type="number" min="1" max="20" class="inp" />
-        <span><em>Seed</em></span>
+        <span><em>随机种子</em></span>
         <input v-model.number="seed" type="number" class="inp" />
-        <span class="base-pack">Base pack: <em>{{ session.basePersonasPath }}</em></span>
+        <span class="base-pack">基础角色包：<em>{{ session.basePersonasPath }}</em></span>
       </div>
       <div class="spacer"></div>
       <span v-if="status" class="status">{{ status }}</span>
@@ -85,8 +85,8 @@
         :disabled="loading || personas.length === 0"
         @click="onStart"
       >
-        <span v-if="!loading">RUN SIMULATION →</span>
-        <span v-else>STARTING…</span>
+        <span v-if="!loading">开始推演 →</span>
+        <span v-else>启动中…</span>
       </button>
     </footer>
   </div>
@@ -165,9 +165,9 @@ const traders = computed(() => personas.value.filter((p) => p.entity_role === 't
 const infos = computed(() => personas.value.filter((p) => p.entity_role !== 'trader'))
 
 const filters = computed(() => [
-  { id: 'all', label: 'All', count: personas.value.length },
-  { id: 'trader', label: 'Traders', count: traders.value.length },
-  { id: 'info', label: 'Info entities', count: infos.value.length },
+  { id: 'all', label: '全部', count: personas.value.length },
+  { id: 'trader', label: '交易者', count: traders.value.length },
+  { id: 'info', label: '信息源', count: infos.value.length },
 ])
 
 const filteredPersonas = computed(() => {
@@ -200,7 +200,7 @@ async function addPersona () {
     personas.value.push(tmpl)
   } catch (err) {
     console.error(err)
-    status.value = 'add persona failed: ' + err.message
+    status.value = '添加角色失败：' + err.message
   }
 }
 
@@ -215,15 +215,16 @@ async function onStart () {
       nRounds: nRounds.value,
       seed: seed.value,
       basePersonasPath: session.basePersonasPath,
+      entityGraph: session.entityGraph || undefined,
     })
-    status.value = 'opening stream…'
+    status.value = '正在连接 stream…'
     // Remember the stream id so the rail's Simulate step can navigate
     // back to it during the active run.
     session.activeStreamId = r.stream_id
     router.push({ name: 'Run', params: { streamId: r.stream_id } })
   } catch (err) {
     console.error(err)
-    status.value = 'failed: ' + (err?.response?.data?.detail || err.message)
+    status.value = '失败：' + (err?.response?.data?.detail || err.message)
   } finally {
     loading.value = false
   }
@@ -264,10 +265,10 @@ async function onStart () {
   margin-bottom: 12px;
 }
 .empty h1 .accent {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
   color: var(--ss-accent);
-  font-weight: 500;
+  margin: 0 0.08em;
 }
 .empty p { color: var(--ss-fg-muted); margin-bottom: 24px; }
 .btn {
@@ -294,10 +295,10 @@ async function onStart () {
   margin-bottom: 8px;
 }
 .page-h h1 .accent {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
   color: var(--ss-accent);
-  font-weight: 500;
+  margin: 0 0.08em;
 }
 .page-h .sub {
   font-size: 13px;
@@ -306,8 +307,9 @@ async function onStart () {
   line-height: 1.7;
 }
 .page-h .sub em {
-  font-family: 'Fraunces', serif;
-  font-style: italic;
+  font-family: 'Noto Serif SC', serif;
+  font-style: normal;
+  font-weight: 600;
   color: var(--ss-fg);
 }
 

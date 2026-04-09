@@ -51,7 +51,7 @@ from oasis.social_platform.channel import Channel
 from oasis.social_platform.config.user import UserInfo
 from oasis.social_platform.typing import ActionType
 
-from .oasis_trading_tool import OrderCollector, make_submit_order_tool
+from .oasis_trading_tool import OrderCollector, make_freeform_trading_tool, make_submit_order_tool
 from .persona import Persona
 
 
@@ -100,7 +100,7 @@ def _actions_for(persona: Persona) -> list[ActionType]:
     return list(INFO_ACTIONS)
 
 
-def _user_info_for(persona: Persona) -> UserInfo:
+def _user_info_for(persona: Persona, *, use_freeform_trading: bool = False) -> UserInfo:
     """Build a CAMEL/OASIS UserInfo from our Persona schema.
 
     Uses recsys_type="twitter" so OASIS's `to_twitter_system_message` is used
@@ -138,31 +138,60 @@ def _user_info_for(persona: Persona) -> UserInfo:
     # media actions" user prompt so the LLM remembers to also call the
     # trading tool.
     if persona.sandbox is not None:
-        action_names = [a["name"] for a in persona.sandbox.action_space]
-        hold_name = next(
-            (a["name"] for a in persona.sandbox.action_space
-             if a.get("side") == "none"),
-            action_names[0],
-        )
-        profile_block += (
-            f"\n\n"
-            f"# 你是一个交易员 (trader)\n"
-            f"除了社交动作 (发帖/点赞/转发/关注), 你**每一轮都必须**调用\n"
-            f"`submit_order_distribution` 工具, 基于你在 feed 里看到的内容\n"
-            f"给出你这一类参与者的动作概率分布.\n"
-            f"\n"
-            f"这一类的合法动作: {', '.join(action_names)}\n"
-            f"\n"
-            f"action_distribution 示例 (分布要反映 class 内真实的行为分歧):\n"
-            f'  {{"{action_names[0]}": 0.3, "{action_names[-1]}": 0.7}}\n'
-            f"\n"
-            f"如果这一轮这一类参与者倾向观望, 也要调用工具并传一个\n"
-            f"以 `{hold_name}` 为主的分布 (例: {{\"{hold_name}\": 1.0}}).\n"
-            f"**不要不调用这个工具**. 不调用的结果会被视为系统故障.\n"
-            f"\n"
-            f"rationale 字段用 50-150 字中文解释为什么, 要引用 feed 里看到的\n"
-            f"具体内容 (哪条新闻 / 哪个分析师 / 哪个 KOL 的帖子).\n"
-        )
+        if use_freeform_trading:
+            # Free-form mode: LLM decides exact side + quantity_pct
+            examples = []
+            for a in persona.sandbox.action_space:
+                side = a.get("side", "none")
+                if side == "none":
+                    examples.append("hold (观望)")
+                else:
+                    frac = a.get("fraction", 0)
+                    pool_label = "现金" if a.get("pool") == "cash" else "持仓"
+                    examples.append(f"{side} {frac:.0%} of {pool_label}")
+            examples_str = ", ".join(examples)
+            profile_block += (
+                f"\n\n"
+                f"# 你是一个交易员 (trader)\n"
+                f"除了社交动作, 你**每一轮都必须**调用 `submit_trading_decision` 工具.\n"
+                f"你可以自由决定：\n"
+                f"  - side: \"buy\"(买入) / \"sell\"(卖出) / \"hold\"(观望)\n"
+                f"  - quantity_pct: 0.0 到 1.0 之间的任意数字, 表示动用多少比例\n"
+                f"    (买入 = 占可用现金的比例, 卖出 = 占持仓的比例)\n"
+                f"  - rationale: 50-150 字中文解释, 引用你处境里的具体数据\n"
+                f"\n"
+                f"参考（不限于此）: {examples_str}\n"
+                f"\n"
+                f"基于你当前的处境和 feed 内容, 自由决定具体数字.\n"
+                f"**不要不调用这个工具**. 不调用会被视为系统故障.\n"
+            )
+        else:
+            # Legacy fixed-action mode
+            action_names = [a["name"] for a in persona.sandbox.action_space]
+            hold_name = next(
+                (a["name"] for a in persona.sandbox.action_space
+                 if a.get("side") == "none"),
+                action_names[0],
+            )
+            profile_block += (
+                f"\n\n"
+                f"# 你是一个交易员 (trader)\n"
+                f"除了社交动作 (发帖/点赞/转发/关注), 你**每一轮都必须**调用\n"
+                f"`submit_order_distribution` 工具, 基于你在 feed 里看到的内容\n"
+                f"给出你这一类参与者的动作概率分布.\n"
+                f"\n"
+                f"这一类的合法动作: {', '.join(action_names)}\n"
+                f"\n"
+                f"action_distribution 示例 (分布要反映 class 内真实的行为分歧):\n"
+                f'  {{"{action_names[0]}": 0.3, "{action_names[-1]}": 0.7}}\n'
+                f"\n"
+                f"如果这一轮这一类参与者倾向观望, 也要调用工具并传一个\n"
+                f"以 `{hold_name}` 为主的分布 (例: {{\"{hold_name}\": 1.0}}).\n"
+                f"**不要不调用这个工具**. 不调用的结果会被视为系统故障.\n"
+                f"\n"
+                f"rationale 字段用 50-150 字中文解释为什么, 要引用 feed 里看到的\n"
+                f"具体内容 (哪条新闻 / 哪个分析师 / 哪个 KOL 的帖子).\n"
+            )
 
     return UserInfo(
         user_name=persona.id,
@@ -209,6 +238,7 @@ def build_agent_graph(
     *,
     model: Optional[BaseModelBackend] = None,
     order_collector: OrderCollector | None = None,
+    use_freeform_trading: bool = False,
 ) -> tuple[AgentGraph, dict[str, int]]:
     """Build an OASIS `AgentGraph` from our persona YAML.
 
@@ -247,10 +277,16 @@ def build_agent_graph(
 
     # ── Step 1: create all real persona agents ──
     for idx, persona in enumerate(personas):
-        # Phase II: traders get the submit_order tool wired via closure
+        # Phase II: traders get the trading tool wired via closure.
+        # When use_freeform_trading is True (Entity Sandbox mode), the LLM
+        # gets the free-form tool (side + quantity_pct) instead of the fixed
+        # action_space distribution tool.
         extra_tools = []
         if persona.sandbox is not None and order_collector is not None:
-            extra_tools.append(make_submit_order_tool(persona, order_collector))
+            if use_freeform_trading:
+                extra_tools.append(make_freeform_trading_tool(persona, order_collector))
+            else:
+                extra_tools.append(make_submit_order_tool(persona, order_collector))
 
         # Traders need max_iteration >= 2 so CAMEL's ChatAgent does a
         # multi-turn tool-calling loop. With max_iteration=1 (OASIS default)
@@ -263,7 +299,7 @@ def build_agent_graph(
 
         agent = SocialAgent(
             agent_id=idx,
-            user_info=_user_info_for(persona),
+            user_info=_user_info_for(persona, use_freeform_trading=use_freeform_trading),
             channel=channel,
             model=model,
             agent_graph=graph,

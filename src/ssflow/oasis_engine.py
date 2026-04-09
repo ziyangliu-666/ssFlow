@@ -121,6 +121,8 @@ class OasisSimResult:
     adv_value_used: float
     oasis_db_path: str
     final_agents_by_class: dict[str, list[Agent]] = field(default_factory=dict)
+    # Multi-instrument: per-ticker price trajectories. Empty when single-instrument.
+    price_trajectories: dict[str, list[float]] = field(default_factory=dict)
 
     @property
     def n_personas(self) -> int:
@@ -291,6 +293,9 @@ async def run_simulation(
     external_events: ExternalEventSchedule | None = None,
     db_path: str | None = None,
     event_sink: EventSink | None = None,
+    entity_graph: "EntityGraph | None" = None,
+    instrument_universe: "InstrumentUniverse | None" = None,
+    round_schedule: "RoundSchedule | None" = None,
 ) -> OasisSimResult:
     """Run a Phase I OASIS-based market simulation.
 
@@ -310,6 +315,15 @@ async def run_simulation(
         db_path: optional path for the OASIS SQLite db. Defaults to a temp file
             under reports/oasis_dbs/.
         event_sink: optional `EventSink` that receives progress events
+        entity_graph: optional EntityGraph for the Entity State Sandbox.
+            When provided, each round executes resource flows, evaluates
+            thresholds, and injects entity state ("处境") into agent prompts.
+        instrument_universe: optional InstrumentUniverse for multi-instrument
+            simulations. When provided, agents can trade across multiple
+            instruments with independent Kyle pricing per ticker.
+        round_schedule: optional RoundSchedule for time-aware rounds.
+            When provided, each round's time context is injected into
+            agent prompts.
             (round_start, persona_thought, trade_submitted, price_updated, …)
             as the simulation runs. See `ssflow.event_bus` for the protocol
             and the available event types. Sink errors are swallowed.
@@ -385,6 +399,7 @@ async def run_simulation(
     order_collector = OrderCollector()
     agent_graph, persona_id_to_oasis_id = build_agent_graph(
         personas, channel, model=lm, order_collector=order_collector,
+        use_freeform_trading=(entity_graph is not None),
     )
 
     # ── Build the OASIS env ──
@@ -430,6 +445,17 @@ async def run_simulation(
                 round_idx=-1,
             ),
         )
+
+    # ── Multi-instrument price tracking ──
+    # When instrument_universe is present, we track prices per ticker.
+    # The single current_price variable remains as the primary instrument's price
+    # for backward compat with all the existing code paths.
+    if instrument_universe is not None:
+        current_prices: dict[str, float] = instrument_universe.prices()
+        adv_values: dict[str, float] = instrument_universe.adv_values()
+    else:
+        current_prices = {}
+        adv_values = {}
 
     # ── Round loop ──
     rounds: list[RoundRecord] = []
@@ -490,6 +516,65 @@ async def run_simulation(
                         authority_weight=ev.authority_weight,
                         oasis_post_id=int(ev_post_id),
                     )
+
+            # 1.5. Entity State Sandbox: resource flows + thresholds + prompt injection
+            if entity_graph is not None:
+                from .entity_engine import (
+                    collect_threshold_events,
+                    evaluate_thresholds,
+                    execute_resource_flows,
+                    inject_entity_state_into_prompts,
+                    record_entity_snapshots,
+                )
+
+                # Execute resource flows (deterministic, no LLM)
+                execute_resource_flows(
+                    entity_graph, round_idx, event_sink, simulation_id,
+                )
+
+                # Evaluate thresholds and fire effects
+                threshold_fires = evaluate_thresholds(
+                    entity_graph, round_idx, event_sink, simulation_id,
+                )
+
+                # Inject threshold-triggered events into the social feed
+                for tev in collect_threshold_events(threshold_fires, round_idx):
+                    t_author_id = tev.author_persona_id
+                    if t_author_id in persona_id_to_oasis_id:
+                        t_author_agent = agent_graph.get_agent(
+                            persona_id_to_oasis_id[t_author_id]
+                        )
+                    else:
+                        t_author_agent = market_agent
+                    pre_t_post_id = _max_post_id(str(db_path_obj))
+                    await env.step({
+                        t_author_agent: ManualAction(
+                            action_type=ActionType.CREATE_POST,
+                            action_args={"content": tev.text},
+                        ),
+                    })
+                    t_post_id = _max_post_id(str(db_path_obj))
+                    if t_post_id > pre_t_post_id:
+                        publication_registry.register(
+                            t_post_id,
+                            PublicationMetadata(
+                                content_type=tev.content_type,
+                                author_persona_id=t_author_id,
+                                author_archetype=t_author_id,
+                                authority_weight=tev.authority_weight,
+                                round_idx=round_idx,
+                            ),
+                        )
+
+                # Record entity state snapshots
+                record_entity_snapshots(
+                    entity_graph, round_idx, event_sink, simulation_id,
+                )
+
+                # Inject entity state ("处境") into each agent's prompt
+                inject_entity_state_into_prompts(
+                    entity_graph, agent_graph, persona_id_to_oasis_id, round_idx,
+                )
 
             # 2. OASIS social step: every real persona acts via LLM.
             #    Trader personas see BOTH the 21 native OASIS social actions
@@ -647,7 +732,7 @@ async def run_simulation(
                     held=True,
                 )
 
-            # 4. Aggregate net flow + Kyle
+            # 4. Aggregate net flow + Kyle (primary instrument)
             net_flow_total = sum(cf.net_flow for cf in class_flows.values())
             delta_pct = compute_price_impact(
                 net_flow_value=net_flow_total,
@@ -655,6 +740,23 @@ async def run_simulation(
                 lambda_market=lambda_used,
             )
             price_after = current_price * (1.0 + delta_pct)
+
+            # Multi-instrument: update prices for all instruments
+            if current_prices:
+                current_prices[event.ticker] = price_after
+                # For related instruments, compute independent Kyle with
+                # their own flow aggregation (for now: proportional
+                # spillover from primary based on correlation estimate)
+                for ticker in list(current_prices.keys()):
+                    if ticker == event.ticker:
+                        continue
+                    # Simple spillover: related instruments move at ~30%
+                    # of the primary's delta (rough correlation proxy).
+                    # This is placeholder logic — a real correlation
+                    # model would use historical data.
+                    spillover = delta_pct * 0.3
+                    current_prices[ticker] *= (1.0 + spillover)
+
             safe_emit(
                 event_sink,
                 EVENT_PRICE_UPDATED,
@@ -665,7 +767,22 @@ async def run_simulation(
                 delta_pct=float(delta_pct),
                 net_flow_total=float(net_flow_total),
                 price_currency=event.price_currency,
+                prices=dict(current_prices) if current_prices else None,
             )
+
+            # 4.5. Entity State Sandbox: update price-derived state + second threshold pass
+            if entity_graph is not None:
+                from .entity_engine import (
+                    evaluate_thresholds as _eval_thresholds,
+                    update_price_derived_state,
+                )
+                update_price_derived_state(
+                    entity_graph, price_after, initial_price,
+                )
+                # Second threshold pass for price-sensitive thresholds
+                _eval_thresholds(
+                    entity_graph, round_idx, event_sink, simulation_id,
+                )
 
             # 5. Post the price update from the market broadcaster
             price_post = _build_price_update_post(
@@ -797,6 +914,10 @@ async def run_simulation(
         adv_value_used=event.adv_value,
         oasis_db_path=str(db_path_obj),
         final_agents_by_class=agent_pops,
+        price_trajectories=(
+            {t: [p] for t, p in current_prices.items()}
+            if current_prices else {}
+        ),
     )
 
 

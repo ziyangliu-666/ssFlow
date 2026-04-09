@@ -54,6 +54,8 @@ class PendingOrder:
     # `OrderCollector.set_round(round_idx)` before each OASIS env.step().
     round_idx: int = 0
     raw_args: dict[str, Any] = field(default_factory=dict)
+    # Multi-instrument: which ticker this order targets. None = primary/default.
+    instrument: str | None = None
 
 
 class OrderCollector:
@@ -87,6 +89,7 @@ class OrderCollector:
         distribution: dict[str, float],
         rationale: str = "",
         raw_args: dict[str, Any] | None = None,
+        instrument: str | None = None,
     ) -> None:
         with self._lock:
             self._pending.append(
@@ -96,6 +99,7 @@ class OrderCollector:
                     rationale=rationale,
                     round_idx=self._current_round,
                     raw_args=dict(raw_args or {}),
+                    instrument=instrument,
                 )
             )
 
@@ -110,6 +114,94 @@ class OrderCollector:
     def __len__(self) -> int:
         with self._lock:
             return len(self._pending)
+
+
+def make_freeform_trading_tool(
+    persona: Persona,
+    collector: OrderCollector,
+) -> FunctionTool:
+    """Build a free-form `submit_trading_decision` tool for the Entity Sandbox.
+
+    Unlike `make_submit_order_tool` (which constrains the LLM to a fixed
+    action_space), this tool lets the LLM specify any side + quantity_pct.
+    The entire persona class executes the same action.
+
+    The tool result goes into agent memory, providing cross-round continuity.
+    """
+    persona_id = persona.id
+
+    # Build example hints from action_space if it exists (guidance, not constraint)
+    hints = ""
+    if persona.sandbox is not None and persona.sandbox.action_space:
+        examples = []
+        for a in persona.sandbox.action_space:
+            side = a.get("side", "none")
+            if side == "none":
+                examples.append("hold")
+            else:
+                frac = a.get("fraction", 0)
+                pool_label = "cash" if a.get("pool") == "cash" else "holdings"
+                examples.append(f"{side} {frac:.0%} of {pool_label}")
+        hints = f"\nExample decisions for reference: {', '.join(examples)}\n"
+
+    def submit_trading_decision(
+        side: str,
+        quantity_pct: float = 0.0,
+        rationale: str = "",
+        instrument: str = "",
+    ) -> str:
+        """Submit a trading decision for this persona class this round.
+
+        You decide EXACTLY what to do — no dropdown menu, no fixed options.
+        Specify:
+          - side: "buy", "sell", or "hold"
+          - quantity_pct: what fraction (0.0 to 1.0) of available cash (for buy)
+            or holdings (for sell) to deploy. 0.37 means 37%.
+          - rationale: 50-150 char explanation referencing your 处境 and feed
+          - instrument: which ticker to trade (e.g. "300750"). If omitted,
+            trades the primary instrument.
+
+        Your decision applies to the ENTIRE class of participants you represent.
+        You can call this tool multiple times per round to trade different instruments.
+        """
+        side_clean = str(side).strip().lower()
+        try:
+            qty = max(0.0, min(1.0, float(quantity_pct)))
+        except (TypeError, ValueError):
+            qty = 0.0
+
+        if side_clean == "hold" or qty <= 0:
+            side_clean = "hold"
+            qty = 0.0
+
+        inst = str(instrument).strip() if instrument else None
+
+        # Store as a special __freeform__ distribution
+        collector.add(
+            persona_id=persona_id,
+            distribution={"__freeform__": 1.0},
+            rationale=str(rationale or ""),
+            raw_args={
+                "side": side_clean,
+                "quantity_pct": qty,
+                "pool": "cash" if side_clean == "buy" else "holdings_in_target",
+            },
+            instrument=inst,
+        )
+
+        inst_label = inst or "primary"
+        if side_clean == "hold":
+            return f"Decision submitted for {persona_id}: HOLD {inst_label}. Rationale: {str(rationale)[:120]}"
+        return (
+            f"Decision submitted for {persona_id}: {side_clean.upper()} "
+            f"{qty:.0%} of {'cash' if side_clean == 'buy' else 'holdings'} "
+            f"in {inst_label}. Rationale: {str(rationale)[:120]}"
+        )
+
+    if hints:
+        submit_trading_decision.__doc__ += hints
+
+    return FunctionTool(submit_trading_decision)
 
 
 def make_submit_order_tool(
@@ -210,5 +302,6 @@ def make_submit_order_tool(
 __all__ = [
     "OrderCollector",
     "PendingOrder",
+    "make_freeform_trading_tool",
     "make_submit_order_tool",
 ]

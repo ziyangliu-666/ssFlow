@@ -47,7 +47,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, stream
 from ssflow.config import settings
 from ssflow.document_ingestion import build_corpus, ingest_many
 from ssflow.event import VALID_EVENT_TYPES, Event
-from ssflow.event_bus import QueueSink
+from ssflow.event_bus import ListSink, QueueSink, TeeSink
 from ssflow.event_extractor import extract_event
 from ssflow.llm_client import BudgetExceeded, cost_tracker
 from ssflow.oasis_engine import run_simulation
@@ -58,6 +58,8 @@ from ssflow.persona_proposer import (
     propose_personas,
 )
 from ssflow.report import render_simulation_safe_or_quarantine, save_report
+from ssflow.distillation import distill_sync
+from ssflow.sandbox_generator import build_from_template
 from ssflow.scorecard import get_simulation, init_db, insert_sandbox_simulation
 from ssflow.session_store import get_default_store
 
@@ -419,6 +421,9 @@ def create_app() -> Flask:
         if not personas:
             return jsonify({"error": "no_resolved_personas"}), 400
 
+        # Entity graph (optional — Entity State Sandbox mode)
+        entity_graph_data = payload.get("entity_graph")
+
         # Stash everything in the store. The actual run happens when the
         # client opens the SSE GET.
         stream_id = store.register_stream_payload(
@@ -429,6 +434,7 @@ def create_app() -> Flask:
                 "n_rounds": int(n_rounds),
                 "seed": seed,
                 "base_personas_path": base_personas_path,
+                "entity_graph": entity_graph_data,
             },
             session_id=session_id,
         )
@@ -475,7 +481,21 @@ def create_app() -> Flask:
         n_rounds = int(sim_payload.get("n_rounds") or settings.n_rounds)
         seed = sim_payload.get("seed")
 
+        # Rebuild EntityGraph from stashed data (if present)
+        entity_graph = None
+        entity_graph_data = sim_payload.get("entity_graph")
+        if entity_graph_data and settings.enable_entity_sandbox:
+            try:
+                entity_graph = _rebuild_entity_graph(entity_graph_data, event)
+            except Exception as exc:
+                log.warning("Failed to rebuild entity graph, running without: %s", exc)
+                entity_graph = None
+
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=2000)
+        # Capture the full event log in-memory so we can persist it to
+        # reports/<sim_id>.events.json when the simulation finishes —
+        # this is what powers /simulation/:id/timeline and the replay view.
+        event_log = ListSink()
 
         def engine_thread() -> None:
             try:
@@ -485,7 +505,8 @@ def create_app() -> Flask:
                         personas,
                         n_rounds=n_rounds,
                         seed=seed,
-                        event_sink=QueueSink(q),
+                        event_sink=TeeSink(QueueSink(q), event_log),
+                        entity_graph=entity_graph,
                     )
                 )
                 # Render + persist the report
@@ -535,6 +556,28 @@ def create_app() -> Flask:
                     publication_log=publication_log or None,
                     oasis_db_path=result.oasis_db_path,
                 )
+                # Persist the full in-memory event log so /simulation/:id/timeline
+                # can replay it later. Written atomically via a sibling temp file
+                # to avoid a half-written JSON on crash.
+                try:
+                    events_path = settings.reports_dir / f"{sim_id}.events.json"
+                    tmp_path = events_path.with_suffix(".events.json.tmp")
+                    tmp_path.write_text(
+                        json.dumps(
+                            {
+                                "simulation_id": sim_id,
+                                "n_rounds": result.n_rounds,
+                                "n_personas": result.n_personas,
+                                "events": event_log.events,
+                            },
+                            ensure_ascii=False,
+                            default=_json_default,
+                        ),
+                        encoding="utf-8",
+                    )
+                    tmp_path.replace(events_path)
+                except Exception:
+                    log.exception("failed to persist event log for %s", sim_id)
                 q.put(
                     {
                         "type": "simulation_done",
@@ -900,6 +943,165 @@ def create_app() -> Flask:
             "meta": meta,
         })
 
+    @app.get("/simulation/<simulation_id>/timeline")
+    @require_password
+    def get_simulation_timeline(simulation_id: str):
+        """Return the full event log for a completed simulation.
+
+        Powers the `/replay/:id` view and the Report round inspector.
+
+        Response shape:
+            {
+              "simulation_id": str,
+              "n_rounds": int,
+              "n_personas": int,
+              "events": [{"type": str, "ts": float, ...type-specific...}],
+              "source": "full" | "reconstructed",
+            }
+
+        - `source="full"`: read from `reports/<sim_id>.events.json`,
+          which is written atomically when a sim completes. Contains
+          every event the SSE stream emitted (thoughts, trades, flows,
+          prices, round boundaries).
+        - `source="reconstructed"`: fallback for simulations that
+          finished before event-log persistence existed. Rebuilds a
+          partial timeline from `publication_log_json` and
+          `price_trajectory_json` — missing thoughts and trades, but
+          still enough to render a round-by-round inspector and a
+          price chart.
+        """
+        events_path = settings.reports_dir / f"{simulation_id}.events.json"
+        if events_path.exists():
+            try:
+                data = json.loads(events_path.read_text(encoding="utf-8"))
+                data.setdefault("simulation_id", simulation_id)
+                data["source"] = "full"
+                return jsonify(data)
+            except Exception as exc:
+                log.exception("failed to read events.json for %s", simulation_id)
+                return jsonify({
+                    "error": "events_file_unreadable",
+                    "detail": str(exc),
+                }), 500
+
+        # Fallback: reconstruct a partial timeline from scorecard blobs.
+        row = get_simulation(simulation_id)
+        if row is None:
+            return jsonify({
+                "error": "not_found",
+                "simulation_id": simulation_id,
+            }), 404
+
+        try:
+            price_trajectory = json.loads(row.get("price_trajectory_json") or "[]")
+        except Exception:
+            price_trajectory = []
+        try:
+            publications = json.loads(row.get("publication_log_json") or "[]")
+        except Exception:
+            publications = []
+
+        n_rounds = int(row.get("n_rounds") or 0)
+        n_personas = int(row.get("n_personas") or 0)
+        initial_price = row.get("initial_price") or (
+            price_trajectory[0] if price_trajectory else 0.0
+        )
+        final_price = row.get("final_price") or (
+            price_trajectory[-1] if price_trajectory else 0.0
+        )
+
+        # Derive a pseudo-timestamp by round so the frontend can display
+        # something sensible in the time column. Real wall-clock is lost
+        # for reconstructed timelines.
+        base_ts = 0.0
+
+        events: list[dict] = []
+        events.append({
+            "type": "simulation_start",
+            "ts": base_ts,
+            "n_personas": n_personas,
+            "n_rounds": n_rounds,
+            "initial_price": initial_price,
+        })
+
+        # Bucket publications by round.
+        pubs_by_round: dict[int, list[dict]] = {}
+        for pub in publications:
+            r = int(pub.get("round_idx") or 0)
+            pubs_by_round.setdefault(r, []).append(pub)
+
+        for r in range(max(n_rounds, len(price_trajectory) - 1)):
+            round_ts = base_ts + (r + 1)
+            price_before = (
+                price_trajectory[r] if r < len(price_trajectory) else initial_price
+            )
+            price_after = (
+                price_trajectory[r + 1]
+                if r + 1 < len(price_trajectory)
+                else price_before
+            )
+            events.append({
+                "type": "round_start",
+                "ts": round_ts,
+                "round_idx": r,
+                "current_price": price_before,
+            })
+            for pub in pubs_by_round.get(r, []):
+                # Render publications as persona_thought events so the
+                # existing TimelineEvent component can display them with
+                # no new rendering code. author_archetype is the cleanest
+                # display label we have.
+                events.append({
+                    "type": "persona_thought",
+                    "ts": round_ts + 0.1,
+                    "round_idx": r,
+                    "persona_id": pub.get("author_persona_id") or "",
+                    "archetype": pub.get("author_archetype")
+                    or pub.get("author_persona_id")
+                    or "",
+                    "content_type": pub.get("content_type") or "social_post",
+                    "text": pub.get("text") or "",
+                    "likes": pub.get("likes") or 0,
+                    "reposts": pub.get("reposts") or 0,
+                })
+            delta_pct = (
+                (price_after / price_before - 1.0) if price_before else 0.0
+            )
+            events.append({
+                "type": "price_updated",
+                "ts": round_ts + 0.5,
+                "round_idx": r,
+                "price_before": price_before,
+                "price_after": price_after,
+                "delta_pct": delta_pct,
+                "net_flow_total": 0.0,
+            })
+            events.append({
+                "type": "round_complete",
+                "ts": round_ts + 0.6,
+                "round_idx": r,
+                "publications_count": len(pubs_by_round.get(r, [])),
+                "orders_count": 0,
+            })
+
+        events.append({
+            "type": "simulation_complete",
+            "ts": base_ts + n_rounds + 1,
+            "initial_price": initial_price,
+            "final_price": final_price,
+            "cumulative_delta_pct": row.get("cumulative_delta_pct") or 0.0,
+            "elapsed_seconds": row.get("elapsed_seconds") or 0.0,
+            "price_trajectory": price_trajectory,
+        })
+
+        return jsonify({
+            "simulation_id": simulation_id,
+            "n_rounds": n_rounds,
+            "n_personas": n_personas,
+            "events": events,
+            "source": "reconstructed",
+        })
+
     @app.get("/cost")
     @require_password
     def get_cost():
@@ -912,10 +1114,150 @@ def create_app() -> Flask:
             }
         )
 
+    # ─────────────────────── /distill ───────────────────────
+
+    @app.post("/distill")
+    @require_password
+    def distill_endpoint():
+        """Distill an event topic into an InstrumentUniverse.
+
+        Identifies the primary instrument + related instruments, fetches
+        real market data (prices, K-lines) for all of them, and returns
+        a serialized InstrumentUniverse + a default RoundSchedule.
+
+        Request body:
+            topic: str (required)
+            market: str (optional, default "ashare")
+            event_ticker: str (optional) — if already known
+            event_price: float (optional) — if already fetched
+            event_date: str (optional) — for round schedule
+        """
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            return jsonify({"error": "invalid_json"}), 400
+
+        topic = payload.get("topic", "").strip()
+        if not topic:
+            return jsonify({"error": "topic_required"}), 400
+
+        market = payload.get("market", "ashare")
+        event_ticker = payload.get("event_ticker")
+        event_price = payload.get("event_price")
+        event_date = payload.get("event_date", "")
+
+        try:
+            universe = distill_sync(
+                topic=topic,
+                market=market,
+                event_ticker=event_ticker,
+                event_price=float(event_price) if event_price else None,
+            )
+        except Exception as exc:
+            log.exception("distillation failed")
+            return jsonify({"error": "distillation_failed", "detail": str(exc)}), 500
+
+        # Generate a default round schedule
+        from ssflow.round_schedule import make_default_schedule
+        schedule = make_default_schedule(event_date or "TBD")
+
+        return jsonify({
+            "instrument_universe": universe.to_serializable(),
+            "round_schedule": schedule.to_serializable(),
+        })
+
+    # ─────────────────────── /sandbox/generate ───────────────────────
+
+    @app.post("/sandbox/generate")
+    @require_password
+    def sandbox_generate():
+        """Generate an EntityGraph from a topic string.
+
+        Uses templates + optional LLM tuning. Returns a serialized
+        EntityGraph that the frontend can display and pass back to
+        /simulate-stream/init.
+
+        Request body:
+            topic: str (required) — e.g. "比亚迪 2026Q1 业绩不及预期"
+            market: str (optional, default "ashare")
+            current_price: float (optional)
+            use_llm: bool (optional, default false) — whether to call LLM for tuning
+            entity_overrides: dict (optional) — per-slot overrides
+        """
+        try:
+            payload = request.get_json(force=True) or {}
+        except Exception:
+            return jsonify({"error": "invalid_json"}), 400
+
+        topic = payload.get("topic", "").strip()
+        if not topic:
+            return jsonify({"error": "topic_required", "detail": "topic string is required"}), 400
+
+        market = payload.get("market", "ashare")
+        current_price = payload.get("current_price", 0.0)
+        use_llm = payload.get("use_llm", False)
+        entity_overrides = payload.get("entity_overrides")
+
+        try:
+            if use_llm:
+                from ssflow.sandbox_generator import generate_sandbox
+                graph = generate_sandbox(
+                    topic=topic,
+                    market=market,
+                    current_price=float(current_price or 0),
+                )
+            else:
+                graph = build_from_template(
+                    topic=topic,
+                    market=market,
+                    current_price=float(current_price or 0),
+                    entity_overrides=entity_overrides,
+                )
+            return jsonify(graph.to_serializable())
+        except Exception as exc:
+            log.exception("sandbox generation failed")
+            return jsonify({"error": "sandbox_generation_failed", "detail": str(exc)}), 500
+
     return app
 
 
 # ─────────────────────── Helpers ───────────────────────
+
+
+def _rebuild_entity_graph(data: dict, event: "Event") -> "EntityGraph":
+    """Rebuild an EntityGraph from the serialized JSON that was stashed
+    in the stream payload or sent from the frontend.
+
+    The serialized form (from EntityGraph.to_serializable()) strips callables,
+    so we rebuild flows as display-only and thresholds from the template
+    defaults via build_from_template.
+    """
+    from ssflow.entity import Entity, EntityGraph, EntityState, ResourceFlow
+
+    topic = data.get("topic", "")
+    market = event.market or "ashare"
+
+    # If we have entity data, try to rebuild from template with overrides
+    entity_overrides = {}
+    for slot_id, e_data in data.get("entities", {}).items():
+        entity_overrides[slot_id] = {
+            "display_name": e_data.get("display_name", ""),
+            "state": e_data.get("state", {}),
+        }
+
+    graph = build_from_template(
+        topic=topic,
+        market=market,
+        current_price=float(event.current_price or 0),
+        entity_overrides=entity_overrides,
+    )
+
+    # Link entity_ids to persona_ids from the serialized data
+    for slot_id, e_data in data.get("entities", {}).items():
+        if slot_id in graph.entities and e_data.get("persona_id"):
+            graph.entities[slot_id].persona_id = e_data["persona_id"]
+
+    return graph
 
 
 def _build_event_from_dict(data: dict) -> Event:
