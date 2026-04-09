@@ -31,7 +31,8 @@
               v-for="inst in universeInstruments"
               :key="inst.ticker"
               class="inst-card"
-              :class="{ primary: inst.relationship === 'primary' }"
+              :class="{ primary: inst.relationship === 'primary', expanded: expandedTicker === inst.ticker }"
+              @click="expandedTicker = expandedTicker === inst.ticker ? null : inst.ticker"
             >
               <div class="inst-h">
                 <span class="inst-name">{{ inst.name }}</span>
@@ -42,15 +43,30 @@
                 <span class="inst-price mono">{{ inst.price_currency || '¥' }}{{ inst.current_price?.toFixed(2) || '—' }}</span>
               </div>
               <div v-if="inst.kline_30d && inst.kline_30d.length" class="inst-kline">
-                <svg :viewBox="`0 0 120 30`" preserveAspectRatio="none" class="mini-chart">
+                <svg :viewBox="`0 0 ${expandedTicker === inst.ticker ? 300 : 120} ${expandedTicker === inst.ticker ? 80 : 30}`" preserveAspectRatio="none" class="mini-chart" :class="{ 'expanded-chart': expandedTicker === inst.ticker }">
                   <polyline
-                    :points="miniKline(inst.kline_30d)"
+                    :points="miniKline(inst.kline_30d, expandedTicker === inst.ticker)"
                     fill="none"
                     :stroke="inst.relationship === 'primary' ? 'var(--ss-accent)' : 'var(--ss-fg-muted)'"
                     stroke-width="1.2"
                     vector-effect="non-scaling-stroke"
                   />
                 </svg>
+              </div>
+              <!-- Expanded details -->
+              <div v-if="expandedTicker === inst.ticker" class="inst-detail">
+                <div class="detail-row">
+                  <span>日均成交额</span>
+                  <span class="mono">{{ inst.adv_value ? (inst.adv_value / 1e8).toFixed(1) + ' 亿' : '—' }}</span>
+                </div>
+                <div v-if="inst.kline_30d && inst.kline_30d.length" class="detail-row">
+                  <span>30日高/低</span>
+                  <span class="mono">{{ klineRange(inst.kline_30d) }}</span>
+                </div>
+                <div v-for="(fv, fk) in (inst.financials || {})" :key="fk" class="detail-row">
+                  <span>{{ fk }}</span>
+                  <span class="mono">{{ fv }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -97,18 +113,25 @@
           </div>
         </section>
 
-        <div class="cols">
-          <!-- EVENT -->
-          <section class="event-col">
-            <div class="section-h">
-              <span class="t">事件</span>
-              <span class="tag">{{ eventTag }}</span>
-            </div>
-            <EventProposalForm v-model="event" />
-          </section>
+        <!-- EVENT SUMMARY (compact — full details are in the instrument cards above) -->
+        <section v-if="event && event.event_text" class="event-summary">
+          <div class="section-h">
+            <span class="t">事件</span>
+            <span class="tag">{{ event.event_date || '' }}</span>
+          </div>
+          <div class="event-text-block">
+            <textarea
+              v-model="event.event_text"
+              class="event-textarea"
+              rows="3"
+              placeholder="事件描述"
+            ></textarea>
+          </div>
+        </section>
 
+        <div class="cols">
           <!-- PERSONAS -->
-          <section class="persona-col">
+          <section class="persona-col" style="grid-column: 1 / -1;">
             <div class="section-h">
               <span class="t">角色</span>
               <span class="tag">{{ personas.length }} 个</span>
@@ -188,6 +211,7 @@ const seed = ref(42)
 const loading = ref(false)
 const status = ref('')
 const activeFilter = ref('all')
+const expandedTicker = ref(null)
 
 // Entity sandbox + multi-instrument data from session
 const instrumentUniverse = computed(() => session.instrumentUniverse || null)
@@ -221,17 +245,27 @@ const ENT_TYPE_LABELS = {
 }
 function entTypeLabel (t) { return ENT_TYPE_LABELS[t] || t }
 
-function miniKline (bars) {
+function miniKline (bars, expanded = false) {
   if (!bars.length) return ''
   const closes = bars.map(b => b.close || 0)
   const min = Math.min(...closes)
   const max = Math.max(...closes)
   const span = (max - min) || 1
+  const w = expanded ? 300 : 120
+  const h = expanded ? 80 : 30
+  const pad = expanded ? 4 : 2
   return closes.map((c, i) => {
-    const x = (i / Math.max(1, closes.length - 1)) * 120
-    const y = 28 - ((c - min) / span) * 26
+    const x = (i / Math.max(1, closes.length - 1)) * w
+    const y = pad + ((h - 2 * pad) * (1 - (c - min) / span))
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
+}
+
+function klineRange (bars) {
+  if (!bars.length) return '—'
+  const closes = bars.map(b => b.close || 0).filter(c => c > 0)
+  if (!closes.length) return '—'
+  return `${Math.min(...closes).toFixed(2)} / ${Math.max(...closes).toFixed(2)}`
 }
 
 // One-way sync on mount: copy the session state into local editable refs.
@@ -566,6 +600,37 @@ async function onStart () {
 .inst-price { color: var(--ss-fg); }
 .inst-kline { height: 30px; }
 .mini-chart { width: 100%; height: 30px; display: block; }
+.mini-chart.expanded-chart { height: 80px; }
+.inst-card { cursor: pointer; transition: all 0.15s; }
+.inst-card:hover { border-color: var(--ss-fg-muted); }
+.inst-card.expanded { grid-column: 1 / -1; }
+.inst-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ss-line);
+}
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 2px 0;
+  color: var(--ss-fg-muted);
+}
+.detail-row .mono { color: var(--ss-fg); }
+
+/* Event summary (compact) */
+.event-summary { margin-bottom: 20px; }
+.event-textarea {
+  width: 100%;
+  border: 1px solid var(--ss-line);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font: 13px/1.6 'Inter', sans-serif;
+  color: var(--ss-fg);
+  resize: vertical;
+  outline: none;
+}
+.event-textarea:focus { border-color: var(--ss-accent); }
 
 /* Entity sandbox */
 .entity-grid {

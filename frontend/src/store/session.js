@@ -8,6 +8,8 @@ import { reactive, watch } from 'vue'
 const LS_PASSWORD_KEY = 'ssflow.password'
 const LS_SESSION_KEY = 'ssflow.session'
 const LS_LAST_SIM_KEY = 'ssflow.lastSim'
+const LS_UNIVERSE_KEY = 'ssflow.instrumentUniverse'
+const LS_SCHEDULE_KEY = 'ssflow.roundSchedule'
 
 const initial = {
   password: localStorage.getItem(LS_PASSWORD_KEY) || '',
@@ -27,18 +29,25 @@ const initial = {
   // Entity State Sandbox
   entityGraph: null,           // serialized EntityGraph from /sandbox/generate or build_from_template
   entityStates: {},            // live state updates during sim, keyed by entity_id
-  // Multi-instrument universe
-  instrumentUniverse: null,    // serialized InstrumentUniverse from /distill
-  roundSchedule: null,         // serialized RoundSchedule from /distill
+  // Multi-instrument universe (persisted to localStorage for Replay access)
+  instrumentUniverse: null,
+  roundSchedule: null,
 }
 
-// Restore prior session_id (so a refresh in the middle of editing
-// doesn't lose the session). Everything else stays in memory.
+// Restore prior session_id
 try {
   const stored = JSON.parse(localStorage.getItem(LS_SESSION_KEY) || 'null')
-  if (stored && stored.sessionId) {
-    initial.sessionId = stored.sessionId
-  }
+  if (stored && stored.sessionId) initial.sessionId = stored.sessionId
+} catch (_) { /* ignore */ }
+
+// Restore instrument universe + round schedule
+try {
+  const iu = JSON.parse(localStorage.getItem(LS_UNIVERSE_KEY) || 'null')
+  if (iu) initial.instrumentUniverse = iu
+} catch (_) { /* ignore */ }
+try {
+  const rs = JSON.parse(localStorage.getItem(LS_SCHEDULE_KEY) || 'null')
+  if (rs) initial.roundSchedule = rs
 } catch (_) { /* ignore */ }
 
 export const session = reactive(initial)
@@ -58,6 +67,16 @@ watch(() => session.lastSimulationId, (val) => {
   if (val) localStorage.setItem(LS_LAST_SIM_KEY, val)
   else localStorage.removeItem(LS_LAST_SIM_KEY)
 })
+
+watch(() => session.instrumentUniverse, (val) => {
+  if (val) localStorage.setItem(LS_UNIVERSE_KEY, JSON.stringify(val))
+  else localStorage.removeItem(LS_UNIVERSE_KEY)
+}, { deep: true })
+
+watch(() => session.roundSchedule, (val) => {
+  if (val) localStorage.setItem(LS_SCHEDULE_KEY, JSON.stringify(val))
+  else localStorage.removeItem(LS_SCHEDULE_KEY)
+}, { deep: true })
 
 export function resetSession () {
   session.sessionId = ''

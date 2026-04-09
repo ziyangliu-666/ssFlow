@@ -47,18 +47,36 @@
 
         <!-- Price block (hidden in error state — see .err-panel) -->
         <div v-if="phase !== 'error'" class="price-block">
+          <!-- Ticker switcher (multi-instrument mode) -->
+          <div v-if="availableTickers.length > 1" class="ticker-bar">
+            <button
+              v-for="t in availableTickers"
+              :key="t.ticker"
+              type="button"
+              class="ticker-chip"
+              :class="{ active: activeTicker === t.ticker, primary: t.primary }"
+              @click="activeTicker = t.ticker"
+            >{{ t.name }}</button>
+            <button
+              type="button"
+              class="ticker-chip overlay-chip"
+              :class="{ active: activeTicker === '__all__' }"
+              @click="activeTicker = '__all__'"
+            >全部叠加</button>
+          </div>
+
           <div class="price-row">
             <div>
               <div class="k">现价</div>
-              <div class="price-now mono" :class="cumulativeClass">{{ formatPrice(currentPrice) }}</div>
+              <div class="price-now mono" :class="cumulativeClass">{{ formatPrice(displayPrice) }}</div>
             </div>
             <div>
               <div class="k">较开盘</div>
-              <div class="price-delta mono" :class="cumulativeClass">{{ formatPct(cumulativePct) }}</div>
+              <div class="price-delta mono" :class="cumulativeClass">{{ formatPct(displayDeltaPct) }}</div>
             </div>
             <div style="margin-left: auto; text-align: right;">
               <div class="k">开盘</div>
-              <div class="mono" style="font-size: 13px;">{{ formatPrice(initialPrice) }}</div>
+              <div class="mono" style="font-size: 13px;">{{ formatPrice(displayInitialPrice) }}</div>
             </div>
           </div>
 
@@ -209,10 +227,50 @@ const tickInterval = ref(null)
 // Multi-instrument price trajectories: {ticker: [prices]}
 const multiPriceTrajectories = ref(null)
 
+// Active ticker for the switcher
+const activeTicker = ref('__all__')
+
+// Build list of available tickers from instrument universe
+const availableTickers = computed(() => {
+  const iu = session.instrumentUniverse
+  if (!iu) return []
+  const all = [iu.primary, ...(iu.related || [])].filter(Boolean)
+  return all.map(inst => ({
+    ticker: inst.ticker,
+    name: inst.name,
+    primary: inst.relationship === 'primary',
+  }))
+})
+
+// Display price for the selected ticker
+const displayPrice = computed(() => {
+  if (activeTicker.value === '__all__' || !multiPriceTrajectories.value) return currentPrice.value
+  const traj = multiPriceTrajectories.value[activeTicker.value]
+  return traj && traj.length ? traj[traj.length - 1] : currentPrice.value
+})
+
+const displayInitialPrice = computed(() => {
+  if (activeTicker.value === '__all__' || !multiPriceTrajectories.value) return initialPrice.value
+  const traj = multiPriceTrajectories.value[activeTicker.value]
+  return traj && traj.length ? traj[0] : initialPrice.value
+})
+
+const displayDeltaPct = computed(() => {
+  const init = displayInitialPrice.value
+  const curr = displayPrice.value
+  if (!init || !curr) return 0
+  return curr / init - 1
+})
+
 // Use multi-instrument data if available, fall back to single-instrument
 const chartPrices = computed(() => {
   if (multiPriceTrajectories.value && Object.keys(multiPriceTrajectories.value).length > 1) {
-    return multiPriceTrajectories.value
+    if (activeTicker.value === '__all__') {
+      return multiPriceTrajectories.value
+    }
+    // Single ticker view — return just that ticker's data as an array
+    const traj = multiPriceTrajectories.value[activeTicker.value]
+    return traj || priceTrajectory.value
   }
   return priceTrajectory.value
 })
@@ -773,6 +831,35 @@ onBeforeUnmount(() => {
   border-color: var(--ss-fg);
 }
 .spacer { flex: 1; }
+
+/* Ticker switcher bar */
+.ticker-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.ticker-chip {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--ss-line);
+  background: #fff;
+  color: var(--ss-fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+}
+.ticker-chip:hover { border-color: var(--ss-fg-muted); }
+.ticker-chip.active {
+  background: var(--ss-fg);
+  color: #fff;
+  border-color: var(--ss-fg);
+}
+.ticker-chip.primary { font-weight: 600; }
+.overlay-chip.active {
+  background: var(--ss-accent);
+  border-color: var(--ss-accent);
+}
 
 .auto-chip {
   margin-left: auto;
