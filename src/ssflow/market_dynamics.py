@@ -53,12 +53,35 @@ MAX_DELTA_PCT_PER_ROUND: float = 0.10
 FLOW_KNEE: float = 0.03
 
 
+def compute_dynamic_knee(
+    n_active_classes: int,
+    total_classes: int,
+    cumulative_abs_delta: float,
+    round_idx: int,
+    base_knee: float = FLOW_KNEE,
+) -> float:
+    """Compute a round-specific flow knee that adapts to market state.
+
+    Fewer active participant classes → less liquidity → lower knee → smaller
+    maximum delta.  Large cumulative price moves → more resistance from
+    thinning marginal flow → lower effective knee.
+
+    Returns an adjusted knee value in [0.002, base_knee].
+    """
+    participation_frac = n_active_classes / max(total_classes, 1)
+    scaled = base_knee * participation_frac
+    resistance = 1.0 / (1.0 + 3.0 * cumulative_abs_delta)
+    adjusted = scaled * resistance
+    return max(0.002, min(base_knee, adjusted))
+
+
 def compute_price_impact(
     net_flow_value: float,
     adv_value: float,
     lambda_market: float = LAMBDA_LITERATURE["default"],
     max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
     flow_knee: float = FLOW_KNEE,
+    sentiment_modifier: float = 0.0,
 ) -> float:
     """Square-root market impact (Kyle 1985) with soft flow compression.
 
@@ -83,6 +106,8 @@ def compute_price_impact(
         lambda_market: Market impact coefficient (default 0.5 for A-share).
         max_delta_pct: Per-round price-change cap (default ±10%).
         flow_knee: Soft compression knee point (default 0.03 = 3% of ADV).
+        sentiment_modifier: Multiplier on the raw delta from announcements/
+            regulations. Positive amplifies, negative dampens. Default 0.0.
 
     Returns:
         Fractional price change (e.g., -0.05 means -5%).
@@ -113,6 +138,11 @@ def compute_price_impact(
     # Stage 2: Kyle
     magnitude = math.sqrt(eff_ratio)
     raw_delta = lambda_market * sign * magnitude
+
+    # Stage 2.5: sentiment modifier — announcements/regulations shift the delta
+    if sentiment_modifier != 0.0:
+        raw_delta = raw_delta * (1.0 + sentiment_modifier)
+
     clamped = max(-max_delta_pct, min(max_delta_pct, raw_delta))
     if abs(raw_delta) > max_delta_pct:
         log.warning(
@@ -165,9 +195,11 @@ def compute_multi_instrument_impact(
 
 
 __all__ = [
+    "FLOW_KNEE",
     "LAMBDA_LITERATURE",
     "MAX_DELTA_PCT_PER_ROUND",
-    "compute_price_impact",
+    "compute_dynamic_knee",
     "compute_multi_instrument_impact",
+    "compute_price_impact",
     "lambda_for_market",
 ]

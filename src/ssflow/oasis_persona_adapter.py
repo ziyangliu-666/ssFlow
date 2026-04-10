@@ -354,6 +354,26 @@ def _user_info_for(
                 f"具体内容 (哪条新闻 / 哪个分析师 / 哪个 KOL 的帖子).\n"
             )
 
+    # ── create_rule instructions (available to all agents with action_collector) ──
+    if persona.sandbox is not None:
+        profile_block += (
+            f"\n"
+            f"# 自动规则工具 (create_rule)\n"
+            f"你可以调用 `create_rule` 为自己设置自动执行的风控规则.\n"
+            f"规则在每轮自动检查, 条件满足时自动执行动作.\n"
+            f"\n"
+            f"适用场景:\n"
+            f"  - 止损: create_rule(name=\"止损\", trigger=\"price_change_pct < -15.0\",\n"
+            f"          action_type=\"trade\", side=\"sell\", quantity_pct=0.5)\n"
+            f"  - 止盈: create_rule(name=\"止盈\", trigger=\"price_change_pct > 20.0\",\n"
+            f"          action_type=\"trade\", side=\"sell\", quantity_pct=1.0)\n"
+            f"  - 仓位控制: create_rule(name=\"减仓\", trigger=\"avg_position_pct > 0.8\",\n"
+            f"          action_type=\"trade\", side=\"sell\", quantity_pct=0.3)\n"
+            f"\n"
+            f"可用变量: avg_position_pct, price_change_pct, avg_cash_pct, total_nav\n"
+            f"不要每轮都创建规则 — 只在你判断需要风控时使用.\n"
+        )
+
     return UserInfo(
         user_name=persona.id,
         name=f"{persona.archetype} ({persona.display_name})",

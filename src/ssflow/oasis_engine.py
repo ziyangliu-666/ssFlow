@@ -177,6 +177,28 @@ class OasisSimResult:
 # ─────────────────────── Helpers ───────────────────────
 
 
+def _participation_rate(
+    persona: Persona,
+    round_idx: int,
+    cumulative_delta_pct: float,
+    active_types: set[str] | None,
+) -> float:
+    """Fraction of agents that actually trade this round.
+
+    Three factors combine:
+      1. Activity schedule — non-active types get reduced (background noise)
+      2. Urgency decay — later rounds have naturally declining participation
+      3. Momentum exhaustion — large cumulative moves thin marginal flow
+    """
+    base = 1.0
+    ptype = persona.agent_type or "retail"
+    if active_types is not None and ptype not in active_types:
+        base = 0.15
+    urgency = 1.0 / (1.0 + 0.3 * round_idx)
+    exhaustion = 1.0 / (1.0 + 2.0 * abs(cumulative_delta_pct))
+    return max(0.05, base * urgency * exhaustion)
+
+
 def _currency_symbol(currency: str) -> str:
     return {
         "CNY": "¥", "USD": "$", "EUR": "€", "JPY": "¥", "HKD": "HK$", "BTC": "₿"
@@ -567,14 +589,40 @@ async def run_simulation(
 
             # 0.5. Read time context from round_schedule
             round_label = ""
+            active_types: set[str] | None = None
             if round_schedule is not None:
                 rd = round_schedule.get_round(round_idx)
                 if rd:
                     round_label = rd.label
+                    if rd.active_agent_types:
+                        active_types = set(rd.active_agent_types)
                     log.info(
                         "  R%d schedule: %s (active_types=%s)",
                         round_idx, rd.label, rd.active_agent_types,
                     )
+
+            # Pre-compute inactive trader IDs for this round
+            inactive_trader_ids: set[str] = set()
+            if active_types is not None:
+                inactive_trader_ids = {
+                    p.id for p in personas
+                    if p.sandbox is not None
+                    and (p.agent_type or "retail") not in active_types
+                }
+                if inactive_trader_ids:
+                    log.info(
+                        "  R%d temporal filter: %d/%d trader classes inactive",
+                        round_idx, len(inactive_trader_ids),
+                        sum(1 for p in personas if p.sandbox is not None),
+                    )
+
+            # Cumulative price move for participation/knee calculations
+            cumulative_delta_pct = (
+                (current_price / initial_price - 1.0) if initial_price > 0 else 0.0
+            )
+
+            # Sentiment accumulator for this round
+            round_sentiment_shift = 0.0
 
             # 1. Inject any external events scheduled for this round
             external_for_round = external_events.events_for_round(round_idx)
@@ -654,9 +702,13 @@ async def run_simulation(
             new_overrides = collect_trade_overrides(policy_fires, sim_graph)
             trade_overrides.update(new_overrides)
 
-            # Inject announcements into social feed
+            # Inject announcements into social feed + accumulate sentiment
+            from .policy_engine import score_announcement_sentiment
             for fire in collect_announcements(policy_fires):
                 ann = fire.action
+                round_sentiment_shift += score_announcement_sentiment(
+                    ann.text
+                ) * ann.authority_weight
                 a_agent_id = fire.agent_id
                 if a_agent_id in persona_id_to_oasis_id:
                     a_author = agent_graph.get_agent(
@@ -705,6 +757,8 @@ async def run_simulation(
             real_agents = {
                 agent_graph.get_agent(persona_id_to_oasis_id[p.id]): LLMAction()
                 for p in personas
+                if p.sandbox is None  # non-traders always active socially
+                or p.id not in inactive_trader_ids
             }
             try:
                 await env.step(real_agents)
@@ -811,10 +865,37 @@ async def run_simulation(
                             )
                         continue
 
+                    # ── Regulatory dispatch: mechanical effects ──
+                    if pa.action_type == "regulate":
+                        from .policy_engine import dispatch_regulatory_action
+                        reg_policies = dispatch_regulatory_action(
+                            pa.payload, sim_graph, round_idx,
+                        )
+                        for rp in reg_policies:
+                            safe_emit(
+                                event_sink,
+                                EVENT_POLICY_CREATED,
+                                simulation_id=simulation_id,
+                                round_idx=round_idx,
+                                agent_id=pa.agent_id,
+                                persona_id=pa.persona_id,
+                                policy_name=rp.name,
+                                trigger_expr=rp.trigger_expr,
+                                action_type=type(rp.action).__name__,
+                                source=rp.source,
+                            )
+                        # fall through to also post to feed
+
                     # ── Feed-posting actions (announce, regulate, publish) ──
                     text = pa.payload.get("text", "")
                     if not text:
                         continue
+                    # Accumulate sentiment from announce actions
+                    if pa.action_type == "announce":
+                        authority = float(pa.payload.get("authority_weight", 0.8))
+                        round_sentiment_shift += score_announcement_sentiment(
+                            text
+                        ) * authority
                     pa_persona_id = pa.persona_id
                     if pa_persona_id in persona_id_to_oasis_id:
                         pa_author = agent_graph.get_agent(
@@ -916,6 +997,9 @@ async def run_simulation(
             submitted_ids: set[str] = set()
 
             for order in pending_orders:
+                # Skip orders from temporally inactive traders
+                if order.persona_id in inactive_trader_ids:
+                    continue
                 if order.persona_id not in agent_pops:
                     log.warning(
                         "unknown persona in order: %s (skipping)",
@@ -969,6 +1053,17 @@ async def run_simulation(
                     current_prices.get(order_ticker, current_price)
                     if current_prices else current_price
                 )
+                # Compute participation rate (urgency decay + momentum exhaustion)
+                p_rate = _participation_rate(
+                    persona, round_idx, cumulative_delta_pct, active_types,
+                )
+                # Look up conviction damper from SimAgent state
+                sim_agent = sim_graph.agent_by_persona(order.persona_id)
+                damper = (
+                    sim_agent.get("conviction_damper")
+                    if sim_agent and sim_agent.get("conviction_damper") > 0
+                    else 1.0
+                )
                 flow = apply_distribution_to_agent_pop(
                     persona=persona,
                     agents=agent_pops[order.persona_id],
@@ -979,6 +1074,8 @@ async def run_simulation(
                     rationale=order.rationale,
                     raw_distribution=order.raw_args if order.raw_args else order.distribution,
                     round_idx=round_idx,
+                    participation_rate=p_rate,
+                    conviction_damper=damper,
                 )
                 class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
@@ -1017,6 +1114,8 @@ async def run_simulation(
             for persona in personas:
                 if persona.sandbox is None or persona.id in submitted_ids:
                     continue
+                if persona.id in inactive_trader_ids:
+                    continue  # temporally inactive traders produce zero flow
                 hold_action = next(
                     (a["name"] for a in persona.sandbox.action_space
                      if a.get("side") == "none"),
@@ -1086,14 +1185,33 @@ async def run_simulation(
                 net_flow_total = flows_by_ticker.get(es_ticker, 0.0)
                 price_after = current_prices.get(es_ticker, current_price)
             else:
-                # Single-instrument path (unchanged)
+                # Single-instrument path — with dynamic knee + sentiment
+                from .market_dynamics import compute_dynamic_knee
                 net_flow_total = sum(cf.net_flow for cf in class_flows)
+                n_active = len({cf.persona_id for cf in class_flows
+                                if cf.net_flow != 0})
+                n_total = sum(1 for p in personas if p.sandbox is not None)
+                cumulative_abs = abs(cumulative_delta_pct)
+                dynamic_knee = compute_dynamic_knee(
+                    n_active, n_total, cumulative_abs, round_idx,
+                )
+                # Clamp sentiment shift to [-0.5, 0.5]
+                clamped_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
                 delta_pct = compute_price_impact(
                     net_flow_value=net_flow_total,
                     adv_value=event.adv_value,
                     lambda_market=lambda_used,
+                    flow_knee=dynamic_knee,
+                    sentiment_modifier=clamped_sentiment,
                 )
                 price_after = current_price * (1.0 + delta_pct)
+                if dynamic_knee != 0.03:
+                    log.info(
+                        "  R%d dynamic_knee=%.4f (active=%d/%d, cum=%.1f%%, "
+                        "sentiment=%+.2f)",
+                        round_idx, dynamic_knee, n_active, n_total,
+                        cumulative_abs * 100, clamped_sentiment,
+                    )
 
             safe_emit(
                 event_sink,

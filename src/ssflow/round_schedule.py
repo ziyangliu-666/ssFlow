@@ -89,6 +89,28 @@ class RoundSchedule:
         return cls(rounds=rounds, event_datetime=data.get("event_datetime", ""))
 
 
+# ── Preset registry ────────────────────────────────────────────────────
+_PRESETS: dict[str, int] = {
+    "flash-1d": 1,
+    "earnings-3d": 3,
+    "earnings-5d": 5,
+    "policy-10d": 10,
+}
+
+PRESET_NAMES: list[str] = list(_PRESETS.keys())
+
+
+def make_schedule(preset: str, event_date: str) -> RoundSchedule:
+    """Build a RoundSchedule from a named preset."""
+    n_days = _PRESETS.get(preset)
+    if n_days is None:
+        raise ValueError(
+            f"Unknown schedule preset {preset!r}. "
+            f"Valid presets: {', '.join(PRESET_NAMES)}"
+        )
+    return make_default_schedule(event_date, n_trading_days=n_days)
+
+
 def make_default_schedule(
     event_date: str,
     n_trading_days: int = 5,
@@ -138,7 +160,9 @@ def make_default_schedule(
 
 
 __all__ = [
+    "PRESET_NAMES",
     "RoundDef",
     "RoundSchedule",
     "make_default_schedule",
+    "make_schedule",
 ]

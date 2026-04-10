@@ -242,6 +242,10 @@ class Persona:
     #     never trades, only publishes content into the OASIS social stream
     entity_role: str = "trader"
 
+    # Coarse-grained agent type for round schedule filtering.
+    # Maps to round_schedule.active_agent_types entries.
+    agent_type: str | None = None
+
     # ─────────────────────── Entity State Sandbox ───────────────────────
     #
     # Links this persona to an Entity in the EntityGraph. When set, the
@@ -477,6 +481,56 @@ def _coerce_tuple_pair(
         ) from exc
 
 
+_SUBARCH_TO_AGENT_TYPE: dict[str, str] = {
+    "retail_active": "retail",
+    "retail_passive": "retail",
+    "retail_pro_am": "retail",
+    "short_term_momentum": "retail",
+    "institution_long_only": "institutional",
+    "institution_passive": "institutional",
+    "institution_active": "institutional",
+    "institution_long_horizon": "institutional",
+    "foreign_long_short": "institutional",
+    "quant": "institutional",
+    "strategic_industrial": "strategic",
+    "strategic_cross_holding": "strategic",
+    "strategic_government": "strategic",
+    "strategic_national_team": "strategic",
+    "strategic_individual": "strategic",
+    "news_wire": "news_wire",
+    "news_wire_state": "news_wire",
+    "news_wire_foreign": "news_wire",
+    "news_wire_mainstream": "news_wire",
+    "sellside_research_conservative": "analyst",
+    "sellside_research_contrarian": "analyst",
+    "sellside_research_growth": "analyst",
+    "regulator_securities": "regulator",
+    "policy_central_bank": "policy",
+    "policy_industrial": "policy",
+    "policy_industry_ministry": "policy",
+    "retail_kol_momentum": "kol",
+    "retail_kol_broad": "kol",
+    "retail_kol_longform": "kol",
+    "corporate_ir": "company_ir",
+    "industry_association": "media",
+}
+
+
+def _infer_agent_type(sub_archetype: str | None, entity_role: str) -> str:
+    """Derive a coarse agent_type from sub_archetype or entity_role.
+
+    The returned value matches round_schedule.active_agent_types categories:
+    retail, institutional, strategic, kol, analyst, media, news_wire,
+    regulator, policy, company_ir.
+    """
+    if sub_archetype and sub_archetype in _SUBARCH_TO_AGENT_TYPE:
+        return _SUBARCH_TO_AGENT_TYPE[sub_archetype]
+    if entity_role in ("media", "analyst", "kol", "news_wire", "regulator",
+                       "policy", "company_ir"):
+        return entity_role
+    return "retail"
+
+
 def _validate_persona_dict(data: dict[str, Any], idx: int, source: str) -> None:
     pid = data.get("id", f"#{idx}")
     missing = REQUIRED_PERSONA_FIELDS - data.keys()
@@ -640,6 +694,9 @@ def load_personas(path: str | Path) -> list[Persona]:
                 contributes_to_sentiment_mean=contributes_to_sentiment_mean,
                 contributes_to_strategic_signal=contributes_to_strategic_signal,
                 entity_role=p.get("entity_role", "trader"),
+                agent_type=p.get("agent_type") or _infer_agent_type(
+                    p.get("sub_archetype"), p.get("entity_role", "trader"),
+                ),
                 follows=_coerce_follows(p.get("follows"), p["id"]),
                 publishes=_coerce_publishes(p.get("publishes"), p["id"]),
             )

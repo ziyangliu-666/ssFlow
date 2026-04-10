@@ -410,6 +410,8 @@ def apply_distribution_to_agent_pop(
     raw_distribution: dict[str, float] | None = None,
     system_fingerprint: str | None = None,
     round_idx: int = 0,
+    participation_rate: float = 1.0,
+    conviction_damper: float = 1.0,
 ) -> ClassFlowResult:
     """Pure-math: sample one action per agent from `distribution`, apply it,
     return aggregated ClassFlowResult. Does NOT make any LLM calls.
@@ -443,6 +445,12 @@ def apply_distribution_to_agent_pop(
 
     # Filter to agents whose reaction_lag has been reached
     active_agents = [a for a in agents if a.reaction_lag <= round_idx]
+
+    # Participation rate: subsample active agents (urgency decay / exhaustion)
+    if participation_rate < 1.0 and active_agents:
+        n_keep = max(1, int(len(active_agents) * participation_rate))
+        active_agents = rng.sample(active_agents, n_keep)
+
     if not active_agents:
         return ClassFlowResult(
             persona_id=persona.id,
@@ -463,6 +471,10 @@ def apply_distribution_to_agent_pop(
         side = raw_distribution.get("side", "hold")
         qty_pct = float(raw_distribution.get("quantity_pct", 0.0))
         pool = raw_distribution.get("pool", "")
+
+        # Conviction damper: mechanically reduce order magnitude
+        if conviction_damper < 1.0:
+            qty_pct = qty_pct * conviction_damper
 
         if side == "hold" or qty_pct <= 0:
             freeform_spec = {"side": "none", "pool": "none", "fraction": 0.0}
@@ -501,6 +513,12 @@ def apply_distribution_to_agent_pop(
         )
 
     spec_by_name = {a["name"]: a for a in sandbox.action_space}
+    # Conviction damper: scale action fractions for legacy distribution path
+    if conviction_damper < 1.0:
+        spec_by_name = {
+            name: {**spec, "fraction": spec.get("fraction", 0.0) * conviction_damper}
+            for name, spec in spec_by_name.items()
+        }
     actions = list(normalized.keys())
     weights = list(normalized.values())
     sampled_names = rng.choices(actions, weights=weights, k=len(active_agents))
