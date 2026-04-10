@@ -80,6 +80,11 @@ from .market_dynamics import (
     compute_price_impact,
     lambda_for_market,
 )
+from .publication_effects import (
+    AggregateEffect,
+    apply_effects_to_participation,
+    apply_effects_to_risk_budget,
+)
 from .oasis_feed_reader import (
     PublicationMetadata,
     PublicationRegistry,
@@ -258,6 +263,75 @@ def _build_price_update_post(
         f"({delta_pct:+.2f}%, cumulative {cumulative:+.1f}%). "
         f"Net order flow: {sym}{net_flow:+,.0f}"
     )
+
+
+def _build_publication_effect_context(agg: "AggregateEffect") -> str:
+    """Render aggregate publication effects as a prompt context block.
+
+    Produces bilingual (ZH/EN) text describing the current market-wide
+    effects from recent publications so agents can factor them into
+    their trading decisions.
+    """
+    parts = ["\n# 市场效应 / Market Effects:"]
+
+    # Sentiment direction
+    if agg.sentiment_shift > 0.10:
+        parts.append(
+            f"利好效应：市场情绪偏多 (sentiment shift: {agg.sentiment_shift:+.2f}). "
+            "Positive publications are boosting confidence."
+        )
+    elif agg.sentiment_shift < -0.10:
+        parts.append(
+            f"利空效应：市场情绪偏空 (sentiment shift: {agg.sentiment_shift:+.2f}). "
+            "Negative publications are weighing on sentiment."
+        )
+
+    # Participation
+    if agg.participation_modifier > 1.05:
+        parts.append(
+            f"交投活跃度提升 ({agg.participation_modifier:.0%} of normal). "
+            "More market participants are active."
+        )
+    elif agg.participation_modifier < 0.95:
+        parts.append(
+            f"交投活跃度降低 ({agg.participation_modifier:.0%} of normal). "
+            "Fewer market participants are willing to trade."
+        )
+
+    # Urgency
+    if agg.urgency_modifier > 1.10:
+        parts.append(
+            f"交易紧迫性上升 (urgency: {agg.urgency_modifier:.2f}x). "
+            "Participants are trading more aggressively."
+        )
+    elif agg.urgency_modifier < 0.90:
+        parts.append(
+            f"交易紧迫性下降 (urgency: {agg.urgency_modifier:.2f}x). "
+            "Participants are trading more cautiously."
+        )
+
+    # Risk budget
+    if agg.risk_budget_shift > 0.05:
+        parts.append(
+            f"风险偏好提升 (risk budget shift: {agg.risk_budget_shift:+.2f}). "
+            "Investors are more willing to take on risk."
+        )
+    elif agg.risk_budget_shift < -0.05:
+        parts.append(
+            f"风险偏好收缩 (risk budget shift: {agg.risk_budget_shift:+.2f}). "
+            "Investors are reducing risk exposure."
+        )
+
+    # Source-specific color
+    sources = agg.affected_personas
+    if sources:
+        parts.append(
+            f"受影响的参与者类型: {', '.join(sorted(sources))}"
+        )
+
+    if len(parts) == 1:
+        return ""  # No meaningful effects to report
+    return "\n".join(parts)
 
 
 def _max_post_id(db_path: str) -> int:
@@ -441,10 +515,25 @@ async def run_simulation(
     simulation_id = simulation_id or f"oasis_{uuid.uuid4().hex[:12]}"
     seed = seed if seed is not None else settings.seed
     external_events = external_events or ExternalEventSchedule()
-    lambda_used = (
-        lambda_market if lambda_market is not None
-        else lambda_for_market(event.market)
-    )
+    # Determine lambda: explicit override > calibration library > literature default
+    if lambda_market is not None:
+        lambda_used = lambda_market
+        _lambda_source = "explicit_override"
+    else:
+        from .calibration_library import select_impact_params
+        _cal_params = select_impact_params(
+            event_type=event.event_type or "",
+            board=getattr(event, "board", "normal") or "normal",
+            float_cap_cny=getattr(event, "float_market_cap", None),
+            adv_value=event.adv_value if event.adv_value > 0 else None,
+        )
+        lambda_used = _cal_params["lambda"]
+        _lambda_source = _cal_params["source"]
+        log.info(
+            "Lambda selected: %.4f (source=%s, knee=%.4f) for event_type=%s",
+            lambda_used, _lambda_source, _cal_params["knee"],
+            event.event_type,
+        )
 
     # ── Build SimGraph (unified world model) ──
     # If not provided, build from legacy inputs via the adapter.
@@ -698,6 +787,26 @@ async def run_simulation(
             # Sentiment accumulator for this round
             round_sentiment_shift = 0.0
 
+            # 0.7. Compute aggregate publication effects from previous rounds'
+            #      publications (decayed). These modifiers are applied to
+            #      participation, urgency, and risk budget BEFORE trading.
+            active_effects = effect_tracker.effects_at_round(round_idx)
+            if active_effects:
+                round_pub_effects = aggregate_round_effects(active_effects)
+                round_sentiment_shift += round_pub_effects.sentiment_shift
+                log.info(
+                    "  R%d pre-trade publication effects: %d active, "
+                    "sentiment=%+.3f, participation=%.2fx, urgency=%.2fx, "
+                    "risk_budget_shift=%+.3f",
+                    round_idx, len(active_effects),
+                    round_pub_effects.sentiment_shift,
+                    round_pub_effects.participation_modifier,
+                    round_pub_effects.urgency_modifier,
+                    round_pub_effects.risk_budget_shift,
+                )
+            else:
+                round_pub_effects = AggregateEffect()
+
             # 1. Inject any external events scheduled for this round
             #    Build a SimSnapshot so DynamicEventStream conditionals can
             #    evaluate against current simulation state.
@@ -867,6 +976,32 @@ async def run_simulation(
                     if time_marker in up:
                         up = up[:up.index(time_marker)]
                     up += time_ctx
+                    other["user_profile"] = up
+                    profile["other_info"] = other
+
+            # 1.96. Inject publication effect context into agent prompts so
+            #        agents are aware of market-wide sentiment shifts from
+            #        publications (e.g., exchange inquiry → bearish; national
+            #        team buying → confidence boost).
+            if not round_pub_effects.is_neutral:
+                _pub_effect_marker = "\n# 市场效应 / Market Effects:"
+                _effect_ctx = _build_publication_effect_context(round_pub_effects)
+                for persona in personas:
+                    ptype = persona.agent_type or "retail"
+                    # Only inject into affected personas
+                    if (round_pub_effects.affected_personas
+                            and ptype not in round_pub_effects.affected_personas):
+                        continue
+                    if persona.id not in persona_id_to_oasis_id:
+                        continue
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    profile = oasis_agent.user_info.profile
+                    other = profile.get("other_info", {})
+                    up = other.get("user_profile", "")
+                    if _pub_effect_marker in up:
+                        up = up[:up.index(_pub_effect_marker)]
+                    up += _effect_ctx
                     other["user_profile"] = up
                     profile["other_info"] = other
 
@@ -1244,6 +1379,10 @@ async def run_simulation(
                 p_rate = _participation_rate(
                     persona, round_idx, cumulative_delta_pct, active_types,
                 )
+                # Apply publication effect: participation modifier
+                p_rate = apply_effects_to_participation(
+                    p_rate, round_pub_effects,
+                )
                 # Look up conviction damper from SimAgent state
                 sim_agent = sim_graph.agent_by_persona(order.persona_id)
                 damper = (
@@ -1251,6 +1390,15 @@ async def run_simulation(
                     if sim_agent and sim_agent.get("conviction_damper") > 0
                     else 1.0
                 )
+                # Apply publication effect: urgency modifier scales conviction
+                damper = damper * round_pub_effects.urgency_modifier
+                # Apply publication effect: risk budget shift adjusts position limits
+                if abs(round_pub_effects.risk_budget_shift) > 0.001:
+                    for agent in agent_pops[order.persona_id]:
+                        agent.max_holdings_value = apply_effects_to_risk_budget(
+                            agent.max_holdings_value / max(agent.capital, 1.0),
+                            round_pub_effects,
+                        ) * agent.capital
                 flow = apply_distribution_to_agent_pop(
                     persona=persona,
                     agents=agent_pops[order.persona_id],
@@ -1506,6 +1654,8 @@ async def run_simulation(
             publications_this_round = social_publications + market_publications
 
             # ── Track publication effects (quantitative) ──
+            # Register this round's publications so their effects are available
+            # to subsequent rounds via effect_tracker.effects_at_round().
             for pub in publications_this_round:
                 content_type = getattr(pub, "content_type", None)
                 if content_type:
@@ -1514,18 +1664,6 @@ async def run_simulation(
                         effect_tracker.add(eff, round_idx=round_idx)
                     except Exception:
                         pass  # Unknown type — skip
-
-            # Aggregate active effects for this round (used in next round's context)
-            active_effects = effect_tracker.effects_at_round(round_idx)
-            if active_effects:
-                agg = aggregate_round_effects(active_effects)
-                round_sentiment_shift += agg.sentiment_shift
-                log.info(
-                    "  R%d publication effects: %d active, sentiment=%+.3f, "
-                    "participation=%.2fx, urgency=%.2fx",
-                    round_idx, len(active_effects), agg.sentiment_shift,
-                    agg.participation_modifier, agg.urgency_modifier,
-                )
 
             rounds.append(
                 RoundRecord(

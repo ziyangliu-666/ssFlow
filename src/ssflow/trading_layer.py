@@ -29,6 +29,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
+from .limit_board import LimitBoard, T1Ledger
 from .output_filter import sanitize_text
 from .persona import Persona
 
@@ -70,6 +71,7 @@ class TraderInstance:
     max_holdings_value: float = 0.0  # immutable: capital × max_position_pct
     reaction_lag: int = 0           # round index when this agent becomes active
     first_position_round: int = -1  # round when first non-zero position opened (-1 = never)
+    agent_id: str = ""              # unique ID for T1Ledger tracking (auto-assigned at spawn)
 
     @property
     def holdings_shares(self) -> float:
@@ -218,7 +220,7 @@ def spawn_agents(
     max_position_pct = max(0.0, min(1.0, max_position_pct))
 
     agents: list[Agent] = []
-    for _ in range(sandbox.instance_count):
+    for agent_idx in range(sandbox.instance_count):
         capital = _sample_capital(sandbox.capital_distribution, rng)
         position_pct = _sample_position_pct(sandbox.initial_position_distribution, rng)
         position_pct = max(0.0, min(1.0, position_pct))
@@ -265,6 +267,7 @@ def spawn_agents(
                     max_holdings_value=capital * max_position_pct,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
+                    agent_id=f"{persona.id}_{agent_idx}",
                 )
             )
         else:
@@ -279,6 +282,7 @@ def spawn_agents(
                     max_holdings_value=capital * max_position_pct,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
+                    agent_id=f"{persona.id}_{agent_idx}",
                 )
             )
     return agents
@@ -294,6 +298,7 @@ def apply_action(
     *,
     instrument: str = _DEFAULT_TICKER,
     round_idx: int = 0,
+    t1_ledger: T1Ledger | None = None,
 ) -> float:
     """Apply one action_spec to one agent. Mutates state. Returns order amount.
 
@@ -305,6 +310,9 @@ def apply_action(
     instrument: which ticker to trade. Defaults to _DEFAULT_TICKER for
     backward compat with single-instrument simulations.
     round_idx: current round index, used to track first_position_round.
+    t1_ledger: optional T1Ledger for enforcing T+1 sell constraints.
+        When provided, sell amounts are capped to sellable shares (excluding
+        shares bought in the current round) and buys are recorded.
     """
     side = action_spec.get("side", "none")
     pool = action_spec.get("pool", "none")
@@ -351,6 +359,18 @@ def apply_action(
         return 0.0
 
     if side == "sell":
+        # T+1 enforcement: cap sell to shares that are actually sellable
+        if t1_ledger is not None:
+            agent_id = agent.agent_id or agent.persona_id
+            sellable = t1_ledger.sellable_shares(
+                agent_id, instrument, round_idx,
+                total_holdings=current_shares,
+            )
+            if sellable <= 0:
+                return 0.0
+            if shares_to_act > sellable:
+                shares_to_act = sellable
+                amount = shares_to_act * current_price
         agent.holdings[instrument] = current_shares - shares_to_act
         agent.cash += amount
         return -amount
@@ -367,6 +387,10 @@ def apply_action(
         agent.cash -= amount
         if had_no_position and shares_to_act > 0 and agent.first_position_round < 0:
             agent.first_position_round = round_idx
+        # T+1 recording: mark these shares as locked for this round
+        if t1_ledger is not None:
+            agent_id = agent.agent_id or agent.persona_id
+            t1_ledger.record_buy(agent_id, instrument, shares_to_act, round_idx)
         return +amount
     return 0.0
 
@@ -429,9 +453,54 @@ class ClassFlowResult:
     normalization_warning: str | None = None
     confidence: float = 0.5
     system_fingerprint: str | None = None
+    fill_rate: float = 1.0          # Fraction of intended orders that filled [0, 1]
+    unfilled_volume: float = 0.0    # Volume that could not fill due to limit board
+    t1_blocked_sells: int = 0       # Number of sell attempts blocked by T+1
 
 
 # ─────────────────────── Distribution application (pure math) ───────────────────────
+
+
+def _compute_fill_rate(
+    limit_board: LimitBoard | None,
+    buy_volume: float,
+    sell_volume: float,
+) -> tuple[float, float, float, float]:
+    """Compute per-side fill rates from a limit board's state.
+
+    Returns:
+        (buy_fill_rate, sell_fill_rate, unfilled_buy, unfilled_sell)
+    """
+    if limit_board is None or not limit_board.at_limit:
+        return 1.0, 1.0, 0.0, 0.0
+
+    if limit_board.at_limit_up:
+        # LIMIT_UP / ONE_WORD_UP: sell orders fill fully; buy orders partially
+        # fill based on contra-side (sell) volume available.
+        sell_fill = 1.0
+        if buy_volume > 0 and sell_volume < buy_volume:
+            buy_fill = sell_volume / buy_volume
+        elif buy_volume > 0:
+            buy_fill = 1.0
+        else:
+            buy_fill = 1.0
+        unfilled_buy = max(0.0, buy_volume - sell_volume) if buy_volume > 0 else 0.0
+        return buy_fill, sell_fill, unfilled_buy, 0.0
+
+    if limit_board.at_limit_down:
+        # LIMIT_DOWN / ONE_WORD_DOWN: buy orders fill fully; sell orders partially
+        # fill based on contra-side (buy) volume available.
+        buy_fill = 1.0
+        if sell_volume > 0 and buy_volume < sell_volume:
+            sell_fill = buy_volume / sell_volume
+        elif sell_volume > 0:
+            sell_fill = 1.0
+        else:
+            sell_fill = 1.0
+        unfilled_sell = max(0.0, sell_volume - buy_volume) if sell_volume > 0 else 0.0
+        return buy_fill, sell_fill, 0.0, unfilled_sell
+
+    return 1.0, 1.0, 0.0, 0.0
 
 
 def apply_distribution_to_agent_pop(
@@ -449,6 +518,8 @@ def apply_distribution_to_agent_pop(
     round_idx: int = 0,
     participation_rate: float = 1.0,
     conviction_damper: float = 1.0,
+    limit_board: LimitBoard | None = None,
+    t1_ledger: T1Ledger | None = None,
 ) -> ClassFlowResult:
     """Pure-math: sample one action per agent from `distribution`, apply it,
     return aggregated ClassFlowResult. Does NOT make any LLM calls.
@@ -473,6 +544,11 @@ def apply_distribution_to_agent_pop(
         system_fingerprint: optional LLM provider fingerprint for reproducibility
         round_idx: current simulation round (0-based). Agents with
             reaction_lag > round_idx are filtered out (they hold).
+        limit_board: optional LimitBoard for fill-rate constraints.
+            When at limit, one side's orders are partially filled.
+        t1_ledger: optional T1Ledger for T+1 sell constraints.
+            When provided, sell amounts are capped to sellable shares and
+            buys are recorded for lockup tracking.
     """
     sandbox = persona.sandbox
     if sandbox is None:
@@ -502,6 +578,17 @@ def apply_distribution_to_agent_pop(
             confidence=confidence,
             system_fingerprint=system_fingerprint,
         )
+
+    # ── Build per-agent action specs (first pass — no mutations yet) ──
+    #
+    # Both the freeform and legacy paths first collect (agent, spec) pairs,
+    # then we compute limit-board fill rates from the aggregate intended
+    # volume, and finally apply the fill-rate-scaled orders.
+
+    agent_specs: list[tuple[Agent, dict[str, Any]]] = []
+    histogram: dict[str, int] = {}
+    normalized: dict[str, float] = {}
+    warning: str | None = None
 
     # ── Free-form path: per-agent stochastic dispersion ──
     #
@@ -542,8 +629,7 @@ def apply_distribution_to_agent_pop(
         contrarian = biases.get("contrarian_tendency", 0.0)
         dispersion = max(0.05, 0.5 * (1.0 - herd) + 0.3 * contrarian)
 
-        net_flow = 0.0
-        histogram: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0}
+        histogram = {"buy": 0, "sell": 0, "hold": 0}
         for agent_inst in active_agents:
             # Each agent gets a noisy conviction
             agent_conviction = class_conviction + rng.gauss(0, dispersion)
@@ -562,51 +648,110 @@ def apply_distribution_to_agent_pop(
                 spec = {"side": "none", "pool": "none", "fraction": 0.0}
                 histogram["hold"] += 1
 
-            order = apply_action(agent_inst, spec, current_price, instrument=instrument, round_idx=round_idx)
-            net_flow += order
+            agent_specs.append((agent_inst, spec))
 
-        return ClassFlowResult(
-            persona_id=persona.id,
-            instrument=instrument,
-            net_flow=net_flow,
-            action_histogram=histogram,
-            n_agents=len(active_agents),
-            rationale=sanitize_text(rationale),
-            raw_distribution=raw_distribution or dict(distribution),
-            normalized_distribution={"__freeform__": 1.0},
-            normalization_warning=None,
-            confidence=max(0.0, min(1.0, confidence)),
-            system_fingerprint=system_fingerprint,
-        )
+        normalized = {"__freeform__": 1.0}
 
-    # ── Legacy distribution path ──
-    expected_names = [a["name"] for a in sandbox.action_space]
-    normalized, warning = normalize_action_distribution(distribution, expected_names)
-    if warning:
-        log.info(
-            "persona %s: distribution normalization: %s",
-            persona.id, warning,
-        )
+    else:
+        # ── Legacy distribution path ──
+        expected_names = [a["name"] for a in sandbox.action_space]
+        normalized, warning = normalize_action_distribution(distribution, expected_names)
+        if warning:
+            log.info(
+                "persona %s: distribution normalization: %s",
+                persona.id, warning,
+            )
 
-    spec_by_name = {a["name"]: a for a in sandbox.action_space}
-    # Conviction damper: scale action fractions for legacy distribution path
-    if conviction_damper < 1.0:
-        spec_by_name = {
-            name: {**spec, "fraction": spec.get("fraction", 0.0) * conviction_damper}
-            for name, spec in spec_by_name.items()
-        }
-    actions = list(normalized.keys())
-    weights = list(normalized.values())
-    sampled_names = rng.choices(actions, weights=weights, k=len(active_agents))
+        spec_by_name = {a["name"]: a for a in sandbox.action_space}
+        # Conviction damper: scale action fractions for legacy distribution path
+        if conviction_damper < 1.0:
+            spec_by_name = {
+                name: {**s, "fraction": s.get("fraction", 0.0) * conviction_damper}
+                for name, s in spec_by_name.items()
+            }
+        actions = list(normalized.keys())
+        weights = list(normalized.values())
+        sampled_names = rng.choices(actions, weights=weights, k=len(active_agents))
 
-    net_flow = 0.0
-    histogram: dict[str, int] = {}
-    for agent, action_name in zip(active_agents, sampled_names):
-        spec = spec_by_name.get(action_name)
-        histogram[action_name] = histogram.get(action_name, 0) + 1
-        if spec is None:
+        for agent_inst, action_name in zip(active_agents, sampled_names):
+            spec = spec_by_name.get(action_name)
+            histogram[action_name] = histogram.get(action_name, 0) + 1
+            if spec is None:
+                agent_specs.append((agent_inst, {"side": "none", "pool": "none", "fraction": 0.0}))
+            else:
+                agent_specs.append((agent_inst, dict(spec)))
+
+    # ── Estimate intended buy/sell volume for fill-rate computation ──
+    intended_buy_volume = 0.0
+    intended_sell_volume = 0.0
+    for agent_inst, spec in agent_specs:
+        spec_side = spec.get("side", "none")
+        spec_pool = spec.get("pool", "none")
+        try:
+            spec_frac = float(spec.get("fraction", 0.0))
+        except (TypeError, ValueError):
+            spec_frac = 0.0
+        if spec_side == "none" or spec_frac <= 0:
             continue
-        order = apply_action(agent, spec, current_price, instrument=instrument, round_idx=round_idx)
+        if spec_side == "buy":
+            if spec_pool == "cash" and agent_inst.cash > 0:
+                intended_buy_volume += agent_inst.cash * spec_frac
+        elif spec_side == "sell":
+            current_sh = agent_inst.holdings.get(instrument, 0.0)
+            if spec_pool == "holdings_in_target" and current_sh > 0:
+                intended_sell_volume += current_sh * spec_frac * current_price
+            elif spec_pool == "margin" and agent_inst.cash > 0:
+                intended_sell_volume += agent_inst.cash * spec_frac
+
+    # ── Compute fill rates from limit board ──
+    buy_fill_rate, sell_fill_rate, unfilled_buy, unfilled_sell = _compute_fill_rate(
+        limit_board, intended_buy_volume, intended_sell_volume,
+    )
+    total_unfilled = unfilled_buy + unfilled_sell
+
+    # Weighted average fill rate across sides (for the result summary)
+    total_intended = intended_buy_volume + intended_sell_volume
+    if total_intended > 0:
+        avg_fill_rate = (
+            buy_fill_rate * intended_buy_volume + sell_fill_rate * intended_sell_volume
+        ) / total_intended
+    else:
+        avg_fill_rate = 1.0
+
+    # ── Second pass: apply fill-rate-scaled orders ──
+    net_flow = 0.0
+    t1_blocked = 0
+    for agent_inst, spec in agent_specs:
+        spec_side = spec.get("side", "none")
+
+        # Apply per-side fill rate by scaling the fraction
+        if spec_side == "buy" and buy_fill_rate < 1.0:
+            try:
+                orig_frac = float(spec.get("fraction", 0.0))
+            except (TypeError, ValueError):
+                orig_frac = 0.0
+            spec = {**spec, "fraction": orig_frac * buy_fill_rate}
+        elif spec_side == "sell" and sell_fill_rate < 1.0:
+            try:
+                orig_frac = float(spec.get("fraction", 0.0))
+            except (TypeError, ValueError):
+                orig_frac = 0.0
+            spec = {**spec, "fraction": orig_frac * sell_fill_rate}
+
+        # Track T+1 blocked sells: check before apply_action mutates state
+        if spec_side == "sell" and t1_ledger is not None:
+            agent_id = agent_inst.agent_id or agent_inst.persona_id
+            current_sh = agent_inst.holdings.get(instrument, 0.0)
+            sellable = t1_ledger.sellable_shares(
+                agent_id, instrument, round_idx, total_holdings=current_sh,
+            )
+            if current_sh > 0 and sellable <= 0:
+                t1_blocked += 1
+
+        order = apply_action(
+            agent_inst, spec, current_price,
+            instrument=instrument, round_idx=round_idx, t1_ledger=t1_ledger,
+        )
         net_flow += order
 
     return ClassFlowResult(
@@ -621,6 +766,9 @@ def apply_distribution_to_agent_pop(
         normalization_warning=warning,
         confidence=max(0.0, min(1.0, confidence)),
         system_fingerprint=system_fingerprint,
+        fill_rate=avg_fill_rate,
+        unfilled_volume=total_unfilled,
+        t1_blocked_sells=t1_blocked,
     )
 
 

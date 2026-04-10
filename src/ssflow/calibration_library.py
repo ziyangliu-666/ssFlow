@@ -726,6 +726,166 @@ def get_events_by_board(board: str) -> list[CalibrationEvent]:
 # ─────────────────────── Calibration utilities ───────────────────────
 
 
+def _liquidity_bucket(float_cap_cny: float | None) -> str:
+    """Classify float cap into liquidity buckets.
+
+    Thresholds (in 亿元):
+      - small: < 100亿
+      - mid:   100-1000亿
+      - large: >= 1000亿
+
+    Returns "unknown" when float_cap is not provided.
+    """
+    if float_cap_cny is None:
+        return "unknown"
+    if float_cap_cny < 100:
+        return "small"
+    if float_cap_cny < 1000:
+        return "mid"
+    return "large"
+
+
+def _event_liquidity_bucket(event: CalibrationEvent) -> str:
+    """Classify a calibration event into a liquidity bucket."""
+    return _liquidity_bucket(event.float_market_cap)
+
+
+def _fuzzy_event_type_match(query: str, candidate: str) -> float:
+    """Score how well a query event type matches a candidate.
+
+    Returns 1.0 for exact match, 0.5 for partial/related matches,
+    0.0 for no match.
+    """
+    if not query:
+        return 0.0
+    if query == candidate:
+        return 1.0
+
+    # Related type groups
+    _related: dict[str, set[str]] = {
+        "geopolitical": {"policy", "supply_shock"},
+        "policy": {"geopolitical"},
+        "earnings": set(),
+        "supply_shock": {"mania", "geopolitical"},
+        "mania": {"supply_shock"},
+        "delisting_risk": set(),
+    }
+    if candidate in _related.get(query, set()):
+        return 0.5
+
+    # Substring match
+    if query in candidate or candidate in query:
+        return 0.3
+
+    return 0.0
+
+
+def select_impact_params(
+    event_type: str,
+    board: str = "normal",
+    float_cap_cny: float | None = None,
+    adv_value: float | None = None,
+    market_regime: str = "normal",
+) -> dict[str, float | str]:
+    """Select calibrated lambda and knee from the event library.
+
+    Finds the closest matching calibration events and returns
+    the average suggested_lambda and suggested_knee.
+
+    Falls back to literature defaults if no matching events.
+
+    Args:
+        event_type: event type to match (e.g. "geopolitical", "policy",
+            "earnings", "mania"). Exact match preferred, fuzzy fallback.
+        board: board type filter ("main", "chinext", "star", "bse", "normal").
+            "normal" means no board filtering.
+        float_cap_cny: float market cap in 亿元 for liquidity bucket filtering.
+            None means no liquidity filtering.
+        adv_value: average daily turnover in 元 (reserved for future use).
+        market_regime: "normal", "crisis", or "euphoria" (reserved for future
+            regime-dependent adjustments).
+
+    Returns:
+        Dictionary with keys:
+          - "lambda": calibrated lambda value
+          - "knee": calibrated knee value
+          - "source": description of the calibration source
+    """
+    # Score each calibration event
+    scored: list[tuple[float, CalibrationEvent]] = []
+    query_bucket = _liquidity_bucket(float_cap_cny)
+
+    for ev in CALIBRATION_EVENTS:
+        score = _fuzzy_event_type_match(event_type, ev.event_type)
+        if score == 0.0:
+            continue
+
+        # Board bonus/penalty
+        if board not in ("normal", ""):
+            if ev.board == board:
+                score += 0.2
+            else:
+                score -= 0.1
+
+        # Liquidity bucket bonus
+        if query_bucket != "unknown":
+            ev_bucket = _event_liquidity_bucket(ev)
+            if ev_bucket == query_bucket:
+                score += 0.3
+            elif (
+                (query_bucket == "small" and ev_bucket == "mid")
+                or (query_bucket == "mid" and ev_bucket in ("small", "large"))
+                or (query_bucket == "large" and ev_bucket == "mid")
+            ):
+                score += 0.1
+
+        scored.append((score, ev))
+
+    if not scored:
+        # No matching events — fall back to literature defaults
+        default_lambda = LAMBDA_LITERATURE.get("ashare", LAMBDA_LITERATURE["default"])
+        return {
+            "lambda": default_lambda,
+            "knee": FLOW_KNEE,
+            "source": "literature_default",
+        }
+
+    # Sort by score descending, take the best matches
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Use top matches (up to 5) weighted by score
+    top_n = min(5, len(scored))
+    top = scored[:top_n]
+    total_weight = sum(s for s, _ in top)
+
+    if total_weight <= 0:
+        default_lambda = LAMBDA_LITERATURE.get("ashare", LAMBDA_LITERATURE["default"])
+        return {
+            "lambda": default_lambda,
+            "knee": FLOW_KNEE,
+            "source": "literature_default",
+        }
+
+    weighted_lambda = sum(s * ev.suggested_lambda for s, ev in top) / total_weight
+    weighted_knee = sum(s * ev.suggested_knee for s, ev in top) / total_weight
+
+    # Market regime adjustments
+    if market_regime == "crisis":
+        # In crisis, impact is amplified (thinner liquidity)
+        weighted_lambda *= 1.2
+        weighted_knee *= 0.8
+    elif market_regime == "euphoria":
+        # In euphoria, impact is dampened (abundant liquidity)
+        weighted_lambda *= 0.8
+        weighted_knee *= 1.2
+
+    return {
+        "lambda": round(weighted_lambda, 4),
+        "knee": round(weighted_knee, 4),
+        "source": f"calibration:{top_n}_events",
+    }
+
+
 def compute_implied_lambda(event: CalibrationEvent) -> float:
     """Back-calculate what lambda would reproduce the day 1 close from estimated flow.
 
@@ -952,6 +1112,7 @@ __all__ = [
     "get_events_by_board",
     "get_events_by_sector",
     "get_events_by_type",
+    "select_impact_params",
     "summarize_calibration",
     "validate_simulation",
 ]
