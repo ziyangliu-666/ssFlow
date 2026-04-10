@@ -71,7 +71,7 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
             "display_name_hint": "散户群体",
             "default_state": {
                 "avg_position_pct": 0.40,
-                "margin_utilization": 0.10,
+                "margin_utilization": 0.65,
                 "sentiment_score": 0.0,
             },
             "default_labels": {
@@ -89,13 +89,15 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
                 "avg_position_pct": 0.25,
                 "max_position_pct": 0.50,
                 "research_coverage_count": 15,
+                "price_change_pct": 0.0,
             },
             "default_labels": {
                 "avg_position_pct": "平均仓位(%)",
                 "max_position_pct": "仓位上限(%)",
                 "research_coverage_count": "研报覆盖数",
+                "price_change_pct": "涨跌幅(%)",
             },
-            "persona_link": "quant_fund_class",
+            "persona_link": "mutual_fund_active_pm",
         },
         {
             "slot": "market_environment",
@@ -132,6 +134,7 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
     ],
 
     "default_thresholds": [
+        # ── inject_event: narrative influence (soft) ──
         {
             "entity_slot": "subject_company",
             "condition": "inventory_months > 3.0",
@@ -141,24 +144,35 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
         },
         {
             "entity_slot": "subject_company",
-            "condition": "cash_bn < 15.0",
-            "description": "现金储备不足 → 削减资本开支",
-            "effect_type": "mutate_state",
-            "state_mutations": {"capacity_utilization": 0.60},
-        },
-        {
-            "entity_slot": "subject_company",
             "condition": "price_change_pct < -8.0",
             "description": "日内跌超8% → 监管问询",
             "effect_type": "inject_event",
             "event_text_template": "[监管] 交易所向{display_name}发出关注函,要求说明股价异常波动原因",
         },
+        # ── mutate_state: mechanical state change ──
+        {
+            "entity_slot": "subject_company",
+            "condition": "cash_bn < 15.0",
+            "description": "现金储备不足 → 削减资本开支",
+            "effect_type": "mutate_state",
+            "state_mutations": {"capacity_utilization": 0.60},
+        },
+        # ── force_action: hard trading constraints (the teeth) ──
         {
             "entity_slot": "retail_class",
-            "condition": "margin_utilization > 0.80",
-            "description": "融资利用率过高 → 部分强平",
-            "effect_type": "inject_event",
-            "event_text_template": "[风控] 部分散户融资账户触及平仓线,券商发出追保通知",
+            "condition": "margin_utilization > 0.72",
+            "description": "融资利用率逼近警戒线 → 券商强平卖出50%持仓",
+            "effect_type": "force_action",
+            "forced_side": "sell",
+            "forced_quantity_pct": 0.50,
+        },
+        {
+            "entity_slot": "institutional_class",
+            "condition": "price_change_pct < -5.0",
+            "description": "累计跌超5% → 机构合规风控减仓20%",
+            "effect_type": "force_action",
+            "forced_side": "sell",
+            "forced_quantity_pct": 0.20,
         },
     ],
 }

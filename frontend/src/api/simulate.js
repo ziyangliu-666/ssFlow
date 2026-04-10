@@ -52,6 +52,10 @@ export function openSimulationStream (streamId, handlers) {
     'entity_state_updated',
     'resource_flow_executed',
     'threshold_fired',
+    'force_action_override',
+    'policy_fired',
+    'agent_action',
+    'policy_created',
   ]
 
   for (const t of knownTypes) {

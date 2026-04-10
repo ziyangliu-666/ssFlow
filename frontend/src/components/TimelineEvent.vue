@@ -41,20 +41,30 @@
 
       <!-- trade_submitted -->
       <div v-else-if="type === 'trade_submitted'">
-        <div class="t-text">
-          下单分布<span v-if="payload.instrument" class="mono instrument-tag"> · {{ payload.instrument }}</span>：
+        <!-- Structured freeform order (side/qty/pool) -->
+        <div v-if="isFreeformOrder" class="t-text">
+          <span class="order-side" :class="orderSideClass">{{ orderSideLabel }}</span>
+          <span v-if="orderQtyPct > 0" class="mono order-qty">{{ (orderQtyPct * 100).toFixed(0) }}%</span>
+          <span v-if="orderQtyPct > 0" class="order-pool">{{ orderPoolLabel }}</span>
+          <span v-if="payload.instrument" class="mono instrument-tag">{{ payload.instrument }}</span>
         </div>
-        <ul class="dist">
-          <li v-for="(v, k) in payload.distribution || {}" :key="k">
-            <span class="action-name">{{ k }}</span>
-            <span class="action-bar">
-              <span class="bar-fill" :style="{ width: barWidth(v) }"></span>
-            </span>
-            <span class="action-pct mono">{{ (v * 100).toFixed(0) }}%</span>
-          </li>
-        </ul>
+        <!-- Legacy distribution -->
+        <div v-else>
+          <div class="t-text">
+            下单分布<span v-if="payload.instrument" class="mono instrument-tag"> · {{ payload.instrument }}</span>：
+          </div>
+          <ul class="dist">
+            <li v-for="(v, k) in payload.distribution || {}" :key="k">
+              <span class="action-name">{{ k }}</span>
+              <span class="action-bar">
+                <span class="bar-fill" :style="{ width: barWidth(v) }"></span>
+              </span>
+              <span class="action-pct mono">{{ (v * 100).toFixed(0) }}%</span>
+            </li>
+          </ul>
+        </div>
         <div v-if="payload.rationale" class="rationale">
-          <em>“{{ payload.rationale }}”</em>
+          <em>"{{ payload.rationale }}"</em>
         </div>
       </div>
 
@@ -113,6 +123,33 @@
         </div>
       </div>
 
+      <!-- force_action_override -->
+      <div v-else-if="type === 'force_action_override'" class="t-text force-line">
+        <span class="force-marker">&#x26A0;</span>
+        <strong>{{ payload.persona_id }}</strong>
+        <span class="force-badge">强制{{ payload.forced_side === 'sell' ? '卖出' : '买入' }} {{ Math.round((payload.forced_quantity_pct || 0) * 100) }}%</span>
+        <span class="force-reason">{{ payload.reason }}</span>
+        <span v-if="payload.replaced_llm_order" class="replaced-tag">(覆盖LLM决策)</span>
+      </div>
+
+      <!-- policy_fired -->
+      <div v-else-if="type === 'policy_fired'" class="t-text force-line">
+        <span class="force-marker">&#x26A1;</span>
+        <strong>{{ payload.agent_name || payload.agent_id }}</strong>
+        <span class="force-reason">{{ payload.description }}</span>
+        <span v-if="payload.forced_side" class="force-badge">
+          {{ payload.forced_side === 'sell' ? '强制卖出' : '强制买入' }} {{ Math.round((payload.forced_quantity_pct || 0) * 100) }}%
+        </span>
+        <span v-if="payload.replaced_llm_order" class="replaced-tag">(覆盖LLM)</span>
+      </div>
+
+      <!-- agent_action (non-trader domain actions) -->
+      <div v-else-if="type === 'agent_action'" class="t-text">
+        <strong>{{ payload.persona_id }}</strong>
+        <span class="ctype">{{ payload.action_type }}</span>:
+        {{ payload.text }}
+      </div>
+
       <!-- entity_state_updated (usually filtered out, shown in panel) -->
       <div v-else-if="type === 'entity_state_updated'" class="t-text subdued">
         {{ payload.entity_name }} 状态更新
@@ -153,6 +190,9 @@ const KIND_MAP = {
   external_event_injected: '外部事件',
   resource_flow_executed: '资源流转',
   threshold_fired: '阈值触发',
+  force_action_override: '强制约束',
+  policy_fired: '规则触发',
+  agent_action: '行动',
   entity_state_updated: '实体状态',
   error: '错误',
 }
@@ -173,6 +213,8 @@ const evClass = computed(() => {
     external_event_injected: 'ext',
     resource_flow_executed: 'flow',
     threshold_fired: 'threshold',
+    force_action_override: 'force',
+    policy_fired: 'force',
     entity_state_updated: 'entity',
     error: 'error',
   }
@@ -186,6 +228,8 @@ const markerGlyph = computed(() => {
   if (props.type === 'class_flow_computed') return '·'
   if (props.type === 'price_updated') return '$'
   if (props.type === 'threshold_fired') return '⚡'
+  if (props.type === 'force_action_override') return '⚠'
+  if (props.type === 'policy_fired') return '⚡'
   if (props.type === 'resource_flow_executed') return '→'
   if (props.type === 'entity_state_updated') return '◇'
   if (props.type === 'error') return '!'
@@ -200,10 +244,38 @@ const who = computed(() => {
   if (props.type === 'threshold_fired' || props.type === 'entity_state_updated') {
     return props.payload.entity_name || ''
   }
+  if (props.type === 'force_action_override') {
+    return props.payload.persona_id || ''
+  }
+  if (props.type === 'policy_fired') {
+    return props.payload.agent_name || props.payload.agent_id || ''
+  }
   if (props.type === 'resource_flow_executed') {
     return props.payload.source_name || ''
   }
   return ''
+})
+
+// Freeform order detection + display
+const isFreeformOrder = computed(() => {
+  const d = props.payload?.distribution
+  return d && 'side' in d && 'quantity_pct' in d
+})
+const orderSide = computed(() => props.payload?.distribution?.side || 'hold')
+const orderQtyPct = computed(() => props.payload?.distribution?.quantity_pct || 0)
+const orderSideLabel = computed(() => {
+  const m = { buy: '买入', sell: '卖出', hold: '观望' }
+  return m[orderSide.value] || orderSide.value
+})
+const orderSideClass = computed(() => {
+  const m = { buy: 'good', sell: 'bad', hold: '' }
+  return m[orderSide.value] || ''
+})
+const orderPoolLabel = computed(() => {
+  const pool = props.payload?.distribution?.pool || ''
+  if (pool === 'cash') return '可用资金'
+  if (pool === 'holdings_in_target') return '持仓'
+  return pool
 })
 
 const time = computed(() => {
@@ -319,6 +391,34 @@ function priceDeltaClass (v) {
   border-left: 2px solid var(--ss-line-strong);
   padding-left: 10px;
 }
+.force-marker {
+  color: #d32f2f;
+  margin-right: 4px;
+}
+.force-line {
+  border-left: 3px solid #d32f2f;
+  padding-left: 10px;
+  background: rgba(211, 47, 47, 0.04);
+}
+.force-badge {
+  display: inline-block;
+  background: #d32f2f;
+  color: #fff;
+  font-size: 0.78em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin: 0 6px;
+}
+.force-reason {
+  color: var(--ss-fg-faint);
+  font-size: 0.88em;
+}
+.replaced-tag {
+  color: #d32f2f;
+  font-size: 0.78em;
+  font-style: italic;
+}
 
 .body { flex: 1; min-width: 0; }
 
@@ -417,6 +517,26 @@ function priceDeltaClass (v) {
   font-variant-numeric: tabular-nums;
   color: var(--ss-fg-muted);
 }
+/* Structured freeform order display */
+.order-side {
+  font-weight: 600;
+  font-size: 13px;
+  margin-right: 4px;
+}
+.order-side.good { color: var(--ss-good); }
+.order-side.bad  { color: var(--ss-bad); }
+.order-qty {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ss-fg);
+  margin-right: 2px;
+}
+.order-pool {
+  font-size: 12px;
+  color: var(--ss-fg-muted);
+  margin-right: 6px;
+}
+
 .rationale {
   margin-top: 6px;
   font-size: 12px;

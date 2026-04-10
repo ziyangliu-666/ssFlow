@@ -49,7 +49,7 @@ _DEFAULT_TICKER = "_default"
 
 
 @dataclass
-class Agent:
+class TraderInstance:
     """One stochastic trader instance, persistent across rounds.
 
     Capital is immutable, holdings + cash mutate as the agent buys / sells.
@@ -58,6 +58,9 @@ class Agent:
     For backward compatibility, the `holdings_shares` property reads/writes
     the default ticker entry, and methods accept either a float (single
     instrument) or a dict[str, float] (multi-instrument prices).
+
+    Renamed from `Agent` in the architecture restructure. The old name
+    is kept as an alias for backward compatibility.
     """
 
     persona_id: str
@@ -65,6 +68,7 @@ class Agent:
     cash: float                     # mutable: shrinks on buy, grows on sell
     holdings: dict[str, float] = field(default_factory=dict)  # {ticker: shares}
     max_holdings_value: float = 0.0  # immutable: capital × max_position_pct
+    reaction_lag: int = 0           # round index when this agent becomes active
 
     @property
     def holdings_shares(self) -> float:
@@ -99,6 +103,10 @@ class Agent:
     def buy_headroom(self, current_price: float | dict[str, float]) -> float:
         """Remaining buy capacity given the persona's max_position_pct cap."""
         return max(0.0, self.max_holdings_value - self.holdings_value(current_price))
+
+
+# Backward-compat alias: old code uses `Agent`, new code uses `TraderInstance`
+Agent = TraderInstance
 
 
 def _sample_capital(spec: dict[str, Any], rng: random.Random) -> float:
@@ -147,6 +155,22 @@ def _sample_position_pct(spec: dict[str, Any], rng: random.Random) -> float:
     raise ValueError(f"Unknown initial_position_distribution type: {dtype!r}")
 
 
+def _sample_reaction_lag(spec: dict[str, Any], rng: random.Random) -> int:
+    """Sample a reaction lag from the persona's reaction_lag_rounds spec.
+
+    Returns the round index at which the agent becomes active (0 = immediate).
+    """
+    if not spec:
+        return 0
+    dtype = spec.get("type", "none")
+    if dtype == "discrete":
+        values = spec.get("values", [0])
+        return int(rng.choice(values)) if values else 0
+    if dtype == "fixed":
+        return int(spec.get("value", 0))
+    return 0
+
+
 def spawn_agents(
     persona: Persona,
     current_price: float,
@@ -190,6 +214,7 @@ def spawn_agents(
         position_pct = max(0.0, min(1.0, position_pct))
         holdings_value = capital * position_pct
         cash = capital - holdings_value
+        reaction_lag = _sample_reaction_lag(sandbox.reaction_lag_rounds, rng)
 
         if multi_prices and len(multi_prices) > 0:
             # Multi-instrument: allocate initial holdings based on real
@@ -228,6 +253,7 @@ def spawn_agents(
                     cash=cash,
                     holdings=holdings,
                     max_holdings_value=capital * max_position_pct,
+                    reaction_lag=reaction_lag,
                 )
             )
         else:
@@ -240,6 +266,7 @@ def spawn_agents(
                     cash=cash,
                     holdings={primary_ticker: holdings_shares},
                     max_holdings_value=capital * max_position_pct,
+                    reaction_lag=reaction_lag,
                 )
             )
     return agents
@@ -382,6 +409,7 @@ def apply_distribution_to_agent_pop(
     confidence: float = 0.5,
     raw_distribution: dict[str, float] | None = None,
     system_fingerprint: str | None = None,
+    round_idx: int = 0,
 ) -> ClassFlowResult:
     """Pure-math: sample one action per agent from `distribution`, apply it,
     return aggregated ClassFlowResult. Does NOT make any LLM calls.
@@ -391,6 +419,7 @@ def apply_distribution_to_agent_pop(
     distribution into actual per-agent mutations + net flow.
 
     Mutates `agents` in place: their cash + holdings reflect the round's trades.
+    Only agents whose `reaction_lag <= round_idx` participate; the rest hold.
 
     Args:
         persona: trading persona (must have sandbox + action_space)
@@ -403,11 +432,30 @@ def apply_distribution_to_agent_pop(
         confidence: optional LLM confidence (attached to the result)
         raw_distribution: optional raw pre-normalization dict for audit
         system_fingerprint: optional LLM provider fingerprint for reproducibility
+        round_idx: current simulation round (0-based). Agents with
+            reaction_lag > round_idx are filtered out (they hold).
     """
     sandbox = persona.sandbox
     if sandbox is None:
         raise ValueError(
             f"apply_distribution_to_agent_pop: persona '{persona.id}' has no sandbox"
+        )
+
+    # Filter to agents whose reaction_lag has been reached
+    active_agents = [a for a in agents if a.reaction_lag <= round_idx]
+    if not active_agents:
+        return ClassFlowResult(
+            persona_id=persona.id,
+            instrument=instrument,
+            net_flow=0.0,
+            action_histogram={},
+            n_agents=0,
+            rationale=sanitize_text(rationale),
+            raw_distribution=raw_distribution or dict(distribution),
+            normalized_distribution={},
+            normalization_warning="no active agents this round (reaction_lag)",
+            confidence=confidence,
+            system_fingerprint=system_fingerprint,
         )
 
     # ── Free-form path: entire class does the same action ──
@@ -424,8 +472,8 @@ def apply_distribution_to_agent_pop(
             freeform_spec = {"side": side, "pool": pool, "fraction": qty_pct}
 
         net_flow = 0.0
-        histogram: dict[str, int] = {"__freeform__": len(agents)}
-        for agent_inst in agents:
+        histogram: dict[str, int] = {"__freeform__": len(active_agents)}
+        for agent_inst in active_agents:
             order = apply_action(agent_inst, freeform_spec, current_price, instrument=instrument)
             net_flow += order
 
@@ -434,7 +482,7 @@ def apply_distribution_to_agent_pop(
             instrument=instrument,
             net_flow=net_flow,
             action_histogram=histogram,
-            n_agents=len(agents),
+            n_agents=len(active_agents),
             rationale=sanitize_text(rationale),
             raw_distribution=raw_distribution or dict(distribution),
             normalized_distribution={"__freeform__": 1.0},
@@ -455,11 +503,11 @@ def apply_distribution_to_agent_pop(
     spec_by_name = {a["name"]: a for a in sandbox.action_space}
     actions = list(normalized.keys())
     weights = list(normalized.values())
-    sampled_names = rng.choices(actions, weights=weights, k=len(agents))
+    sampled_names = rng.choices(actions, weights=weights, k=len(active_agents))
 
     net_flow = 0.0
     histogram: dict[str, int] = {}
-    for agent, action_name in zip(agents, sampled_names):
+    for agent, action_name in zip(active_agents, sampled_names):
         spec = spec_by_name.get(action_name)
         histogram[action_name] = histogram.get(action_name, 0) + 1
         if spec is None:
@@ -472,7 +520,7 @@ def apply_distribution_to_agent_pop(
         instrument=instrument,
         net_flow=net_flow,
         action_histogram=histogram,
-        n_agents=len(agents),
+        n_agents=len(active_agents),
         rationale=sanitize_text(rationale),
         raw_distribution=raw_distribution or dict(distribution),
         normalized_distribution=normalized,
@@ -486,6 +534,7 @@ __all__ = [
     "Agent",
     "ClassFlowResult",
     "NORMALIZATION_TOLERANCE",
+    "TraderInstance",
     "_DEFAULT_TICKER",
     "apply_action",
     "apply_distribution_to_agent_pop",

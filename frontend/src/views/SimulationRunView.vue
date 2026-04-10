@@ -289,6 +289,8 @@ const filterTypes = ref([
   { label: '轮次', value: 'round_start,round_complete', on: true },
   { label: '资源', value: 'resource_flow_executed', on: false },
   { label: '阈值', value: 'threshold_fired', on: true },
+  { label: '强制', value: 'force_action_override', on: true },
+  { label: '规则', value: 'policy_fired', on: true },
 ])
 
 const visibleEvents = computed(() => {
@@ -473,6 +475,15 @@ function _processEvent (type, payload) {
       break
     case 'threshold_fired':
       // Rendered by TimelineEvent — no extra state to track
+      break
+    case 'force_action_override':
+      // Rendered by TimelineEvent — the forced trade shows in the timeline
+      break
+    case 'policy_fired':
+      // Unified policy event — rendered by TimelineEvent
+      break
+    case 'agent_action':
+      // Non-trader domain action — rendered by TimelineEvent
       break
   }
 }

@@ -50,10 +50,14 @@ from oasis.social_platform.typing import ActionType, DefaultPlatformType
 from .config import settings
 from .event import Event
 from .event_bus import (
+    EVENT_AGENT_ACTION,
     EVENT_CLASS_FLOW_COMPUTED,
     EVENT_ERROR,
     EVENT_EXTERNAL_EVENT_INJECTED,
+    EVENT_FORCE_ACTION_OVERRIDE,
     EVENT_PERSONA_THOUGHT,
+    EVENT_POLICY_CREATED,
+    EVENT_POLICY_FIRED,
     EVENT_PRICE_UPDATED,
     EVENT_ROUND_COMPLETE,
     EVENT_ROUND_START,
@@ -72,7 +76,11 @@ from .oasis_feed_reader import (
     PublicationRegistry,
 )
 from .oasis_lm import build_default_lm
-from .oasis_persona_adapter import MARKET_AGENT_ID_NAME, build_agent_graph
+from .oasis_persona_adapter import (
+    MARKET_AGENT_ID_NAME,
+    build_agent_graph,
+    update_conviction_context,
+)
 from .oasis_trading_tool import OrderCollector, PendingOrder
 from .persona import Persona
 from .trading_layer import (
@@ -199,12 +207,14 @@ def _build_price_update_post(
     price_before: float,
     price_after: float,
     net_flow: float,
+    round_label: str = "",
 ) -> str:
     """The synthetic market broadcaster's price-update post."""
     sym = _currency_symbol(event.price_currency)
     delta_pct = (price_after / price_before - 1.0) * 100 if price_before else 0.0
+    label = f" ({round_label})" if round_label else ""
     return (
-        f"[Market Event] R{round_idx} price update: "
+        f"[Market Event] R{round_idx}{label} price update: "
         f"{sym}{price_before:.2f} → {sym}{price_after:.2f} "
         f"({delta_pct:+.2f}%). Net order flow: {sym}{net_flow:+,.0f}"
     )
@@ -337,6 +347,7 @@ async def run_simulation(
     entity_graph: "EntityGraph | None" = None,
     instrument_universe: "InstrumentUniverse | None" = None,
     round_schedule: "RoundSchedule | None" = None,
+    sim_graph: "SimGraph | None" = None,
 ) -> OasisSimResult:
     """Run a Phase I OASIS-based market simulation.
 
@@ -395,6 +406,12 @@ async def run_simulation(
         else lambda_for_market(event.market)
     )
 
+    # ── Build SimGraph (unified world model) ──
+    # If not provided, build from legacy inputs via the adapter.
+    if sim_graph is None:
+        from .sim_graph_builder import build_sim_graph
+        sim_graph = build_sim_graph(personas, entity_graph, event)
+
     # Set up the OASIS db path
     if db_path is None:
         db_dir = Path(settings.project_root) / "reports" / "oasis_dbs"
@@ -436,18 +453,20 @@ async def run_simulation(
         seed=seed,
     )
 
-    # ── Build the agent graph (with the trading tool wired into traders) ──
+    # ── Build the agent graph (with trading + domain tools wired) ──
     channel = Channel()
     lm = build_default_lm()
     order_collector = OrderCollector()
-    # Freeform trading is needed when:
-    #   - entity_graph is present (Entity Sandbox mode), OR
-    #   - instrument_universe is present (multi-instrument mode, agents must specify ticker)
-    use_freeform = (entity_graph is not None) or (instrument_universe is not None)
+    from .action_collector import ActionCollector
+    action_collector = ActionCollector()
+    # Freeform trading is always on when SimGraph is present
+    use_freeform = (entity_graph is not None) or (instrument_universe is not None) or (sim_graph is not None)
     agent_graph, persona_id_to_oasis_id = build_agent_graph(
         personas, channel, model=lm, order_collector=order_collector,
         use_freeform_trading=use_freeform,
         instrument_universe=instrument_universe,
+        event=event,
+        action_collector=action_collector,
     )
 
     # ── Build the OASIS env ──
@@ -526,6 +545,10 @@ async def run_simulation(
     rounds: list[RoundRecord] = []
     current_price = initial_price
     persona_by_id = {p.id: p for p in personas}
+    last_actions: dict[str, dict] = {}  # persona_id → {side, rationale, round_idx}
+    # Forced actions carried over from the previous round's post-price
+    # threshold pass (step 4.5). Applied at step 3.5 of the next round.
+    deferred_forced_actions: dict[str, Any] = {}
 
     try:
         for round_idx in range(n_rounds):
@@ -540,6 +563,18 @@ async def run_simulation(
             )
             pre_round_post_id = _max_post_id(str(db_path_obj))
             order_collector.set_round(round_idx)
+            action_collector.set_round(round_idx)
+
+            # 0.5. Read time context from round_schedule
+            round_label = ""
+            if round_schedule is not None:
+                rd = round_schedule.get_round(round_idx)
+                if rd:
+                    round_label = rd.label
+                    log.info(
+                        "  R%d schedule: %s (active_types=%s)",
+                        round_idx, rd.label, rd.active_agent_types,
+                    )
 
             # 1. Inject any external events scheduled for this round
             external_for_round = external_events.events_for_round(round_idx)
@@ -582,64 +617,85 @@ async def run_simulation(
                         oasis_post_id=int(ev_post_id),
                     )
 
-            # 1.5. Entity State Sandbox: resource flows + thresholds + prompt injection
-            if entity_graph is not None:
-                from .entity_engine import (
-                    collect_threshold_events,
-                    evaluate_thresholds,
-                    execute_resource_flows,
-                    inject_entity_state_into_prompts,
-                    record_entity_snapshots,
+            # 1.5. SimGraph: resource flows + policy evaluation + prompt injection
+            from .policy import AnnounceAction, TradeAction
+            from .policy_engine import (
+                collect_announcements,
+                collect_trade_overrides,
+                evaluate_policies,
+            )
+
+            # Start with deferred trade overrides from previous round
+            trade_overrides: dict[str, Any] = dict(deferred_forced_actions)
+            deferred_forced_actions.clear()
+
+            # Execute deterministic resource flows
+            sim_graph.execute_flows()
+
+            # Evaluate ALL policies on ALL agents in one pass
+            policy_fires = evaluate_policies(sim_graph, round_idx)
+
+            # Dispatch policy fires by action type
+            for fire in policy_fires:
+                safe_emit(
+                    event_sink,
+                    EVENT_POLICY_FIRED,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    agent_id=fire.agent_id,
+                    agent_name=fire.agent_display_name,
+                    policy_id=fire.policy.id,
+                    description=fire.policy.description,
+                    action_type=type(fire.action).__name__,
+                    source=fire.policy.source,
                 )
 
-                # Execute resource flows (deterministic, no LLM)
-                execute_resource_flows(
-                    entity_graph, round_idx, event_sink, simulation_id,
-                )
+            # Collect trade overrides (force_action policies)
+            new_overrides = collect_trade_overrides(policy_fires, sim_graph)
+            trade_overrides.update(new_overrides)
 
-                # Evaluate thresholds and fire effects
-                threshold_fires = evaluate_thresholds(
-                    entity_graph, round_idx, event_sink, simulation_id,
-                )
-
-                # Inject threshold-triggered events into the social feed
-                for tev in collect_threshold_events(threshold_fires, round_idx):
-                    t_author_id = tev.author_persona_id
-                    if t_author_id in persona_id_to_oasis_id:
-                        t_author_agent = agent_graph.get_agent(
-                            persona_id_to_oasis_id[t_author_id]
-                        )
-                    else:
-                        t_author_agent = market_agent
-                    pre_t_post_id = _max_post_id(str(db_path_obj))
-                    await env.step({
-                        t_author_agent: ManualAction(
-                            action_type=ActionType.CREATE_POST,
-                            action_args={"content": tev.text},
+            # Inject announcements into social feed
+            for fire in collect_announcements(policy_fires):
+                ann = fire.action
+                a_agent_id = fire.agent_id
+                if a_agent_id in persona_id_to_oasis_id:
+                    a_author = agent_graph.get_agent(
+                        persona_id_to_oasis_id[a_agent_id]
+                    )
+                else:
+                    a_author = market_agent
+                pre_a_post_id = _max_post_id(str(db_path_obj))
+                await env.step({
+                    a_author: ManualAction(
+                        action_type=ActionType.CREATE_POST,
+                        action_args={"content": ann.text},
+                    ),
+                })
+                a_post_id = _max_post_id(str(db_path_obj))
+                if a_post_id > pre_a_post_id:
+                    publication_registry.register(
+                        a_post_id,
+                        PublicationMetadata(
+                            content_type=ann.content_type,
+                            author_persona_id=a_agent_id,
+                            author_archetype=fire.agent_display_name,
+                            authority_weight=ann.authority_weight,
+                            round_idx=round_idx,
                         ),
-                    })
-                    t_post_id = _max_post_id(str(db_path_obj))
-                    if t_post_id > pre_t_post_id:
-                        publication_registry.register(
-                            t_post_id,
-                            PublicationMetadata(
-                                content_type=tev.content_type,
-                                author_persona_id=t_author_id,
-                                author_archetype=t_author_id,
-                                authority_weight=tev.authority_weight,
-                                round_idx=round_idx,
-                            ),
-                        )
+                    )
 
-                # Record entity state snapshots
-                record_entity_snapshots(
-                    entity_graph, round_idx, event_sink, simulation_id,
-                )
+            # Inject agent state ("处境") into OASIS agent prompts
+            sim_graph.inject_state_into_prompts(
+                agent_graph, persona_id_to_oasis_id, round_idx,
+            )
 
-                # Inject entity state ("处境") into each agent's prompt
-                inject_entity_state_into_prompts(
-                    entity_graph, agent_graph, persona_id_to_oasis_id, round_idx,
-                )
+            # 1.9. Inject conviction persistence: tell each trader what they
+            #      decided last round so the LLM maintains directional consistency.
+            for persona in personas:
+                if persona.sandbox is not None and persona.id in last_actions:
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    update_conviction_context(oasis_agent, persona.id, last_actions)
 
             # 2. OASIS social step: every real persona acts via LLM.
             #    Trader personas see BOTH the 21 native OASIS social actions
@@ -707,6 +763,99 @@ async def run_simulation(
                     references=list(pub.references),
                 )
 
+            # 2.8. Drain non-trader action collector and dispatch.
+            #      Announcements/regulations/research get posted into feed.
+            pending_actions = action_collector.drain()
+            if pending_actions:
+                log.info(
+                    "  R%d: %d agent actions collected",
+                    round_idx, len(pending_actions),
+                )
+                for pa in pending_actions:
+                    # ── Dynamic policy creation ──
+                    if pa.action_type == "create_policy":
+                        from .policy import Policy as _Policy
+                        try:
+                            new_policy = _Policy.from_llm_spec(
+                                pa.payload,
+                                source=f"llm_round_{round_idx}",
+                                owner_id=pa.agent_id,
+                            )
+                            # Attach to the owning SimAgent
+                            sim_agent = sim_graph.agent_by_persona(pa.persona_id)
+                            if sim_agent is None:
+                                sim_agent = sim_graph.agents.get(pa.agent_id)
+                            if sim_agent is not None:
+                                sim_agent.policies.append(new_policy)
+                                log.info(
+                                    "  R%d POLICY_CREATED: %s → %s (trigger=%s)",
+                                    round_idx, pa.persona_id,
+                                    new_policy.name, new_policy.trigger_expr,
+                                )
+                                safe_emit(
+                                    event_sink,
+                                    EVENT_POLICY_CREATED,
+                                    simulation_id=simulation_id,
+                                    round_idx=round_idx,
+                                    agent_id=pa.agent_id,
+                                    persona_id=pa.persona_id,
+                                    policy_name=new_policy.name,
+                                    trigger_expr=new_policy.trigger_expr,
+                                    action_type=type(new_policy.action).__name__,
+                                    source=new_policy.source,
+                                )
+                        except ValueError as exc:
+                            log.warning(
+                                "  R%d %s create_policy failed: %s",
+                                round_idx, pa.persona_id, exc,
+                            )
+                        continue
+
+                    # ── Feed-posting actions (announce, regulate, publish) ──
+                    text = pa.payload.get("text", "")
+                    if not text:
+                        continue
+                    pa_persona_id = pa.persona_id
+                    if pa_persona_id in persona_id_to_oasis_id:
+                        pa_author = agent_graph.get_agent(
+                            persona_id_to_oasis_id[pa_persona_id]
+                        )
+                    else:
+                        pa_author = market_agent
+                    pre_pa_post_id = _max_post_id(str(db_path_obj))
+                    await env.step({
+                        pa_author: ManualAction(
+                            action_type=ActionType.CREATE_POST,
+                            action_args={"content": text},
+                        ),
+                    })
+                    pa_post_id = _max_post_id(str(db_path_obj))
+                    if pa_post_id > pre_pa_post_id:
+                        publication_registry.register(
+                            pa_post_id,
+                            PublicationMetadata(
+                                content_type=pa.payload.get("content_type", "social_post"),
+                                author_persona_id=pa_persona_id,
+                                author_archetype=pa_persona_id,
+                                authority_weight=float(pa.payload.get("authority_weight", 0.8)),
+                                round_idx=round_idx,
+                            ),
+                        )
+                    safe_emit(
+                        event_sink,
+                        EVENT_AGENT_ACTION,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        agent_id=pa.agent_id,
+                        persona_id=pa_persona_id,
+                        action_type=pa.action_type,
+                        text=text[:200],
+                    )
+                    log.info(
+                        "  R%d %s [%s]: %s",
+                        round_idx, pa_persona_id, pa.action_type, text[:80],
+                    )
+
             # 3. Drain the OrderCollector: all trading intents submitted via
             #    the submit_order_distribution tool during the social step.
             pending_orders = order_collector.drain()
@@ -715,6 +864,50 @@ async def run_simulation(
                 round_idx, len(pending_orders),
                 len({o.persona_id for o in pending_orders}),
             )
+
+            # 3.5. Policy trade overrides: if a TradeAction policy fired,
+            #      replace or inject the LLM's order for that persona.
+            if trade_overrides:
+                from .oasis_trading_tool import PendingOrder as _PO
+                existing_ids = {o.persona_id for o in pending_orders}
+                for pid, fire in trade_overrides.items():
+                    ta = fire.action  # TradeAction
+                    pool = ta.pool or ("cash" if ta.side == "buy" else "holdings_in_target")
+                    forced_order = _PO(
+                        persona_id=pid,
+                        distribution={"__freeform__": 1.0},
+                        rationale=f"[强制] {fire.policy.description}",
+                        round_idx=round_idx,
+                        raw_args={
+                            "side": ta.side,
+                            "quantity_pct": ta.quantity_pct,
+                            "pool": pool,
+                        },
+                    )
+                    if pid in existing_ids:
+                        pending_orders = [
+                            o for o in pending_orders if o.persona_id != pid
+                        ]
+                    pending_orders.append(forced_order)
+                    log.info(
+                        "  R%d POLICY_TRADE: %s → %s %.0f%% (%s)",
+                        round_idx, pid, ta.side, ta.quantity_pct * 100,
+                        fire.policy.description,
+                    )
+                    safe_emit(
+                        event_sink,
+                        EVENT_POLICY_FIRED,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        agent_id=fire.agent_id,
+                        agent_name=fire.agent_display_name,
+                        policy_id=fire.policy.id,
+                        description=fire.policy.description,
+                        action_type="TradeAction",
+                        forced_side=ta.side,
+                        forced_quantity_pct=ta.quantity_pct,
+                        replaced_llm_order=pid in existing_ids,
+                    )
 
             # 4. Apply each captured distribution to the matching agent pop.
             #    If a trader didn't submit an order this round (LLM chose not
@@ -785,9 +978,22 @@ async def run_simulation(
                     instrument=order_ticker,
                     rationale=order.rationale,
                     raw_distribution=order.raw_args if order.raw_args else order.distribution,
+                    round_idx=round_idx,
                 )
                 class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
+                # Record for conviction persistence
+                if order.raw_args:
+                    _side = order.raw_args.get("side", "hold")
+                else:
+                    # Legacy dist: infer dominant side
+                    _dominant = max(order.distribution.items(), key=lambda kv: kv[1])
+                    _side = _dominant[0]
+                last_actions[order.persona_id] = {
+                    "side": _side,
+                    "rationale": (order.rationale or "")[:200],
+                    "round_idx": round_idx,
+                }
                 log.info(
                     "  R%d %s → net_flow=%.2f (%d agents, histogram=%s)",
                     round_idx, order.persona_id,
@@ -824,6 +1030,7 @@ async def run_simulation(
                     current_price=current_price,
                     rng=sample_rng,
                     rationale="(no tool call this round, held)",
+                    round_idx=round_idx,
                 )
                 class_flows.append(hold_flow)
                 safe_emit(
@@ -906,23 +1113,31 @@ async def run_simulation(
                 for t, p in current_prices.items():
                     multi_trajectories[t].append(p)
 
-            # 4.5. Entity State Sandbox: update price-derived state + second threshold pass
-            if entity_graph is not None:
-                from .entity_engine import (
-                    evaluate_thresholds as _eval_thresholds,
-                    update_price_derived_state,
-                )
-                update_price_derived_state(
-                    entity_graph, price_after, initial_price,
-                )
-                # Second threshold pass for price-sensitive thresholds
-                _eval_thresholds(
-                    entity_graph, round_idx, event_sink, simulation_id,
+            # 4.6. Sync trading population state → SimGraph agents
+            #      This is THE FIX for the parallel-books problem: actual
+            #      holdings/cash stats from the trading population are written
+            #      back to the corresponding SimAgent.state dict every round.
+            sim_graph.sync_population_state(agent_pops, price_after, round_idx)
+            sim_graph.update_price_derived_state(price_after, initial_price)
+            sim_graph.record_all_snapshots()
+
+            # 4.7. Second policy pass: price-sensitive policies may fire now
+            #      that price-derived state has been updated. Trade overrides
+            #      from this pass are deferred to the NEXT round.
+            post_price_fires = evaluate_policies(sim_graph, round_idx)
+            deferred_overrides = collect_trade_overrides(post_price_fires, sim_graph)
+            if deferred_overrides:
+                deferred_forced_actions.update(deferred_overrides)
+                log.info(
+                    "  R%d deferred policy trade overrides for next round: %s",
+                    round_idx,
+                    list(deferred_overrides.keys()),
                 )
 
             # 5. Post the price update from the market broadcaster
             price_post = _build_price_update_post(
-                event, round_idx, current_price, price_after, net_flow_total
+                event, round_idx, current_price, price_after, net_flow_total,
+                round_label=round_label,
             )
             pre_price_post_id = _max_post_id(str(db_path_obj))
             try:

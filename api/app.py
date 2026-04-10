@@ -1183,9 +1183,15 @@ def create_app() -> Flask:
             log.exception("distillation failed")
             return jsonify({"error": "distillation_failed", "detail": str(exc)}), 500
 
-        # Generate a default round schedule
-        from ssflow.round_schedule import make_default_schedule
-        schedule = make_default_schedule(event_date or "TBD")
+        # Generate a round schedule — use preset from request or default
+        from ssflow.round_schedule import make_schedule
+        schedule_preset = payload.get("schedule_preset", "earnings-5d")
+        schedule_spec = payload.get("schedule_spec")  # custom spec overrides preset
+        schedule = make_schedule(
+            preset=schedule_preset,
+            event_date=event_date or "TBD",
+            spec=schedule_spec,
+        )
 
         return jsonify({
             "instrument_universe": universe.to_serializable(),
@@ -1251,37 +1257,96 @@ def create_app() -> Flask:
 
 
 def _rebuild_entity_graph(data: dict, event: "Event") -> "EntityGraph":
-    """Rebuild an EntityGraph from the serialized JSON that was stashed
-    in the stream payload or sent from the frontend.
+    """Rebuild an EntityGraph from the serialized JSON.
 
-    The serialized form (from EntityGraph.to_serializable()) strips callables,
-    so we rebuild flows as display-only and thresholds from the template
-    defaults via build_from_template.
+    Now that to_serializable() includes condition_expr and full effect
+    details, we can faithfully reconstruct the graph — including
+    LLM-tuned thresholds — without falling back to build_from_template.
     """
-    from ssflow.entity import Entity, EntityGraph, EntityState, ResourceFlow
-
-    topic = data.get("topic", "")
-    market = event.market or "ashare"
-
-    # If we have entity data, try to rebuild from template with overrides
-    entity_overrides = {}
-    for slot_id, e_data in data.get("entities", {}).items():
-        entity_overrides[slot_id] = {
-            "display_name": e_data.get("display_name", ""),
-            "state": e_data.get("state", {}),
-        }
-
-    graph = build_from_template(
-        topic=topic,
-        market=market,
-        current_price=float(event.current_price or 0),
-        entity_overrides=entity_overrides,
+    from ssflow.entity import (
+        Entity, EntityGraph, EntityState, ResourceFlow,
+        Threshold, ThresholdEffect, compile_condition,
     )
 
-    # Link entity_ids to persona_ids from the serialized data
-    for slot_id, e_data in data.get("entities", {}).items():
-        if slot_id in graph.entities and e_data.get("persona_id"):
-            graph.entities[slot_id].persona_id = e_data["persona_id"]
+    graph = EntityGraph(
+        topic=data.get("topic", ""),
+        generated_at=data.get("generated_at", ""),
+        template_used=data.get("template_used", ""),
+    )
+
+    # Rebuild entities
+    for eid, e_data in data.get("entities", {}).items():
+        graph.add_entity(Entity(
+            id=eid,
+            display_name=e_data.get("display_name", eid),
+            entity_type=e_data.get("entity_type", "custom"),
+            state=EntityState(variables={
+                k: float(v) for k, v in e_data.get("state", {}).items()
+            }),
+            state_labels=dict(e_data.get("state_labels", {})),
+            persona_id=e_data.get("persona_id"),
+        ))
+
+    # Rebuild flows (source_var/target_var preserved; no gate needed)
+    for f_data in data.get("flows", []):
+        try:
+            graph.add_flow(ResourceFlow(
+                id=f_data["id"],
+                source_id=f_data["source_id"],
+                target_id=f_data["target_id"],
+                resource_type=f_data.get("resource_type", "resource"),
+                rate_per_round=float(f_data.get("rate_per_round", 1.0)),
+                source_var=f_data.get("source_var", ""),
+                target_var=f_data.get("target_var", ""),
+                label=f_data.get("label", ""),
+            ))
+        except (KeyError, ValueError) as exc:
+            log.warning("Skipping flow rebuild: %s", exc)
+
+    # Rebuild thresholds — compile condition from condition_expr
+    for t_data in data.get("thresholds", []):
+        cond_expr = t_data.get("condition_expr", "")
+        if not cond_expr:
+            log.warning(
+                "Threshold '%s' has no condition_expr, skipping",
+                t_data.get("id", "?"),
+            )
+            continue
+        try:
+            condition = compile_condition(cond_expr)
+            effect_type = t_data.get("effect_type", "inject_event")
+            if effect_type == "force_action":
+                effect = ThresholdEffect(
+                    effect_type="force_action",
+                    forced_side=t_data.get("forced_side", ""),
+                    forced_quantity_pct=float(t_data.get("forced_quantity_pct", 0.0)),
+                )
+            elif effect_type == "mutate_state":
+                effect = ThresholdEffect(
+                    effect_type="mutate_state",
+                    state_mutations={
+                        k: float(v)
+                        for k, v in t_data.get("state_mutations", {}).items()
+                    },
+                )
+            else:
+                effect = ThresholdEffect(
+                    effect_type="inject_event",
+                    event_text=t_data.get("event_text", ""),
+                    event_author_id=t_data.get("event_author_id", ""),
+                    event_content_type=t_data.get("event_content_type", "company_announcement"),
+                )
+            graph.register_threshold(Threshold(
+                id=t_data.get("id", f"rebuilt_{cond_expr}"),
+                entity_id=t_data["entity_id"],
+                description=t_data.get("description", cond_expr),
+                condition=condition,
+                effect=effect,
+                condition_expr=cond_expr,
+                cooldown_rounds=int(t_data.get("cooldown_rounds", 2)),
+            ))
+        except (KeyError, ValueError) as exc:
+            log.warning("Skipping threshold rebuild '%s': %s", t_data.get("id", "?"), exc)
 
     return graph
 

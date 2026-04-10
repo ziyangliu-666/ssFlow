@@ -186,6 +186,52 @@ def evaluate_thresholds(
     return fires
 
 
+@dataclass
+class ForcedAction:
+    """A hard trading override triggered by a threshold fire.
+
+    When a threshold with effect_type='force_action' fires, the linked
+    persona's LLM trading decision is overridden by this mechanical
+    constraint. The engine replaces whatever the LLM submitted with
+    this forced side/quantity.
+    """
+
+    persona_id: str
+    side: str                # "buy" | "sell"
+    quantity_pct: float      # 0.0 ~ 1.0
+    reason: str              # threshold description (shown in timeline)
+    threshold_id: str
+
+
+def collect_forced_actions(
+    fires: list[ThresholdFire],
+    graph: "EntityGraph",
+) -> dict[str, ForcedAction]:
+    """Extract force_action effects from threshold fires.
+
+    Returns a dict mapping persona_id → ForcedAction. If multiple
+    force_action thresholds fire for the same persona, the last one wins
+    (thresholds are evaluated in registration order, so later = higher priority).
+    """
+    forced: dict[str, ForcedAction] = {}
+    for fire in fires:
+        if fire.effect.effect_type != "force_action":
+            continue
+        if not fire.effect.forced_side:
+            continue
+        entity = graph.entities.get(fire.entity_id)
+        if entity is None or entity.persona_id is None:
+            continue
+        forced[entity.persona_id] = ForcedAction(
+            persona_id=entity.persona_id,
+            side=fire.effect.forced_side,
+            quantity_pct=fire.effect.forced_quantity_pct,
+            reason=fire.description,
+            threshold_id=fire.threshold_id,
+        )
+    return forced
+
+
 def collect_threshold_events(
     fires: list[ThresholdFire],
     round_idx: int,
@@ -353,18 +399,45 @@ def update_price_derived_state(
 
     Convention: entities with a state variable named 'stock_price' get it
     updated. Entities with 'price_change_pct' get the cumulative change.
+
+    Financially-derived updates:
+    - margin_utilization: when price drops, collateral shrinks but loan stays
+      the same, so utilization ratio rises. Formula:
+      new_margin = base_margin / (1 + price_change_pct/100)
+      This is accurate: if price drops 10%, a 60% margin becomes ~67%.
+    - sentiment_score: tracks cumulative price_change_pct (simple proxy).
     """
+    if initial_price <= 0:
+        return
+
+    price_change_pct = (new_price / initial_price - 1.0) * 100
+
     for entity in graph.entities.values():
         if "stock_price" in entity.state.variables:
             entity.state.set("stock_price", new_price)
-        if "price_change_pct" in entity.state.variables and initial_price > 0:
-            pct = (new_price / initial_price - 1.0) * 100
-            entity.state.set("price_change_pct", pct)
+        if "price_change_pct" in entity.state.variables:
+            entity.state.set("price_change_pct", price_change_pct)
+
+        # Margin utilization rises when price drops (collateral shrinks)
+        if "margin_utilization" in entity.state.variables:
+            base = entity.state.variables.get("margin_utilization", 0.0)
+            # Only adjust if there's an initial non-zero base
+            if base > 0:
+                ratio = 1.0 + price_change_pct / 100.0
+                if ratio > 0:
+                    new_margin = min(1.0, base / ratio)
+                    entity.state.set("margin_utilization", new_margin)
+
+        # Sentiment tracks cumulative change (simple proxy)
+        if "sentiment_score" in entity.state.variables:
+            entity.state.set("sentiment_score", price_change_pct)
 
 
 __all__ = [
     "FlowResult",
+    "ForcedAction",
     "ThresholdFire",
+    "collect_forced_actions",
     "collect_threshold_events",
     "evaluate_thresholds",
     "execute_resource_flows",

@@ -33,6 +33,27 @@ from .sandbox_templates import get_template
 log = logging.getLogger(__name__)
 
 
+def _build_effect(t_def: dict, entity_id: str, event_text: str = "") -> ThresholdEffect:
+    """Build a ThresholdEffect from a template threshold definition."""
+    effect_type = t_def.get("effect_type", "inject_event")
+    if effect_type == "mutate_state" and t_def.get("state_mutations"):
+        return ThresholdEffect(
+            effect_type="mutate_state",
+            state_mutations=dict(t_def["state_mutations"]),
+        )
+    if effect_type == "force_action":
+        return ThresholdEffect(
+            effect_type="force_action",
+            forced_side=t_def.get("forced_side", ""),
+            forced_quantity_pct=float(t_def.get("forced_quantity_pct", 0.0)),
+        )
+    return ThresholdEffect(
+        effect_type="inject_event",
+        event_text=event_text,
+        event_author_id=entity_id,
+    )
+
+
 # ─────────────────────── LLM Prompts ───────────────────────
 
 _IDENTIFY_SYSTEM = """\
@@ -206,25 +227,18 @@ def generate_sandbox(
         if event_text:
             event_text = event_text.replace("{display_name}", entity.display_name)
 
-        effect = ThresholdEffect(
-            effect_type=t_def.get("effect_type", "inject_event"),
-            event_text=event_text,
-            event_author_id=entity_id,
-        )
-        if t_def.get("state_mutations"):
-            effect = ThresholdEffect(
-                effect_type="mutate_state",
-                state_mutations=dict(t_def["state_mutations"]),
-            )
+        effect = _build_effect(t_def, entity_id, event_text)
+        cond_str = t_def["condition"]
 
         try:
-            condition = compile_condition(t_def["condition"])
+            condition = compile_condition(cond_str)
             graph.register_threshold(Threshold(
                 id=f"threshold_{i}",
                 entity_id=entity_id,
-                description=t_def.get("description", t_def["condition"]),
+                description=t_def.get("description", cond_str),
                 condition=condition,
                 effect=effect,
+                condition_expr=cond_str,
                 cooldown_rounds=3,
             ))
         except ValueError as exc:
@@ -321,6 +335,7 @@ def _apply_tune_overrides(
                     from .entity import TriggerProbe
                     TriggerProbe.validate(new_cond, entity)
                     graph.thresholds[idx].condition = new_cond
+                    graph.thresholds[idx].condition_expr = new_cond_str
                     if new_desc:
                         graph.thresholds[idx].description = new_desc
                 except (ValueError, KeyError) as exc:
@@ -342,11 +357,7 @@ def _apply_tune_overrides(
 
         try:
             condition = compile_condition(cond_str)
-            effect = ThresholdEffect(
-                effect_type=new_t.get("effect_type", "inject_event"),
-                event_text=new_t.get("event_text", ""),
-                event_author_id=entity_id,
-            )
+            effect = _build_effect(new_t, entity_id)
             new_id = f"llm_threshold_{len(graph.thresholds)}"
             graph.register_threshold(Threshold(
                 id=new_id,
@@ -354,6 +365,7 @@ def _apply_tune_overrides(
                 description=new_t.get("description", cond_str),
                 condition=condition,
                 effect=effect,
+                condition_expr=cond_str,
                 cooldown_rounds=3,
             ))
         except ValueError as exc:
@@ -436,26 +448,18 @@ def build_from_template(
         if event_text:
             event_text = event_text.replace("{display_name}", entity.display_name)
 
-        if t_def.get("state_mutations"):
-            effect = ThresholdEffect(
-                effect_type="mutate_state",
-                state_mutations=dict(t_def["state_mutations"]),
-            )
-        else:
-            effect = ThresholdEffect(
-                effect_type=t_def.get("effect_type", "inject_event"),
-                event_text=event_text,
-                event_author_id=entity_id,
-            )
+        effect = _build_effect(t_def, entity_id, event_text)
+        cond_str = t_def["condition"]
 
         try:
-            condition = compile_condition(t_def["condition"])
+            condition = compile_condition(cond_str)
             graph.register_threshold(Threshold(
                 id=f"threshold_{i}",
                 entity_id=entity_id,
-                description=t_def.get("description", t_def["condition"]),
+                description=t_def.get("description", cond_str),
                 condition=condition,
                 effect=effect,
+                condition_expr=cond_str,
                 cooldown_rounds=3,
             ))
         except ValueError as exc:

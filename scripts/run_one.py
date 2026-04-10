@@ -62,6 +62,8 @@ from ssflow.llm_client import cost_tracker
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas, persona_set_hash
 from ssflow.report import render_simulation_safe_or_quarantine, save_report
+from ssflow.round_schedule import PRESET_NAMES, make_schedule
+from ssflow.sandbox_generator import build_from_template
 from ssflow.scorecard import init_db, insert_sandbox_simulation
 
 
@@ -123,7 +125,15 @@ Two ways to invoke:
              "required in explicit mode)",
     )
     p.add_argument(
-        "--rounds", type=int, default=None, help="Override n_rounds (defaults to settings)"
+        "--rounds", type=int, default=None,
+        help="Override n_rounds (defaults to schedule's round count)",
+    )
+    p.add_argument(
+        "--schedule",
+        default="earnings-5d",
+        help=f"Round schedule preset or 'custom'. "
+             f"Presets: {', '.join(PRESET_NAMES)}. "
+             f"Default: earnings-5d",
     )
     p.add_argument(
         "--current-price",
@@ -246,16 +256,35 @@ async def amain() -> int:
     personas = load_personas(Path(personas_path))
     init_db()
 
+    schedule = make_schedule(args.schedule, event.event_date)
+    n_rounds = args.rounds or schedule.n_rounds
+
     print(f"# ssFlow run: {event.ticker} {event.event_type} {event.event_date}", file=sys.stderr)
     print(f"#   {len(personas)} personas ({sum(1 for p in personas if p.sandbox is not None)} traders + "
           f"{sum(1 for p in personas if p.sandbox is None)} info entities), "
-          f"{args.rounds or settings.n_rounds} rounds, model={settings.default_model}",
+          f"{n_rounds} rounds, model={settings.default_model}",
           file=sys.stderr)
     print(f"#   context completeness: {event.context_completeness:.0%}", file=sys.stderr)
+
+    # Build entity graph for the Entity State Sandbox.
+    # Uses template defaults (no LLM call, zero cost).
+    entity_graph = build_from_template(
+        topic=event.event_text or f"{event.ticker} {event.event_type}",
+        market=event.market or "ashare",
+        current_price=float(event.current_price or 0),
+    )
+    print(f"#   entity graph: {len(entity_graph.entities)} entities, "
+          f"{len(entity_graph.flows)} flows, "
+          f"{len(entity_graph.thresholds)} thresholds "
+          f"({sum(1 for t in entity_graph.thresholds if t.effect.effect_type == 'force_action')} force_action)",
+          file=sys.stderr)
     print(f"#   running OASIS simulation...", file=sys.stderr, flush=True)
 
     # OASIS engine is async; await it from amain.
-    result = await run_simulation(event, personas, n_rounds=args.rounds)
+    result = await run_simulation(
+        event, personas, n_rounds=n_rounds, round_schedule=schedule,
+        entity_graph=entity_graph,
+    )
     display, ok = render_simulation_safe_or_quarantine(result)
     report_path = save_report(display, result.simulation_id)
 

@@ -112,9 +112,6 @@ class ResourceFlow:
 
     source_var / target_var: the state variable to decrement on source and
     increment on target. If empty, the flow is display-only (no state mutation).
-
-    gate: optional Python callable (source, target) -> bool. If provided and
-    returns False, the flow is skipped this round.
     """
 
     id: str
@@ -124,18 +121,14 @@ class ResourceFlow:
     rate_per_round: float
     source_var: str = ""
     target_var: str = ""
-    gate: Callable[[Entity, Entity], bool] | None = None
     label: str = ""
 
     def execute(self, source: Entity, target: Entity) -> float:
         """Execute the flow: decrement source, increment target.
 
         Returns the actual transfer amount (may be less than rate if source
-        doesn't have enough). Returns 0.0 if gated off.
+        doesn't have enough).
         """
-        if self.gate is not None and not self.gate(source, target):
-            return 0.0
-
         amount = self.rate_per_round
 
         if self.source_var:
@@ -178,6 +171,10 @@ class Threshold:
 
     condition is a Python callable (entity: Entity) -> bool. It is
     validated at registration time via TriggerProbe to catch typos.
+
+    condition_expr stores the original DSL string (e.g. "inventory_months > 3.0")
+    so the threshold survives JSON serialization round-trips. The callable
+    is re-compiled from condition_expr via compile_condition() on deserialization.
     """
 
     id: str
@@ -185,6 +182,7 @@ class Threshold:
     description: str
     condition: Callable[[Entity], bool]
     effect: ThresholdEffect
+    condition_expr: str = ""
     cooldown_rounds: int = 2
     last_fired_round: int = -999
 
@@ -384,7 +382,14 @@ class EntityGraph:
                     "id": t.id,
                     "entity_id": t.entity_id,
                     "description": t.description,
+                    "condition_expr": t.condition_expr,
                     "effect_type": t.effect.effect_type,
+                    "event_text": t.effect.event_text,
+                    "event_author_id": t.effect.event_author_id,
+                    "event_content_type": t.effect.event_content_type,
+                    "state_mutations": dict(t.effect.state_mutations) if t.effect.state_mutations else {},
+                    "forced_side": t.effect.forced_side,
+                    "forced_quantity_pct": t.effect.forced_quantity_pct,
                     "cooldown_rounds": t.cooldown_rounds,
                 }
                 for t in self.thresholds

@@ -39,10 +39,20 @@ EVENT_ROUND_COMPLETE = "round_complete"
 EVENT_SIMULATION_COMPLETE = "simulation_complete"
 EVENT_ERROR = "error"
 
-# Entity State Sandbox events
+# Entity State Sandbox events (legacy, kept for frontend compat)
 EVENT_ENTITY_STATE_UPDATED = "entity_state_updated"
 EVENT_RESOURCE_FLOW_EXECUTED = "resource_flow_executed"
 EVENT_THRESHOLD_FIRED = "threshold_fired"
+EVENT_FORCE_ACTION_OVERRIDE = "force_action_override"
+
+# Policy engine events (Phase 2 unified model)
+EVENT_POLICY_FIRED = "policy_fired"
+
+# Non-trader agent actions (Phase 3)
+EVENT_AGENT_ACTION = "agent_action"
+
+# Dynamic policy creation (Phase 4)
+EVENT_POLICY_CREATED = "policy_created"
 
 ALL_EVENT_TYPES: frozenset[str] = frozenset(
     {
@@ -59,6 +69,10 @@ ALL_EVENT_TYPES: frozenset[str] = frozenset(
         EVENT_ENTITY_STATE_UPDATED,
         EVENT_RESOURCE_FLOW_EXECUTED,
         EVENT_THRESHOLD_FIRED,
+        EVENT_FORCE_ACTION_OVERRIDE,
+        EVENT_POLICY_FIRED,
+        EVENT_AGENT_ACTION,
+        EVENT_POLICY_CREATED,
     }
 )
 
@@ -207,6 +221,7 @@ __all__ = [
     "EVENT_ROUND_COMPLETE",
     "EVENT_SIMULATION_COMPLETE",
     "EVENT_ERROR",
+    "EVENT_FORCE_ACTION_OVERRIDE",
     "ALL_EVENT_TYPES",
     "EventSink",
     "ListSink",

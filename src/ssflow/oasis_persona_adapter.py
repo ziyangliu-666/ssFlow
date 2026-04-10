@@ -58,6 +58,36 @@ from .persona import Persona
 log = logging.getLogger(__name__)
 
 
+def update_conviction_context(
+    agent: "SocialAgent",
+    persona_id: str,
+    last_actions: dict[str, dict],
+) -> None:
+    """Inject last-round trading conviction into the agent's profile.
+
+    Replaces any previous conviction section so the profile doesn't grow
+    unboundedly across rounds.
+    """
+    if persona_id not in last_actions:
+        return
+    la = last_actions[persona_id]
+    side_zh = {"buy": "买入", "sell": "卖出", "hold": "观望"}.get(
+        str(la.get("side", "")), str(la.get("side", ""))
+    )
+    conviction_text = (
+        f"\n# 上一轮决策 (R{la['round_idx']})\n"
+        f"  方向: {side_zh}\n"
+        f"  理由: {str(la.get('rationale', ''))[:150]}\n"
+        f"  注意: 除非有重大新信息改变了你的判断, 否则应保持方向一致.\n"
+    )
+    profile = agent.user_info.profile
+    existing = profile.get("other_info", {}).get("user_profile", "")
+    marker = "# 上一轮决策"
+    if marker in existing:
+        existing = existing[:existing.index(marker)]
+    profile["other_info"]["user_profile"] = existing + conviction_text
+
+
 def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> None:
     """Monkey-patch SocialAgent.perform_action_by_llm to process ALL tool calls.
 
@@ -184,6 +214,7 @@ def _user_info_for(
     *,
     use_freeform_trading: bool = False,
     instrument_universe: "InstrumentUniverse | None" = None,
+    event: "Event | None" = None,
 ) -> UserInfo:
     """Build a CAMEL/OASIS UserInfo from our Persona schema.
 
@@ -217,6 +248,24 @@ def _user_info_for(
             f"  - {k}: {v}" for k, v in persona.biases.items()
         )
         profile_block += f"\n\n行为偏差:\n{bias_lines}"
+
+    # Inject the market event context so every agent (trader + info) knows
+    # what event triggered the simulation — not just from the social feed.
+    if event is not None:
+        sym = {"CNY": "¥", "USD": "$", "EUR": "€", "JPY": "¥",
+               "HKD": "HK$", "BTC": "₿"}.get(event.price_currency, "$")
+        profile_block += (
+            f"\n\n# 当前市场事件\n"
+            f"  标的: {event.instrument or event.ticker} ({event.ticker})\n"
+            f"  事件类型: {event.event_type}\n"
+            f"  事件日期: {event.event_date}\n"
+            f"  当前价格: {sym}{event.current_price:.2f}\n"
+            f"\n{event.event_text.strip()[:500]}\n"
+        )
+        if event.prior_consensus and event.prior_consensus.strip():
+            profile_block += (
+                f"\n市场此前预期: {event.prior_consensus.strip()[:300]}\n"
+            )
 
     # Trader-specific instructions: counter-balance OASIS's "perform social
     # media actions" user prompt so the LLM remembers to also call the
@@ -352,6 +401,8 @@ def build_agent_graph(
     order_collector: OrderCollector | None = None,
     use_freeform_trading: bool = False,
     instrument_universe: "InstrumentUniverse | None" = None,
+    event: "Event | None" = None,
+    action_collector: "ActionCollector | None" = None,
 ) -> tuple[AgentGraph, dict[str, int]]:
     """Build an OASIS `AgentGraph` from our persona YAML.
 
@@ -401,14 +452,22 @@ def build_agent_graph(
             else:
                 extra_tools.append(make_submit_order_tool(persona, order_collector))
 
-        # Traders need max_iteration >= 2 so CAMEL's ChatAgent does a
-        # multi-turn tool-calling loop. With max_iteration=1 (OASIS default)
-        # the LLM gets exactly one shot, and it tends to pick ONE tool —
-        # usually `create_post` — and stop. With max_iteration=2 the agent
-        # gets a second turn where we can more reliably reach the
-        # submit_order_distribution tool. Info entities stay at 1 since
-        # they only have social actions.
-        max_iter = 2 if persona.sandbox is not None else 1
+        # Non-trader agents: wire domain-specific action tools
+        if persona.sandbox is None and action_collector is not None:
+            from .action_tools import tool_for_role
+            domain_tool = tool_for_role(persona, action_collector)
+            if domain_tool is not None:
+                extra_tools.append(domain_tool)
+
+        # All agents with an action_collector can create dynamic rules
+        if action_collector is not None:
+            from .action_tools import make_create_policy_tool
+            extra_tools.append(make_create_policy_tool(persona, action_collector))
+
+        # Agents with tools need max_iteration >= 2 so CAMEL's ChatAgent
+        # does a multi-turn tool-calling loop. Without it the LLM picks
+        # ONE tool (usually create_post) and stops.
+        max_iter = 2 if extra_tools else 1
 
         agent = SocialAgent(
             agent_id=idx,
@@ -416,6 +475,7 @@ def build_agent_graph(
                 persona,
                 use_freeform_trading=use_freeform_trading,
                 instrument_universe=instrument_universe,
+                event=event,
             ),
             channel=channel,
             model=model,

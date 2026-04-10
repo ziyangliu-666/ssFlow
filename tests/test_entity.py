@@ -101,18 +101,6 @@ class TestResourceFlow:
         assert src.state.get("inventory") == 0.0
         assert tgt.state.get("inventory") == 15.0
 
-    def test_gated_off(self):
-        src, tgt = self._make_entities()
-        flow = ResourceFlow(
-            id="f1", source_id="src", target_id="tgt",
-            resource_type="parts", rate_per_round=3.0,
-            source_var="inventory", target_var="inventory",
-            gate=lambda s, t: False,
-        )
-        amount = flow.execute(src, tgt)
-        assert amount == 0.0
-        assert src.state.get("inventory") == 10.0  # unchanged
-
     def test_display_only_flow(self):
         """Flows without source_var/target_var don't mutate state."""
         src, tgt = self._make_entities()
