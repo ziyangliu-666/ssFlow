@@ -31,7 +31,7 @@
               v-for="inst in universeInstruments"
               :key="inst.ticker"
               class="inst-card"
-              :class="{ primary: inst.relationship === 'primary', expanded: expandedTicker === inst.ticker }"
+              :class="{ 'event-subject': inst.relationship === 'event_subject' || inst.relationship === 'primary', expanded: expandedTicker === inst.ticker }"
               @click="expandedTicker = expandedTicker === inst.ticker ? null : inst.ticker"
             >
               <div class="inst-h">
@@ -75,7 +75,7 @@
         <!-- ENTITY GRAPH (if generated) -->
         <section v-if="entityGraph && entityGraph.entities" class="entity-section">
           <div class="section-h">
-            <span class="t">实体沙盘</span>
+            <span class="t">实体关系</span>
             <span class="tag">{{ Object.keys(entityGraph.entities).length }} 个实体</span>
           </div>
           <div class="entity-grid">
@@ -221,7 +221,8 @@ const roundSchedule = computed(() => session.roundSchedule || null)
 const universeInstruments = computed(() => {
   if (!instrumentUniverse.value) return []
   const u = instrumentUniverse.value
-  const all = [u.primary, ...(u.related || [])]
+  // New flat format: u.instruments; legacy: [u.primary, ...u.related]
+  const all = u.instruments || [u.primary, ...(u.related || [])]
   return all.filter(Boolean)
 })
 
@@ -233,7 +234,8 @@ onMounted(() => {
 })
 
 const REL_LABELS = {
-  primary: '主体', supplier: '供应商', competitor: '竞品', customer: '客户',
+  event_subject: '事件相关', primary: '事件相关',
+  supplier: '供应商', competitor: '竞品', customer: '客户',
   sector_etf: '板块ETF', upstream: '上游', downstream: '下游', peer: '同行',
   opposing: '对立', index: '指数', other: '其他',
 }
@@ -572,7 +574,7 @@ async function onStart () {
   padding: 10px 14px;
   background: #fff;
 }
-.inst-card.primary {
+.inst-card.event-subject {
   border-color: var(--ss-accent);
 }
 .inst-h {

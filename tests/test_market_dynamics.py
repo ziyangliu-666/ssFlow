@@ -22,14 +22,25 @@ class TestComputePriceImpact:
     """Square-root price impact formula tests."""
 
     def test_spec_byd_example(self):
-        """The canonical spec §9.3 example: BYD net flow -3億 / ADV 80億 / λ=0.5
-        should yield ≈ -9.7%."""
+        """BYD net flow -3億 / ADV 80億 / λ=0.5. With soft compression
+        (knee=0.03), flow/ADV=3.75% → eff_ratio≈2.14% → delta≈-7.3%."""
         result = compute_price_impact(
             net_flow_value=-3e8,
             adv_value=8e9,
             lambda_market=0.5,
         )
-        # Hand calc: 0.5 * (-1) * sqrt(3e8 / 8e9) ≈ -0.0968
+        # Soft-compressed: eff = 0.03*(1-e^(-0.0375/0.03)) ≈ 0.0214
+        # delta = -0.5*sqrt(0.0214) ≈ -7.3%
+        assert result == pytest.approx(-0.073, abs=0.005)
+
+    def test_spec_byd_example_raw_kyle(self):
+        """Verify raw Kyle formula (no compression) still works."""
+        result = compute_price_impact(
+            net_flow_value=-3e8,
+            adv_value=8e9,
+            lambda_market=0.5,
+            flow_knee=1e6,
+        )
         assert result == pytest.approx(-0.0968, abs=0.001)
 
     def test_zero_net_flow_returns_zero(self):
@@ -38,19 +49,24 @@ class TestComputePriceImpact:
     def test_positive_net_flow_yields_positive_delta(self):
         result = compute_price_impact(net_flow_value=2e8, adv_value=8e9, lambda_market=0.5)
         assert result > 0
-        assert result == pytest.approx(0.5 * math.sqrt(2e8 / 8e9), abs=1e-6)
+        # With soft compression, result is less than raw Kyle
+        raw_kyle = 0.5 * math.sqrt(2e8 / 8e9)
+        assert result < raw_kyle  # compressed
+        assert result > raw_kyle * 0.5  # but not too much
 
     def test_negative_net_flow_yields_negative_delta(self):
         result = compute_price_impact(net_flow_value=-5e8, adv_value=1e10, lambda_market=0.4)
         assert result < 0
 
     def test_concavity_large_flow_underestimated_relative_to_linear(self):
-        """sqrt is concave, so doubling the flow should less-than-double the impact.
-        Empirical reason we use sqrt rather than linear (Bouchaud 2010)."""
+        """Doubling the flow should less-than-double the impact (concavity
+        is preserved even through soft compression)."""
         small = compute_price_impact(1e8, adv_value=1e10, lambda_market=0.5)
         large = compute_price_impact(2e8, adv_value=1e10, lambda_market=0.5)
         ratio = large / small
-        assert ratio == pytest.approx(math.sqrt(2), rel=0.01)
+        # With soft compression, ratio < sqrt(2). The compression adds
+        # extra concavity on top of the sqrt.
+        assert 1.0 < ratio < math.sqrt(2)
         assert ratio < 1.5
 
     def test_zero_adv_raises(self):
@@ -79,11 +95,17 @@ class TestComputePriceImpact:
 
     def test_extreme_sell_pressure_clipped_to_negative_cap(self):
         """Extreme flows (>> ADV) clip to ±10% (modeling A-share 涨停板)."""
-        result = compute_price_impact(net_flow_value=-1e12, adv_value=1e10, lambda_market=0.5)
+        result = compute_price_impact(
+            net_flow_value=-1e12, adv_value=1e10, lambda_market=0.5,
+            flow_knee=1e6,  # disable compression to test price cap
+        )
         assert result == pytest.approx(-MAX_DELTA_PCT_PER_ROUND, abs=1e-9)
 
     def test_extreme_buy_pressure_clipped_to_positive_cap(self):
-        result = compute_price_impact(net_flow_value=+1e12, adv_value=1e10, lambda_market=0.5)
+        result = compute_price_impact(
+            net_flow_value=+1e12, adv_value=1e10, lambda_market=0.5,
+            flow_knee=1e6,  # disable compression to test price cap
+        )
         assert result == pytest.approx(+MAX_DELTA_PCT_PER_ROUND, abs=1e-9)
 
     def test_max_delta_pct_override(self):
@@ -93,8 +115,34 @@ class TestComputePriceImpact:
             adv_value=1e10,
             lambda_market=0.5,
             max_delta_pct=0.30,
+            flow_knee=1e6,  # disable compression to test price cap
         )
         assert result == pytest.approx(-0.30, abs=1e-9)
+
+    def test_soft_compression_preserves_ordering(self):
+        """Larger flow produces larger delta (soft compression, not clip)."""
+        adv = 1e10
+        small = compute_price_impact(net_flow_value=1e8, adv_value=adv)
+        medium = compute_price_impact(net_flow_value=1e9, adv_value=adv)
+        large = compute_price_impact(net_flow_value=1e10, adv_value=adv)
+        assert 0 < small < medium < large
+        # Small flow (1% of ADV) should pass nearly linearly
+        # knee=0.03: eff = 0.03*(1-e^(-0.01/0.03)) = 0.03*0.284 = 0.0085
+        # delta ≈ 0.5*sqrt(0.0085) = 4.6% — reasonable single-day move
+        assert small == pytest.approx(0.046, abs=0.005)
+
+    def test_soft_compression_asymptotes(self):
+        """Very large flows converge toward the asymptote."""
+        adv = 1e10
+        d1 = compute_price_impact(net_flow_value=5e10, adv_value=adv)
+        d2 = compute_price_impact(net_flow_value=1e11, adv_value=adv)
+        # Both should be close to the asymptote: 0.5*sqrt(0.03) = 8.66%
+        assert d1 == pytest.approx(0.0866, abs=0.001)
+        assert d2 == pytest.approx(0.0866, abs=0.001)
+        # Ordering preserved for more moderate sizes
+        d_small = compute_price_impact(net_flow_value=5e8, adv_value=adv)
+        d_medium = compute_price_impact(net_flow_value=2e9, adv_value=adv)
+        assert d_small < d_medium < d1
 
 
 class TestLambdaForMarket:

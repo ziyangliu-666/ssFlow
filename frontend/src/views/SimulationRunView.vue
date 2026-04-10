@@ -234,11 +234,12 @@ const activeTicker = ref('__all__')
 const availableTickers = computed(() => {
   const iu = session.instrumentUniverse
   if (!iu) return []
-  const all = [iu.primary, ...(iu.related || [])].filter(Boolean)
+  // New flat format: iu.instruments; legacy: [iu.primary, ...iu.related]
+  const all = (iu.instruments || [iu.primary, ...(iu.related || [])]).filter(Boolean)
   return all.map(inst => ({
     ticker: inst.ticker,
     name: inst.name,
-    primary: inst.relationship === 'primary',
+    primary: inst.relationship === 'event_subject' || inst.relationship === 'primary',
   }))
 })
 

@@ -58,6 +58,67 @@ from .persona import Persona
 log = logging.getLogger(__name__)
 
 
+def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> None:
+    """Monkey-patch SocialAgent.perform_action_by_llm to process ALL tool calls.
+
+    The stock OASIS implementation has a bug: it returns after the FIRST
+    tool call in the response (line 152: `return response` inside a for
+    loop). This means if the LLM returns [repost, submit_order_distribution]
+    in one response, only `repost` gets executed and the trading tool call
+    is silently dropped.
+
+    This patch iterates over ALL tool calls and logs non-social ones
+    (our custom trading tools) so the OrderCollector captures them.
+    """
+    from camel.messages import BaseMessage
+    from oasis.social_platform.typing import ActionType
+
+    ALL_SOCIAL = {a.value for a in ActionType}
+    original_env = agent.env  # the EnvAction bound to this agent
+
+    async def patched_perform_action_by_llm():
+        env_prompt = await original_env.to_text_prompt()
+        if is_trader:
+            # Trader agents: override the OASIS user prompt to prioritize
+            # the trading tool. The stock prompt says "pick one social action"
+            # which biases the LLM away from our custom tool.
+            instruction = (
+                f"观察以下社交平台信息后，你需要做两件事:\n"
+                f"1. 先做一个社交动作（发帖/转发/点赞/评论中选一个）\n"
+                f"2. **必须**调用交易工具提交你这一类参与者的交易决策\n\n"
+                f"你的社交平台环境: {env_prompt}"
+            )
+        else:
+            instruction = (
+                f"Please perform social media actions after observing the "
+                f"platform environments. Notice that don't limit your "
+                f"actions for example to just like the posts. "
+                f"Here is your social media environment: {env_prompt}")
+        user_msg = BaseMessage.make_user_message(
+            role_name="User", content=instruction,
+        )
+        try:
+            response = await agent.astep(user_msg)
+            for tool_call in response.info.get("tool_calls", []):
+                action_name = tool_call.tool_name
+                args = tool_call.args
+                log.debug(
+                    "Agent %d action: %s args=%s",
+                    agent.social_agent_id, action_name, args,
+                )
+                if action_name not in ALL_SOCIAL:
+                    log.debug(
+                        "Agent %d custom tool result: %s",
+                        agent.social_agent_id, tool_call.result,
+                    )
+            return response
+        except Exception as e:
+            log.warning("Agent %d error in patched perform: %s", agent.social_agent_id, e)
+            return e
+
+    agent.perform_action_by_llm = patched_perform_action_by_llm
+
+
 # Stable id for the synthetic market-event broadcaster agent. The engine
 # posts price updates as this agent so they propagate through the standard
 # OASIS feed mechanism.
@@ -100,7 +161,12 @@ def _actions_for(persona: Persona) -> list[ActionType]:
     return list(INFO_ACTIONS)
 
 
-def _user_info_for(persona: Persona, *, use_freeform_trading: bool = False) -> UserInfo:
+def _user_info_for(
+    persona: Persona,
+    *,
+    use_freeform_trading: bool = False,
+    instrument_universe: "InstrumentUniverse | None" = None,
+) -> UserInfo:
     """Build a CAMEL/OASIS UserInfo from our Persona schema.
 
     Uses recsys_type="twitter" so OASIS's `to_twitter_system_message` is used
@@ -165,6 +231,20 @@ def _user_info_for(persona: Persona, *, use_freeform_trading: bool = False) -> U
                 f"基于你当前的处境和 feed 内容, 自由决定具体数字.\n"
                 f"**不要不调用这个工具**. 不调用会被视为系统故障.\n"
             )
+            if instrument_universe is not None:
+                tickers_str = "、".join(
+                    f"\"{t}\"" for t in instrument_universe.tickers[:3]
+                )
+                profile_block += (
+                    f"\n"
+                    f"# 可交易标的\n"
+                    f"{instrument_universe.prompt_summary()}\n"
+                    f"\n"
+                    f"交易时**必须**在 instrument 参数中指定目标代码 "
+                    f"(如 {tickers_str}).\n"
+                    f"不指定标的的交易指令将被视为观望.\n"
+                    f"你可以一轮内对不同标的分别下单.\n"
+                )
         else:
             # Legacy fixed-action mode
             action_names = [a["name"] for a in persona.sandbox.action_space]
@@ -239,6 +319,7 @@ def build_agent_graph(
     model: Optional[BaseModelBackend] = None,
     order_collector: OrderCollector | None = None,
     use_freeform_trading: bool = False,
+    instrument_universe: "InstrumentUniverse | None" = None,
 ) -> tuple[AgentGraph, dict[str, int]]:
     """Build an OASIS `AgentGraph` from our persona YAML.
 
@@ -299,7 +380,11 @@ def build_agent_graph(
 
         agent = SocialAgent(
             agent_id=idx,
-            user_info=_user_info_for(persona, use_freeform_trading=use_freeform_trading),
+            user_info=_user_info_for(
+                persona,
+                use_freeform_trading=use_freeform_trading,
+                instrument_universe=instrument_universe,
+            ),
             channel=channel,
             model=model,
             agent_graph=graph,
@@ -307,6 +392,10 @@ def build_agent_graph(
             tools=extra_tools,
             max_iteration=max_iter,
         )
+        # Patch: OASIS stock perform_action_by_llm returns after the first
+        # tool call, dropping subsequent calls (including our trading tool).
+        # Our patch iterates all tool calls so the OrderCollector sees them.
+        _patch_perform_action(agent, is_trader=(persona.sandbox is not None))
         graph.add_agent(agent)
         id_map[persona.id] = idx
 

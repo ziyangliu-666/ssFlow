@@ -98,7 +98,7 @@ class RoundRecord:
     price_after: float
     delta_pct: float
     net_flow: float
-    class_flows: dict[str, ClassFlowResult]
+    class_flows: list[ClassFlowResult]
     publications_this_round: list[Publication]
     external_events_injected: int = 0
 
@@ -279,6 +279,47 @@ def _query_round_publications(
     return out
 
 
+# ─────────────────────── OASIS bug workarounds ───────────────────────
+
+_oasis_patched = False
+
+
+def _patch_oasis_recsys() -> None:
+    """Monkey-patch OASIS recsys to fix IndexError / ValueError crashes.
+
+    OASIS's rec_sys_personalized_with_trace has two unguarded crash sites:
+      1. swap_random_posts (line 646): random.sample crashes on empty list
+      2. post_ids.index(_post_id) (line 754): ValueError when post filtered out
+
+    These manifest as "social.twitter ERROR list index out of range" when
+    30 agents run concurrently via asyncio.gather.
+    """
+    global _oasis_patched
+    if _oasis_patched:
+        return
+    _oasis_patched = True
+
+    try:
+        import oasis.social_platform.recsys as recsys_mod
+        import random as _random
+
+        _orig_swap = recsys_mod.swap_random_posts
+
+        def _safe_swap(rec_post_ids, post_ids, swap_percent=0.1):
+            if not post_ids:
+                return rec_post_ids
+            num_to_swap = int(len(rec_post_ids) * swap_percent)
+            num_to_swap = min(num_to_swap, len(post_ids), len(rec_post_ids))
+            if num_to_swap <= 0:
+                return rec_post_ids
+            return _orig_swap(rec_post_ids, post_ids, swap_percent)
+
+        recsys_mod.swap_random_posts = _safe_swap
+        log.info("Patched OASIS swap_random_posts for empty-list safety")
+    except Exception as exc:
+        log.warning("Failed to patch OASIS recsys: %s", exc)
+
+
 # ─────────────────────── Main run_simulation ───────────────────────
 
 
@@ -335,6 +376,8 @@ async def run_simulation(
         ValueError: if event is not sandbox-ready or personas list is empty
         BudgetExceeded: if cost guard trips mid-run
     """
+    _patch_oasis_recsys()
+
     if not personas:
         raise ValueError("run_simulation requires at least one persona")
     if not event.is_sandbox_ready:
@@ -397,9 +440,14 @@ async def run_simulation(
     channel = Channel()
     lm = build_default_lm()
     order_collector = OrderCollector()
+    # Freeform trading is needed when:
+    #   - entity_graph is present (Entity Sandbox mode), OR
+    #   - instrument_universe is present (multi-instrument mode, agents must specify ticker)
+    use_freeform = (entity_graph is not None) or (instrument_universe is not None)
     agent_graph, persona_id_to_oasis_id = build_agent_graph(
         personas, channel, model=lm, order_collector=order_collector,
-        use_freeform_trading=(entity_graph is not None),
+        use_freeform_trading=use_freeform,
+        instrument_universe=instrument_universe,
     )
 
     # ── Build the OASIS env ──
@@ -415,10 +463,14 @@ async def run_simulation(
     sample_rng = random.Random((seed if seed is not None else 0) + 1000)
     initial_price = float(event.current_price)
     agent_pops: dict[str, list[Agent]] = {}
+    multi_prices_for_spawn = (
+        instrument_universe.prices() if instrument_universe is not None else None
+    )
     for persona in personas:
         if persona.sandbox is not None:
             agent_pops[persona.id] = spawn_agents(
                 persona, current_price=initial_price, rng=spawn_rng,
+                multi_prices=multi_prices_for_spawn,
             )
 
     publication_registry = PublicationRegistry()
@@ -456,6 +508,11 @@ async def run_simulation(
     else:
         current_prices = {}
         adv_values = {}
+
+    # Accumulate per-ticker price trajectories (initial prices as first point)
+    multi_trajectories: dict[str, list[float]] = {
+        t: [p] for t, p in current_prices.items()
+    } if current_prices else {}
 
     # ── Round loop ──
     rounds: list[RoundRecord] = []
@@ -654,7 +711,7 @@ async def run_simulation(
             # 4. Apply each captured distribution to the matching agent pop.
             #    If a trader didn't submit an order this round (LLM chose not
             #    to call the tool), it's treated as a full-hold decision.
-            class_flows: dict[str, ClassFlowResult] = {}
+            class_flows: list[ClassFlowResult] = []
             submitted_ids: set[str] = set()
 
             for order in pending_orders:
@@ -665,6 +722,24 @@ async def run_simulation(
                     )
                     continue
                 persona = persona_by_id[order.persona_id]
+                # For freeform orders, send the actual intent (side/qty/pool)
+                # to the frontend instead of the marker dict {"__freeform__": 1.0}.
+                emit_dist = dict(order.distribution)
+                if "__freeform__" in emit_dist and order.raw_args:
+                    side = order.raw_args.get("side", "hold")
+                    qty = order.raw_args.get("quantity_pct", 0.0)
+                    pool = order.raw_args.get("pool", "")
+                    emit_dist = {
+                        "side": side,
+                        "quantity_pct": qty,
+                        "pool": pool,
+                    }
+                    log.info(
+                        "  R%d %s freeform order: %s %.0f%% (pool=%s) — %s",
+                        round_idx, order.persona_id,
+                        side, qty * 100, pool,
+                        (order.rationale or "")[:80],
+                    )
                 safe_emit(
                     event_sink,
                     EVENT_TRADE_SUBMITTED,
@@ -672,20 +747,44 @@ async def run_simulation(
                     round_idx=round_idx,
                     persona_id=order.persona_id,
                     archetype=persona.archetype,
-                    distribution=dict(order.distribution),
+                    distribution=emit_dist,
                     rationale=order.rationale,
+                    instrument=order.instrument or "",
+                )
+                # Resolve which instrument this order targets.
+                # In multi-instrument mode, agent must specify — no default.
+                if order.instrument:
+                    order_ticker = order.instrument
+                elif instrument_universe is not None:
+                    # Agent omitted instrument in multi-instrument mode → hold
+                    log.warning(
+                        "  R%d %s omitted instrument in multi-instrument mode, treating as hold",
+                        round_idx, order.persona_id,
+                    )
+                    continue
+                else:
+                    order_ticker = "_default"
+                order_price = (
+                    current_prices.get(order_ticker, current_price)
+                    if current_prices else current_price
                 )
                 flow = apply_distribution_to_agent_pop(
                     persona=persona,
                     agents=agent_pops[order.persona_id],
                     distribution=order.distribution,
-                    current_price=current_price,
+                    current_price=order_price,
                     rng=sample_rng,
+                    instrument=order_ticker,
                     rationale=order.rationale,
-                    raw_distribution=order.distribution,
+                    raw_distribution=order.raw_args if order.raw_args else order.distribution,
                 )
-                class_flows[order.persona_id] = flow
+                class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
+                log.info(
+                    "  R%d %s → net_flow=%.2f (%d agents, histogram=%s)",
+                    round_idx, order.persona_id,
+                    flow.net_flow, flow.n_agents, flow.action_histogram,
+                )
                 safe_emit(
                     event_sink,
                     EVENT_CLASS_FLOW_COMPUTED,
@@ -718,7 +817,7 @@ async def run_simulation(
                     rng=sample_rng,
                     rationale="(no tool call this round, held)",
                 )
-                class_flows[persona.id] = hold_flow
+                class_flows.append(hold_flow)
                 safe_emit(
                     event_sink,
                     EVENT_CLASS_FLOW_COMPUTED,
@@ -732,30 +831,54 @@ async def run_simulation(
                     held=True,
                 )
 
-            # 4. Aggregate net flow + Kyle (primary instrument)
-            net_flow_total = sum(cf.net_flow for cf in class_flows.values())
-            delta_pct = compute_price_impact(
-                net_flow_value=net_flow_total,
-                adv_value=event.adv_value,
-                lambda_market=lambda_used,
-            )
-            price_after = current_price * (1.0 + delta_pct)
+            # 4. Per-instrument flow aggregation + independent Kyle
+            if instrument_universe is not None and current_prices:
+                from .market_dynamics import compute_multi_instrument_impact
 
-            # Multi-instrument: update prices for all instruments
-            if current_prices:
-                current_prices[event.ticker] = price_after
-                # For related instruments, compute independent Kyle with
-                # their own flow aggregation (for now: proportional
-                # spillover from primary based on correlation estimate)
-                for ticker in list(current_prices.keys()):
-                    if ticker == event.ticker:
+                # Group flows by instrument (skip _default — shouldn't happen
+                # in multi-instrument mode, but guard defensively)
+                flows_by_ticker: dict[str, float] = {}
+                for cf in class_flows:
+                    if cf.instrument == "_default":
                         continue
-                    # Simple spillover: related instruments move at ~30%
-                    # of the primary's delta (rough correlation proxy).
-                    # This is placeholder logic — a real correlation
-                    # model would use historical data.
-                    spillover = delta_pct * 0.3
-                    current_prices[ticker] *= (1.0 + spillover)
+                    flows_by_ticker[cf.instrument] = (
+                        flows_by_ticker.get(cf.instrument, 0.0) + cf.net_flow
+                    )
+
+                # Independent Kyle per instrument with direct orders
+                delta_by_ticker = compute_multi_instrument_impact(
+                    flows_by_ticker, adv_values, lambda_market=lambda_used,
+                )
+                for ticker, delta in delta_by_ticker.items():
+                    current_prices[ticker] = current_prices[ticker] * (1.0 + delta)
+
+                # Bidirectional spillover: any instrument with a delta can
+                # influence any instrument without, weighted by pairwise beta.
+                spillover = instrument_universe.compute_spillover(delta_by_ticker)
+                for ticker, spill in spillover.items():
+                    delta_by_ticker[ticker] = spill
+                    current_prices[ticker] = current_prices[ticker] * (1.0 + spill)
+
+                log.info(
+                    "  R%d multi-instrument deltas: %s",
+                    round_idx,
+                    {t: f"{d*100:+.2f}%" for t, d in delta_by_ticker.items()},
+                )
+
+                # Backward compat: scalar vars refer to event subject
+                es_ticker = instrument_universe.event_subject_ticker
+                delta_pct = delta_by_ticker.get(es_ticker, 0.0)
+                net_flow_total = flows_by_ticker.get(es_ticker, 0.0)
+                price_after = current_prices.get(es_ticker, current_price)
+            else:
+                # Single-instrument path (unchanged)
+                net_flow_total = sum(cf.net_flow for cf in class_flows)
+                delta_pct = compute_price_impact(
+                    net_flow_value=net_flow_total,
+                    adv_value=event.adv_value,
+                    lambda_market=lambda_used,
+                )
+                price_after = current_price * (1.0 + delta_pct)
 
             safe_emit(
                 event_sink,
@@ -769,6 +892,11 @@ async def run_simulation(
                 price_currency=event.price_currency,
                 prices=dict(current_prices) if current_prices else None,
             )
+
+            # Accumulate multi-instrument trajectories
+            if multi_trajectories:
+                for t, p in current_prices.items():
+                    multi_trajectories[t].append(p)
 
             # 4.5. Entity State Sandbox: update price-derived state + second threshold pass
             if entity_graph is not None:
@@ -854,11 +982,14 @@ async def run_simulation(
                 net_flow_total=float(net_flow_total),
             )
 
+            n_traders_total = sum(1 for p in personas if p.sandbox is not None)
             log.info(
                 "  R%d: %.2f → %.2f (%+.2f%%), net_flow=%+.2e, "
-                "%d new publications, %d external events",
+                "traders=%d/%d called tool, %d pubs, %d ext events",
                 round_idx, current_price, price_after, delta_pct * 100,
-                net_flow_total, len(publications_this_round),
+                net_flow_total,
+                len(submitted_ids), n_traders_total,
+                len(publications_this_round),
                 len(external_for_round),
             )
 
@@ -915,8 +1046,8 @@ async def run_simulation(
         oasis_db_path=str(db_path_obj),
         final_agents_by_class=agent_pops,
         price_trajectories=(
-            {t: [p] for t, p in current_prices.items()}
-            if current_prices else {}
+            dict(multi_trajectories)
+            if multi_trajectories else {}
         ),
     )
 

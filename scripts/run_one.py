@@ -38,12 +38,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
+import os
 import sys
 from pathlib import Path
 
 # Ensure src/ is on the path when run as a script
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Configure logging so ssflow module output is visible.
+# LOG_LEVEL env var controls verbosity (default INFO).
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    stream=sys.stderr,
+)
 
 from ssflow.config import settings
 from ssflow.event import VALID_EVENT_TYPES, Event

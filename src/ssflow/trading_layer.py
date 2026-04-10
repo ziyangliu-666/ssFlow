@@ -153,14 +153,19 @@ def spawn_agents(
     rng: random.Random,
     *,
     primary_ticker: str = _DEFAULT_TICKER,
+    multi_prices: dict[str, float] | None = None,
 ) -> list[Agent]:
     """Sample N agent instances from a persona's sandbox config.
 
     Same RNG-deterministic semantics as the legacy sandbox.spawn_agents:
     feeding the same `rng` and same persona produces the same agent population.
 
-    primary_ticker: which ticker to assign initial holdings to. Defaults to
-    _DEFAULT_TICKER for backward compat.
+    Args:
+        primary_ticker: which ticker to assign initial holdings to in
+            single-instrument mode. Defaults to _DEFAULT_TICKER.
+        multi_prices: when provided (multi-instrument mode), initial holdings
+            are spread equally across all tickers using each ticker's price.
+            This ensures agents CAN sell from round 0, not just buy.
     """
     sandbox = persona.sandbox
     if sandbox is None:
@@ -184,17 +189,36 @@ def spawn_agents(
         position_pct = _sample_position_pct(sandbox.initial_position_distribution, rng)
         position_pct = max(0.0, min(1.0, position_pct))
         holdings_value = capital * position_pct
-        holdings_shares = holdings_value / current_price
         cash = capital - holdings_value
-        agents.append(
-            Agent(
-                persona_id=persona.id,
-                capital=capital,
-                cash=cash,
-                holdings={primary_ticker: holdings_shares},
-                max_holdings_value=capital * max_position_pct,
+
+        if multi_prices and len(multi_prices) > 0:
+            # Multi-instrument: spread initial holdings equally across all tickers
+            per_ticker_value = holdings_value / len(multi_prices)
+            holdings = {}
+            for ticker, price in multi_prices.items():
+                if price > 0:
+                    holdings[ticker] = per_ticker_value / price
+            agents.append(
+                Agent(
+                    persona_id=persona.id,
+                    capital=capital,
+                    cash=cash,
+                    holdings=holdings,
+                    max_holdings_value=capital * max_position_pct,
+                )
             )
-        )
+        else:
+            # Single-instrument
+            holdings_shares = holdings_value / current_price
+            agents.append(
+                Agent(
+                    persona_id=persona.id,
+                    capital=capital,
+                    cash=cash,
+                    holdings={primary_ticker: holdings_shares},
+                    max_holdings_value=capital * max_position_pct,
+                )
+            )
     return agents
 
 
@@ -311,6 +335,7 @@ class ClassFlowResult:
     net_flow: float
     action_histogram: dict[str, int]
     n_agents: int
+    instrument: str = "_default"
     rationale: str = ""
     raw_distribution: dict[str, float] = field(default_factory=dict)
     normalized_distribution: dict[str, float] = field(default_factory=dict)
@@ -329,6 +354,7 @@ def apply_distribution_to_agent_pop(
     current_price: float,
     rng: random.Random,
     *,
+    instrument: str = _DEFAULT_TICKER,
     rationale: str = "",
     confidence: float = 0.5,
     raw_distribution: dict[str, float] | None = None,
@@ -377,11 +403,12 @@ def apply_distribution_to_agent_pop(
         net_flow = 0.0
         histogram: dict[str, int] = {"__freeform__": len(agents)}
         for agent_inst in agents:
-            order = apply_action(agent_inst, freeform_spec, current_price)
+            order = apply_action(agent_inst, freeform_spec, current_price, instrument=instrument)
             net_flow += order
 
         return ClassFlowResult(
             persona_id=persona.id,
+            instrument=instrument,
             net_flow=net_flow,
             action_histogram=histogram,
             n_agents=len(agents),
@@ -414,11 +441,12 @@ def apply_distribution_to_agent_pop(
         histogram[action_name] = histogram.get(action_name, 0) + 1
         if spec is None:
             continue
-        order = apply_action(agent, spec, current_price)
+        order = apply_action(agent, spec, current_price, instrument=instrument)
         net_flow += order
 
     return ClassFlowResult(
         persona_id=persona.id,
+        instrument=instrument,
         net_flow=net_flow,
         action_histogram=histogram,
         n_agents=len(agents),

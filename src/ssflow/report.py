@@ -153,14 +153,14 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
         return "_(no trading activity this round)_"
 
     sorted_classes = sorted(
-        round_record.class_flows.items(),
-        key=lambda kv: abs(kv[1].net_flow),
+        round_record.class_flows,
+        key=lambda cf: abs(cf.net_flow),
         reverse=True,
     )
 
     lines = []
-    for cid, cf in sorted_classes:
-        p = by_id.get(cid)
+    for cf in sorted_classes:
+        p = by_id.get(cf.persona_id)
         if not p:
             continue
         sign = "净买盘" if cf.net_flow > 0 else ("净卖盘" if cf.net_flow < 0 else "观望")
@@ -252,11 +252,52 @@ talked to each other and reacted to this event" — not as investment advice._
 """
 
 
+def _render_multi_instrument_table(result: "OasisSimResult") -> str:
+    """Render a per-instrument price summary table when multi-instrument data exists."""
+    if not result.price_trajectories or len(result.price_trajectories) <= 1:
+        return ""
+
+    currency = _event_currency(result)
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+
+    lines = [
+        "## Multi-Instrument Price Summary\n",
+        f"| Instrument | Initial | Final | Change | High | Low |",
+        "|---|---|---|---|---|---|",
+    ]
+    for ticker, traj in result.price_trajectories.items():
+        if not traj:
+            continue
+        initial = traj[0]
+        final = traj[-1]
+        if initial > 0:
+            delta = (final / initial - 1.0) * 100
+            delta_str = f"{delta:+.2f}%"
+        else:
+            delta_str = "—"
+        high = max(traj)
+        low = min(traj)
+        lines.append(
+            f"| `{ticker}` | {sym}{initial:.2f} | {sym}{final:.2f} | "
+            f"**{delta_str}** | {sym}{high:.2f} | {sym}{low:.2f} |"
+        )
+
+    return "\n".join(lines)
+
+
 def render_simulation_markdown(result: "OasisSimResult") -> str:
     """Compose the full markdown report for a Phase I OASIS simulation."""
     parts = [_render_header(result)]
     for round_record in result.rounds:
         parts.append(_render_round_block(result, round_record))
+
+    # Multi-instrument summary (only rendered when >1 instrument tracked)
+    multi_table = _render_multi_instrument_table(result)
+    if multi_table:
+        parts.append(multi_table)
+        parts.append("\n---\n")
+
     parts.append("## Per-class P&L\n")
     parts.append(_render_class_pnl_table(result))
     parts.append("\n\n---\n")
