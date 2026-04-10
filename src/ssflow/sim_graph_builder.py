@@ -70,6 +70,16 @@ def build_sim_graph(
                 persona_id=entity.persona_id,
                 public_state_keys=set(entity.state.variables.keys()),
             )
+            # Auto-generate risk policies for covered trader personas
+            if entity.persona_id and kind == "trader":
+                persona_match = next(
+                    (p for p in personas if p.id == entity.persona_id and p.sandbox),
+                    None,
+                )
+                if persona_match:
+                    agent.policies.extend(
+                        _risk_config_to_policies(persona_match.id, persona_match.sandbox.risk)
+                    )
             graph.add_agent(agent)
             if entity.persona_id:
                 covered_persona_ids.add(entity.persona_id)
@@ -125,6 +135,9 @@ def build_sim_graph(
             persona_id=persona.id,
             public_state_keys={"avg_position_pct"},
         )
+        # Auto-generate mechanical policies from persona risk config
+        risk_policies = _risk_config_to_policies(persona.id, persona.sandbox.risk)
+        agent.policies.extend(risk_policies)
         graph.add_agent(agent)
 
     n_traders = len(graph.trader_agents())
@@ -136,6 +149,103 @@ def build_sim_graph(
     )
 
     return graph
+
+
+def _risk_config_to_policies(
+    persona_id: str,
+    risk: dict,
+) -> list[Policy]:
+    """Auto-generate mechanical trading policies from persona risk config.
+
+    Reads optional keys from the risk dict:
+      - stop_loss_threshold + stop_loss_discipline → sell on drawdown
+      - profit_take_threshold + profit_take_fraction → sell on gain
+      - max_hold_rounds → sell after N rounds held
+
+    Returns an empty list when none of the keys are present, so existing
+    personas without these keys are unaffected.
+    """
+    from typing import Any
+    policies: list[Policy] = []
+
+    # Stop-loss: sell when unrealized P&L drops below threshold
+    sl_threshold = risk.get("stop_loss_threshold")
+    sl_discipline = risk.get("stop_loss_discipline", 0.0)
+    if sl_threshold is not None and sl_discipline > 0:
+        policies.append(Policy(
+            id=f"auto_stop_loss_{persona_id}",
+            name=f"止损 {sl_threshold * 100:.0f}%",
+            description=(
+                f"Mechanical stop-loss: sell {sl_discipline * 100:.0f}% of holdings "
+                f"when unrealized P&L drops below {sl_threshold * 100:.0f}%"
+            ),
+            trigger_expr=f"unrealized_pnl_pct < {sl_threshold * 100:.1f}",
+            action=TradeAction(
+                side="sell",
+                quantity_pct=sl_discipline,
+                pool="holdings_in_target",
+            ),
+            source="risk_config",
+            cooldown_rounds=3,
+            priority=20,
+        ))
+        log.info(
+            "  Auto-policy: %s stop-loss at %.0f%% (discipline %.0f%%)",
+            persona_id, sl_threshold * 100, sl_discipline * 100,
+        )
+
+    # Profit-taking: sell when unrealized gain exceeds threshold
+    pt_threshold = risk.get("profit_take_threshold")
+    pt_fraction = risk.get("profit_take_fraction", 0.30)
+    if pt_threshold is not None:
+        policies.append(Policy(
+            id=f"auto_profit_take_{persona_id}",
+            name=f"止盈 {pt_threshold * 100:.0f}%",
+            description=(
+                f"Mechanical profit-take: sell {pt_fraction * 100:.0f}% of holdings "
+                f"when unrealized gain exceeds +{pt_threshold * 100:.0f}%"
+            ),
+            trigger_expr=f"unrealized_pnl_pct > {pt_threshold * 100:.1f}",
+            action=TradeAction(
+                side="sell",
+                quantity_pct=pt_fraction,
+                pool="holdings_in_target",
+            ),
+            source="risk_config",
+            cooldown_rounds=2,
+            priority=15,
+        ))
+        log.info(
+            "  Auto-policy: %s profit-take at +%.0f%% (sell %.0f%%)",
+            persona_id, pt_threshold * 100, pt_fraction * 100,
+        )
+
+    # Time-exit: sell after holding for too many rounds
+    max_hold = risk.get("max_hold_rounds")
+    if max_hold is not None:
+        policies.append(Policy(
+            id=f"auto_time_exit_{persona_id}",
+            name=f"持仓超时 {max_hold}轮",
+            description=(
+                f"Mechanical time-exit: sell 50% of holdings "
+                f"after holding for {max_hold} rounds"
+            ),
+            trigger_expr=f"avg_rounds_held > {float(max_hold)}",
+            action=TradeAction(
+                side="sell",
+                quantity_pct=0.50,
+                pool="holdings_in_target",
+            ),
+            source="risk_config",
+            cooldown_rounds=max_hold,
+            priority=10,
+        ))
+        log.info(
+            "  Auto-policy: %s time-exit after %d rounds",
+            persona_id, max_hold,
+        )
+
+    return policies
 
 
 def _threshold_to_policy(threshold: Threshold) -> Policy | None:

@@ -20,7 +20,8 @@ markets need them.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 VALID_EVENT_TYPES = {
@@ -74,6 +75,12 @@ class Event:
 
     # ── Reserved for future cross-asset spillover modeling ──
     sector_etf_ticker: str | None = None
+
+    # ── Cross-market context (overnight US/HK/commodity moves) ──
+    # Operator-provided structured data. Format per entry:
+    #   {"market": "us_equity", "ticker": "NVDA", "change_pct": -17.0, ...}
+    # Auto-extracted from event_text when not provided.
+    cross_market_context: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.ticker or not self.ticker.strip():

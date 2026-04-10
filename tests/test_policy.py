@@ -204,16 +204,24 @@ class TestThresholdToPolicyConversion:
         personas = load_personas(Path("personas/ashare.yaml"))
         sg = build_sim_graph(personas, eg, event)
 
-        # Count policies across all agents
+        # Count policies across all agents. This includes both threshold-derived
+        # policies and auto-generated risk policies (stop-loss, profit-take, etc.)
         total_policies = sum(len(a.policies) for a in sg.agents.values())
-        assert total_policies == len(eg.thresholds)
+        threshold_policies = [
+            p for a in sg.agents.values() for p in a.policies
+            if p.source == "template"
+        ]
+        assert len(threshold_policies) == len(eg.thresholds)
+        # Auto-generated risk policies exist in addition to threshold policies
+        assert total_policies >= len(eg.thresholds)
 
         # Verify force_action thresholds became TradeAction policies
-        trade_policies = [
+        # (filter to template-sourced only, since risk_config policies also use TradeAction)
+        trade_policies_from_thresholds = [
             p for a in sg.agents.values() for p in a.policies
-            if isinstance(p.action, TradeAction)
+            if isinstance(p.action, TradeAction) and p.source == "template"
         ]
         force_thresholds = [
             t for t in eg.thresholds if t.effect.effect_type == "force_action"
         ]
-        assert len(trade_policies) == len(force_thresholds)
+        assert len(trade_policies_from_thresholds) == len(force_thresholds)

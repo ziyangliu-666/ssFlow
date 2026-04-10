@@ -13,14 +13,18 @@ inspects the schedule at the start of each round and injects matching events
 as `ManualAction(CREATE_POST)` calls on synthetic event-source agents (or on
 the `__market__` agent if no specific source is configured).
 
-This is what enables the "R3 policy surprise" pattern in the illustrative BYD
-target — a planned event injected mid-sim to see how the existing agents react
-to it as it propagates through the feed.
+`DynamicEventStream` extends this with state-dependent conditional events
+and generator callbacks, enabling mid-simulation event injection based on
+observed price moves, sentiment, and agent state.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from typing import Any, Callable
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,7 +68,11 @@ class ExternalEventSchedule:
     def add(self, event: ExternalEvent) -> None:
         self.events.append(event)
 
-    def events_for_round(self, round_idx: int) -> list[ExternalEvent]:
+    def events_for_round(
+        self,
+        round_idx: int,
+        snapshot: SimSnapshot | None = None,
+    ) -> list[ExternalEvent]:
         return [e for e in self.events if e.round_idx == round_idx]
 
     def __len__(self) -> int:
@@ -74,7 +82,159 @@ class ExternalEventSchedule:
         return bool(self.events)
 
 
+# ─────────────────────── Dynamic Event System ───────────────────────
+
+
+@dataclass(frozen=True)
+class SimSnapshot:
+    """Read-only view of simulation state passed to event generators.
+
+    Built by the engine at the start of each round from current round state.
+    Frozen to prevent generators from accidentally mutating sim state.
+    """
+
+    round_idx: int
+    current_price: float
+    initial_price: float
+    cumulative_delta_pct: float       # ratio, not percentage (e.g., -0.05 = -5%)
+    net_flow_last_round: float        # net flow from previous round (currency)
+    round_count: int                  # total number of rounds in simulation
+    agent_states: dict[str, dict[str, float]] = field(default_factory=dict)
+
+
+@dataclass
+class ConditionalEvent:
+    """An event that fires when a runtime condition is met.
+
+    The condition is a callable that receives the current SimSnapshot and
+    returns True to fire. The event_factory then produces the ExternalEvent
+    to inject. Supports max_fires and cooldown for rate limiting.
+
+    Example:
+        ConditionalEvent(
+            condition=lambda s: s.cumulative_delta_pct < -0.07,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="policy_statement",
+                author_persona_id="regulator_csrc",
+                text=f"证监会: 高度关注近期市场异常波动(累计{s.cumulative_delta_pct*100:+.1f}%)，将采取必要措施维护市场稳定。",
+            ),
+            max_fires=1,
+        )
+    """
+
+    condition: Callable[[SimSnapshot], bool]
+    event_factory: Callable[[SimSnapshot], ExternalEvent]
+    max_fires: int = 1               # -1 = unlimited
+    cooldown_rounds: int = 0
+    _fire_count: int = field(default=0, init=False, repr=False)
+    _last_fired: int = field(default=-999, init=False, repr=False)
+
+    def should_fire(self, snapshot: SimSnapshot) -> bool:
+        """Check if this event should fire given current state."""
+        if self.max_fires >= 0 and self._fire_count >= self.max_fires:
+            return False
+        if snapshot.round_idx - self._last_fired < self.cooldown_rounds:
+            return False
+        try:
+            return self.condition(snapshot)
+        except Exception as exc:
+            log.warning("ConditionalEvent condition raised: %s", exc)
+            return False
+
+    def fire(self, snapshot: SimSnapshot) -> ExternalEvent:
+        """Generate the event and update internal counters."""
+        self._fire_count += 1
+        self._last_fired = snapshot.round_idx
+        return self.event_factory(snapshot)
+
+
+class DynamicEventStream:
+    """Combines a static schedule + conditional events + a generator callback.
+
+    Drop-in replacement for ExternalEventSchedule. The engine calls
+    events_for_round(round_idx, snapshot) each round. Events are produced
+    from three sources (combined in order):
+
+      1. Static schedule: pre-scheduled events (same as ExternalEventSchedule)
+      2. Conditional events: fire when their condition returns True
+      3. Generator callback: arbitrary function that produces events from state
+
+    Usage:
+        stream = DynamicEventStream(
+            static_schedule=schedule,
+            conditionals=[
+                ConditionalEvent(
+                    condition=lambda s: s.cumulative_delta_pct < -0.05,
+                    event_factory=lambda s: ExternalEvent(...),
+                ),
+            ],
+        )
+        result = await run_simulation(event, personas, external_events=stream)
+    """
+
+    def __init__(
+        self,
+        static_schedule: ExternalEventSchedule | None = None,
+        conditionals: list[ConditionalEvent] | None = None,
+        generator: Callable[[SimSnapshot], list[ExternalEvent]] | None = None,
+    ) -> None:
+        self._static = static_schedule or ExternalEventSchedule()
+        self._conditionals = list(conditionals or [])
+        self._generator = generator
+
+    def events_for_round(
+        self,
+        round_idx: int,
+        snapshot: SimSnapshot | None = None,
+    ) -> list[ExternalEvent]:
+        """Return all events for this round from all sources."""
+        result: list[ExternalEvent] = []
+
+        # 1. Static schedule (ignores snapshot)
+        result.extend(self._static.events_for_round(round_idx))
+
+        if snapshot is None:
+            return result
+
+        # 2. Conditional events
+        for cond in self._conditionals:
+            if cond.should_fire(snapshot):
+                ev = cond.fire(snapshot)
+                ev.round_idx = round_idx  # ensure correct round
+                result.append(ev)
+                log.info(
+                    "  ConditionalEvent fired at R%d: %s",
+                    round_idx, ev.text[:80],
+                )
+
+        # 3. Generator callback
+        if self._generator is not None:
+            try:
+                gen_events = self._generator(snapshot)
+                for ev in gen_events:
+                    ev.round_idx = round_idx
+                    result.append(ev)
+            except Exception as exc:
+                log.warning("DynamicEventStream generator raised: %s", exc)
+
+        return result
+
+    def add(self, event: ExternalEvent) -> None:
+        """Add a static event (delegate to inner schedule)."""
+        self._static.add(event)
+
+    def __len__(self) -> int:
+        return len(self._static)
+
+    def __bool__(self) -> bool:
+        return bool(self._static) or bool(self._conditionals) or self._generator is not None
+
+
 __all__ = [
+    "ConditionalEvent",
+    "DynamicEventStream",
     "ExternalEvent",
     "ExternalEventSchedule",
+    "SimSnapshot",
 ]

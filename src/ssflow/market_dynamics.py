@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,62 @@ def compute_dynamic_knee(
     resistance = 1.0 / (1.0 + 3.0 * cumulative_abs_delta)
     adjusted = scaled * resistance
     return max(0.002, min(base_knee, adjusted))
+
+
+@dataclass
+class AdaptiveADV:
+    """Tracks round-over-round effective ADV for Kyle price impact.
+
+    Blends observed round volume with a baseline via exponential smoothing.
+    Clamped to [floor_pct, ceiling_pct] of baseline to prevent runaway
+    feedback loops (e.g., volume collapse → infinite impact → more collapse).
+
+    Usage:
+        adv = AdaptiveADV(baseline=8e9)
+        # Each round, after computing class flows:
+        effective = adv.update(total_abs_flow)
+        delta = compute_price_impact(net_flow, adv_value=effective, ...)
+    """
+
+    baseline: float               # Original event.adv_value (immutable reference)
+    alpha: float = 0.3            # EMA smoothing (higher = more responsive to recent)
+    floor_pct: float = 0.20       # ADV never drops below 20% of baseline
+    ceiling_pct: float = 3.0      # ADV never exceeds 300% of baseline
+    _current: float = 0.0
+    _history: list[float] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self._current == 0.0:
+            self._current = self.baseline
+
+    @property
+    def effective(self) -> float:
+        """Current effective ADV value."""
+        return self._current
+
+    def update(self, observed_volume: float) -> float:
+        """Update ADV based on this round's observed absolute flow.
+
+        Returns the new effective ADV after EMA blending + clamping.
+        """
+        raw = self.alpha * observed_volume + (1.0 - self.alpha) * self._current
+        floor = self.baseline * self.floor_pct
+        ceiling = self.baseline * self.ceiling_pct
+        self._current = max(floor, min(ceiling, raw))
+        self._history.append(self._current)
+        if abs(self._current - self.baseline) / self.baseline > 0.1:
+            log.info(
+                "AdaptiveADV: baseline=%.2e, effective=%.2e (%.0f%% of baseline), "
+                "observed=%.2e",
+                self.baseline, self._current,
+                self._current / self.baseline * 100, observed_volume,
+            )
+        return self._current
+
+    @property
+    def history(self) -> list[float]:
+        """Effective ADV after each update() call."""
+        return list(self._history)
 
 
 def compute_price_impact(
@@ -195,6 +252,7 @@ def compute_multi_instrument_impact(
 
 
 __all__ = [
+    "AdaptiveADV",
     "FLOW_KNEE",
     "LAMBDA_LITERATURE",
     "MAX_DELTA_PCT_PER_ROUND",

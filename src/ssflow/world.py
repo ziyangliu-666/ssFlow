@@ -298,8 +298,27 @@ class SimGraph:
                 agent.set("avg_position_pct", total_hv / total_nav)
             if total_capital > 0:
                 agent.set("avg_cash_pct", sum(a.cash for a in active) / total_capital)
+                # Unrealized P&L as percentage of capital — used by
+                # auto-generated stop-loss / profit-take policies
+                agent.set(
+                    "unrealized_pnl_pct",
+                    (total_nav - total_capital) / total_capital * 100,
+                )
             agent.set("total_nav", total_nav)
             agent.set("n_active_agents", float(len(active)))
+
+            # Average holding duration — used by time-exit policies
+            holders = [
+                a for a in active
+                if any(s > 0 for s in a.holdings.values())
+                and a.first_position_round >= 0
+            ]
+            if holders:
+                agent.set(
+                    "avg_rounds_held",
+                    sum(round_idx - a.first_position_round for a in holders)
+                    / len(holders),
+                )
 
     # ─────────────────── Price-Derived State ───────────────────
 

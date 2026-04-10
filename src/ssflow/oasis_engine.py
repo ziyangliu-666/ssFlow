@@ -68,9 +68,13 @@ from .event_bus import (
     safe_emit,
 )
 from .information import Publication
-from .information.external_events import ExternalEventSchedule
+from .information.external_events import (
+    DynamicEventStream,
+    ExternalEventSchedule,
+    SimSnapshot,
+)
 from .llm_client import BudgetExceeded, cost_tracker
-from .market_dynamics import compute_price_impact, lambda_for_market
+from .market_dynamics import AdaptiveADV, compute_price_impact, lambda_for_market
 from .oasis_feed_reader import (
     PublicationMetadata,
     PublicationRegistry,
@@ -230,15 +234,21 @@ def _build_price_update_post(
     price_after: float,
     net_flow: float,
     round_label: str = "",
+    initial_price: float = 0.0,
 ) -> str:
     """The synthetic market broadcaster's price-update post."""
     sym = _currency_symbol(event.price_currency)
     delta_pct = (price_after / price_before - 1.0) * 100 if price_before else 0.0
+    cumulative = (
+        (price_after / initial_price - 1.0) * 100
+        if initial_price > 0 else 0.0
+    )
     label = f" ({round_label})" if round_label else ""
     return (
         f"[Market Event] R{round_idx}{label} price update: "
         f"{sym}{price_before:.2f} → {sym}{price_after:.2f} "
-        f"({delta_pct:+.2f}%). Net order flow: {sym}{net_flow:+,.0f}"
+        f"({delta_pct:+.2f}%, cumulative {cumulative:+.1f}%). "
+        f"Net order flow: {sym}{net_flow:+,.0f}"
     )
 
 
@@ -363,7 +373,7 @@ async def run_simulation(
     simulation_id: str | None = None,
     lambda_market: float | None = None,
     seed: int | None = None,
-    external_events: ExternalEventSchedule | None = None,
+    external_events: ExternalEventSchedule | DynamicEventStream | None = None,
     db_path: str | None = None,
     event_sink: EventSink | None = None,
     entity_graph: "EntityGraph | None" = None,
@@ -547,6 +557,46 @@ async def run_simulation(
             ),
         )
 
+    # ── Cross-market context: extract and inject as round 0 events ──
+    from .information.cross_market import (
+        cross_market_from_explicit,
+        cross_market_to_external_events,
+        extract_cross_market_from_event,
+        should_persona_see_cross_market,
+    )
+    if event.cross_market_context:
+        _cross_market = cross_market_from_explicit(event.cross_market_context)
+    else:
+        _cross_market = extract_cross_market_from_event(
+            event.event_text, event.sector_context,
+        )
+    if _cross_market.data_points:
+        cross_events = cross_market_to_external_events(_cross_market)
+        for cev in cross_events:
+            external_events.add(cev)
+        log.info(
+            "Cross-market: %d data points injected (%s)",
+            len(_cross_market.data_points),
+            ", ".join(dp.ticker for dp in _cross_market.data_points),
+        )
+        # Inject cross-market summary into institutional/strategic/analyst profiles
+        summary = _cross_market.summary_text_zh
+        if summary:
+            for persona in personas:
+                ptype = persona.agent_type or "retail"
+                if not should_persona_see_cross_market(ptype):
+                    continue
+                if persona.id not in persona_id_to_oasis_id:
+                    continue
+                oasis_id = persona_id_to_oasis_id[persona.id]
+                oasis_agent = agent_graph.get_agent(oasis_id)
+                profile = oasis_agent.user_info.profile
+                other = profile.get("other_info", {})
+                up = other.get("user_profile", "")
+                up = up + "\n" + summary
+                other["user_profile"] = up
+                profile["other_info"] = other
+
     # ── Multi-instrument price tracking ──
     # When instrument_universe is present, we track prices per ticker.
     # The single current_price variable remains as the primary instrument's price
@@ -554,9 +604,16 @@ async def run_simulation(
     if instrument_universe is not None:
         current_prices: dict[str, float] = instrument_universe.prices()
         adv_values: dict[str, float] = instrument_universe.adv_values()
+        adaptive_advs: dict[str, AdaptiveADV] = {
+            t: AdaptiveADV(baseline=v) for t, v in adv_values.items()
+        }
     else:
         current_prices = {}
         adv_values = {}
+        adaptive_advs = {}
+
+    # Single-instrument adaptive ADV
+    adaptive_adv = AdaptiveADV(baseline=event.adv_value)
 
     # Accumulate per-ticker price trajectories (initial prices as first point)
     multi_trajectories: dict[str, list[float]] = {
@@ -625,7 +682,25 @@ async def run_simulation(
             round_sentiment_shift = 0.0
 
             # 1. Inject any external events scheduled for this round
-            external_for_round = external_events.events_for_round(round_idx)
+            #    Build a SimSnapshot so DynamicEventStream conditionals can
+            #    evaluate against current simulation state.
+            _snap = SimSnapshot(
+                round_idx=round_idx,
+                current_price=current_price,
+                initial_price=initial_price,
+                cumulative_delta_pct=cumulative_delta_pct,
+                net_flow_last_round=(
+                    rounds[-1].net_flow if rounds else 0.0
+                ),
+                round_count=n_rounds,
+                agent_states={
+                    a.id: dict(a.state)
+                    for a in sim_graph.agents.values()
+                },
+            )
+            external_for_round = external_events.events_for_round(
+                round_idx, snapshot=_snap,
+            )
             for ev in external_for_round:
                 author_id = ev.author_persona_id
                 if author_id in persona_id_to_oasis_id:
@@ -741,13 +816,108 @@ async def run_simulation(
                 agent_graph, persona_id_to_oasis_id, round_idx,
             )
 
-            # 1.9. Inject conviction persistence: tell each trader what they
-            #      decided last round so the LLM maintains directional consistency.
+            # 1.9. Inject price-anchored market context so agents judge
+            #      risk/reward at the current price level, not just repeat
+            #      their last decision.
             for persona in personas:
                 if persona.sandbox is not None and persona.id in last_actions:
                     oasis_id = persona_id_to_oasis_id[persona.id]
                     oasis_agent = agent_graph.get_agent(oasis_id)
-                    update_conviction_context(oasis_agent, persona.id, last_actions)
+                    update_conviction_context(
+                        oasis_agent, persona.id, last_actions,
+                        cumulative_delta_pct=cumulative_delta_pct,
+                        current_price=current_price,
+                        initial_price=initial_price,
+                    )
+
+            # 1.95. Inject time context from round schedule into agent prompts.
+            if round_schedule is not None:
+                cum_pct = cumulative_delta_pct * 100  # ratio → percentage
+                time_ctx = round_schedule.prompt_context(
+                    round_idx,
+                    cumulative_delta_pct=cum_pct,
+                    current_price=current_price,
+                )
+                for persona in personas:
+                    if persona.id not in persona_id_to_oasis_id:
+                        continue
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    profile = oasis_agent.user_info.profile
+                    other = profile.get("other_info", {})
+                    up = other.get("user_profile", "")
+                    time_marker = "\n# 时间 / Time:"
+                    if time_marker in up:
+                        up = up[:up.index(time_marker)]
+                    up += time_ctx
+                    other["user_profile"] = up
+                    profile["other_info"] = other
+
+            # 1.97. Inject market stress context into policy/regulator prompts.
+            #        When stress is elevated/crisis, policy makers see a briefing
+            #        that prompts them to issue stabilization statements.
+            from .market_stress import (
+                compute_market_stress,
+                create_stabilization_policies,
+                render_policy_context,
+            )
+            stress = compute_market_stress(
+                rounds, current_price, initial_price, round_idx,
+            )
+            if stress.is_stressed:
+                _stress_marker = "\n# 市场状况简报"
+                for persona in personas:
+                    if persona.entity_role not in ("regulator", "policy"):
+                        continue
+                    if persona.id not in persona_id_to_oasis_id:
+                        continue
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    ctx = render_policy_context(
+                        stress, persona.id, persona.entity_role, round_idx,
+                    )
+                    profile = oasis_agent.user_info.profile
+                    other = profile.get("other_info", {})
+                    up = other.get("user_profile", "")
+                    if _stress_marker in up:
+                        up = up[:up.index(_stress_marker)]
+                    up += ctx
+                    other["user_profile"] = up
+                    profile["other_info"] = other
+                # Create stabilization policies for national_team if crisis
+                stab_policies = create_stabilization_policies(
+                    stress, sim_graph, round_idx,
+                )
+                if stab_policies:
+                    log.info(
+                        "  R%d: %d stabilization policies created",
+                        round_idx, len(stab_policies),
+                    )
+
+            # 1.98. Inject analyst counter-narrative context.
+            #        After round 2 with significant price moves, nudge analyst
+            #        personas toward more balanced/contrarian research.
+            from .analyst_context import compute_analyst_context
+            _analyst_marker = "\n# 分析师深度思考"
+            for persona in personas:
+                if persona.entity_role != "analyst":
+                    continue
+                if persona.id not in persona_id_to_oasis_id:
+                    continue
+                actx = compute_analyst_context(
+                    persona, current_price, initial_price, round_idx, event,
+                )
+                if actx.should_inject and actx.contrarian_prompt:
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    profile = oasis_agent.user_info.profile
+                    other = profile.get("other_info", {})
+                    up = other.get("user_profile", "")
+                    if _analyst_marker in up:
+                        up = up[:up.index(_analyst_marker)]
+                    up += actx.contrarian_prompt
+                    other["user_profile"] = up
+                    profile["other_info"] = other
 
             # 2. OASIS social step: every real persona acts via LLM.
             #    Trader personas see BOTH the 21 native OASIS social actions
@@ -1197,9 +1367,12 @@ async def run_simulation(
                 )
                 # Clamp sentiment shift to [-0.5, 0.5]
                 clamped_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
+                # Update adaptive ADV from observed round volume
+                total_abs_flow = sum(abs(cf.net_flow) for cf in class_flows)
+                effective_adv = adaptive_adv.update(total_abs_flow)
                 delta_pct = compute_price_impact(
                     net_flow_value=net_flow_total,
-                    adv_value=event.adv_value,
+                    adv_value=effective_adv,
                     lambda_market=lambda_used,
                     flow_knee=dynamic_knee,
                     sentiment_modifier=clamped_sentiment,
@@ -1224,6 +1397,8 @@ async def run_simulation(
                 net_flow_total=float(net_flow_total),
                 price_currency=event.price_currency,
                 prices=dict(current_prices) if current_prices else None,
+                adv_effective=float(adaptive_adv.effective),
+                adv_baseline=float(event.adv_value),
             )
 
             # Accumulate multi-instrument trajectories
@@ -1256,6 +1431,7 @@ async def run_simulation(
             price_post = _build_price_update_post(
                 event, round_idx, current_price, price_after, net_flow_total,
                 round_label=round_label,
+                initial_price=initial_price,
             )
             pre_price_post_id = _max_post_id(str(db_path_obj))
             try:

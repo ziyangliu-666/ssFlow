@@ -62,29 +62,62 @@ def update_conviction_context(
     agent: "SocialAgent",
     persona_id: str,
     last_actions: dict[str, dict],
+    cumulative_delta_pct: float = 0.0,
+    *,
+    current_price: float = 0.0,
+    initial_price: float = 0.0,
 ) -> None:
-    """Inject last-round trading conviction into the agent's profile.
+    """Inject price-anchored market context into the agent's profile.
 
-    Replaces any previous conviction section so the profile doesn't grow
-    unboundedly across rounds.
+    Instead of emphasizing "what you did last round" (which creates
+    momentum echo), we emphasize "where is the price relative to
+    the event" — framing the decision in risk/reward terms. This
+    naturally produces mean-reverting behavior: at higher prices the
+    upside narrows, at lower prices the downside is priced in.
     """
     if persona_id not in last_actions:
         return
     la = last_actions[persona_id]
+    cum_pct = cumulative_delta_pct * 100
+
+    # Price-anchored framing: focus on where we are, not what we did
+    if initial_price > 0 and current_price > 0:
+        if cum_pct > 3.0:
+            price_comment = (
+                f"  当前价格已较事件前上涨 {cum_pct:+.1f}%. "
+                f"价格越高, 继续上涨的空间可能越小, 回调的风险越大.\n"
+            )
+        elif cum_pct < -3.0:
+            price_comment = (
+                f"  当前价格已较事件前下跌 {cum_pct:+.1f}%. "
+                f"价格越低, 继续下跌的空间可能越小, 反弹的可能性越大.\n"
+            )
+        else:
+            price_comment = (
+                f"  当前价格较事件前变动 {cum_pct:+.1f}%, 仍在合理波动范围内.\n"
+            )
+    else:
+        price_comment = ""
+
     side_zh = {"buy": "买入", "sell": "卖出", "hold": "观望"}.get(
         str(la.get("side", "")), str(la.get("side", ""))
     )
     conviction_text = (
-        f"\n# 上一轮决策 (R{la['round_idx']})\n"
-        f"  方向: {side_zh}\n"
-        f"  理由: {str(la.get('rationale', ''))[:150]}\n"
-        f"  注意: 除非有重大新信息改变了你的判断, 否则应保持方向一致.\n"
+        f"\n# 市场状态 / Market State (R{la['round_idx'] + 1})\n"
+        f"  事件前价格: {initial_price:.2f}\n"
+        f"  当前价格: {current_price:.2f} (事件后 {cum_pct:+.1f}%)\n"
+        f"{price_comment}"
+        f"  你上一轮的方向: {side_zh}\n"
+        f"  请基于当前价位独立判断本轮方向. 不同价位意味着不同的风险收益比.\n"
     )
     profile = agent.user_info.profile
     existing = profile.get("other_info", {}).get("user_profile", "")
-    marker = "# 上一轮决策"
-    if marker in existing:
-        existing = existing[:existing.index(marker)]
+    marker = "# 市场状态"
+    # Also clean old-format marker if present
+    old_marker = "# 上一轮决策"
+    for m in (marker, old_marker):
+        if m in existing:
+            existing = existing[:existing.index(m)]
     profile["other_info"]["user_profile"] = existing + conviction_text
 
 
@@ -110,9 +143,9 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
         env_prompt = await original_env.to_text_prompt()
         if is_trader:
             instruction = (
-                f"观察以下社交平台信息后，你需要做两件事:\n"
-                f"1. 先做一个社交动作（发帖/转发/点赞/评论中选一个）\n"
-                f"2. **必须**调用交易工具提交你这一类参与者的交易决策\n\n"
+                f"你需要做两件事:\n"
+                f"1. **首先必须**调用交易工具提交你的交易决策 (submit_trading_decision)\n"
+                f"2. 然后做一个社交动作（发帖/转发/点赞/评论中选一个）\n\n"
                 f"你的社交平台环境: {env_prompt}"
             )
         else:
@@ -141,15 +174,35 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
                     has_trade,
                 )
                 if not has_trade:
-                    # Log why the trader didn't trade — this is the key diagnostic
+                    # Retry: the LLM missed the trading tool call
                     resp_text = getattr(response, "content", "") or ""
                     log.warning(
-                        "Agent %d (%s) NO TRADE. tools=[%s] resp_preview=%.200s",
+                        "Agent %d (%s) NO TRADE, retrying. tools=[%s] resp=%.200s",
                         agent.social_agent_id,
                         agent.user_info.user_name,
                         ", ".join(tool_names),
                         resp_text,
                     )
+                    try:
+                        retry_msg = BaseMessage.make_user_message(
+                            role_name="User",
+                            content=(
+                                "你忘了调用 submit_trading_decision 工具. "
+                                "请立即调用, 传入 side/quantity_pct/rationale."
+                            ),
+                        )
+                        retry_resp = await agent.astep(retry_msg)
+                        retry_calls = retry_resp.info.get("tool_calls", [])
+                        retry_names = [tc.tool_name for tc in retry_calls]
+                        if trading_tools & set(retry_names):
+                            log.info(
+                                "Agent %d trade recovered on retry",
+                                agent.social_agent_id,
+                            )
+                            response = retry_resp
+                            has_trade = True
+                    except Exception:
+                        pass  # retry failed, fall through to hold fallback
                 for tc in tool_calls:
                     if tc.tool_name in trading_tools:
                         log.info(

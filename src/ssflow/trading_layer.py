@@ -69,6 +69,7 @@ class TraderInstance:
     holdings: dict[str, float] = field(default_factory=dict)  # {ticker: shares}
     max_holdings_value: float = 0.0  # immutable: capital × max_position_pct
     reaction_lag: int = 0           # round index when this agent becomes active
+    first_position_round: int = -1  # round when first non-zero position opened (-1 = never)
 
     @property
     def holdings_shares(self) -> float:
@@ -103,6 +104,15 @@ class TraderInstance:
     def buy_headroom(self, current_price: float | dict[str, float]) -> float:
         """Remaining buy capacity given the persona's max_position_pct cap."""
         return max(0.0, self.max_holdings_value - self.holdings_value(current_price))
+
+    def short_headroom(self, current_price: float | dict[str, float]) -> float:
+        """Remaining short capacity — how much more short exposure is allowed.
+
+        Short positions show as negative holdings_value. The absolute value
+        of total exposure (long + short) must stay within max_holdings_value.
+        """
+        current_exposure = abs(self.holdings_value(current_price))
+        return max(0.0, self.max_holdings_value - current_exposure)
 
 
 # Backward-compat alias: old code uses `Agent`, new code uses `TraderInstance`
@@ -254,6 +264,7 @@ def spawn_agents(
                     holdings=holdings,
                     max_holdings_value=capital * max_position_pct,
                     reaction_lag=reaction_lag,
+                    first_position_round=0 if holdings_value > 0 else -1,
                 )
             )
         else:
@@ -267,6 +278,7 @@ def spawn_agents(
                     holdings={primary_ticker: holdings_shares},
                     max_holdings_value=capital * max_position_pct,
                     reaction_lag=reaction_lag,
+                    first_position_round=0 if holdings_value > 0 else -1,
                 )
             )
     return agents
@@ -281,6 +293,7 @@ def apply_action(
     current_price: float,
     *,
     instrument: str = _DEFAULT_TICKER,
+    round_idx: int = 0,
 ) -> float:
     """Apply one action_spec to one agent. Mutates state. Returns order amount.
 
@@ -291,6 +304,7 @@ def apply_action(
 
     instrument: which ticker to trade. Defaults to _DEFAULT_TICKER for
     backward compat with single-instrument simulations.
+    round_idx: current round index, used to track first_position_round.
     """
     side = action_spec.get("side", "none")
     pool = action_spec.get("pool", "none")
@@ -314,6 +328,25 @@ def apply_action(
             return 0.0
         amount = agent.cash * fraction
         shares_to_act = amount / current_price
+    elif pool == "margin":
+        # Short-sell: use cash as collateral to borrow shares and sell them.
+        # Creates negative holdings (short position). Cash increases by proceeds.
+        if side != "sell":
+            return 0.0  # margin pool only valid for selling
+        if agent.cash <= 0:
+            return 0.0
+        amount = agent.cash * fraction
+        shares_to_act = amount / current_price
+        # Cap by short headroom (total exposure <= max_holdings_value)
+        headroom = agent.short_headroom(current_price)
+        if headroom <= 0:
+            return 0.0
+        if amount > headroom:
+            amount = headroom
+            shares_to_act = amount / current_price
+        agent.holdings[instrument] = current_shares - shares_to_act
+        agent.cash += amount
+        return -amount
     else:
         return 0.0
 
@@ -328,8 +361,12 @@ def apply_action(
         if amount > headroom:
             amount = headroom
             shares_to_act = amount / current_price
+        # Track first position opening
+        had_no_position = current_shares <= 0
         agent.holdings[instrument] = current_shares + shares_to_act
         agent.cash -= amount
+        if had_no_position and shares_to_act > 0 and agent.first_position_round < 0:
+            agent.first_position_round = round_idx
         return +amount
     return 0.0
 
@@ -466,7 +503,16 @@ def apply_distribution_to_agent_pop(
             system_fingerprint=system_fingerprint,
         )
 
-    # ── Free-form path: entire class does the same action ──
+    # ── Free-form path: per-agent stochastic dispersion ──
+    #
+    # The LLM decides once for the whole class (side + qty_pct). But real
+    # participants within a class don't all act identically — some chase
+    # momentum, others take profits, others sit out. We model this by
+    # converting the class decision into a conviction score and adding
+    # per-agent Gaussian noise. The dispersion is derived from the
+    # persona's behavioral biases (herd_following → low noise, contrarian
+    # → high noise). No hardcoded thresholds — heterogeneity emerges
+    # from the persona's own documented characteristics.
     if "__freeform__" in distribution and raw_distribution:
         side = raw_distribution.get("side", "hold")
         qty_pct = float(raw_distribution.get("quantity_pct", 0.0))
@@ -476,17 +522,47 @@ def apply_distribution_to_agent_pop(
         if conviction_damper < 1.0:
             qty_pct = qty_pct * conviction_damper
 
-        if side == "hold" or qty_pct <= 0:
-            freeform_spec = {"side": "none", "pool": "none", "fraction": 0.0}
+        # Convert the class decision to a conviction score:
+        #   buy  → +qty_pct
+        #   sell → -qty_pct
+        #   hold → 0
+        if side == "buy":
+            class_conviction = qty_pct
+        elif side == "sell":
+            class_conviction = -qty_pct
         else:
-            if not pool:
-                pool = "cash" if side == "buy" else "holdings_in_target"
-            freeform_spec = {"side": side, "pool": pool, "fraction": qty_pct}
+            class_conviction = 0.0
+
+        # Compute per-agent dispersion from persona biases.
+        # High herd_following → low dispersion (agents follow the class)
+        # High contrarian_tendency → high dispersion (agents diverge)
+        # Default: moderate dispersion (0.30) for personas without biases.
+        biases = persona.biases if persona.biases else {}
+        herd = biases.get("herd_following", biases.get("herd_mentality", 0.5))
+        contrarian = biases.get("contrarian_tendency", 0.0)
+        dispersion = max(0.05, 0.5 * (1.0 - herd) + 0.3 * contrarian)
 
         net_flow = 0.0
-        histogram: dict[str, int] = {"__freeform__": len(active_agents)}
+        histogram: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0}
         for agent_inst in active_agents:
-            order = apply_action(agent_inst, freeform_spec, current_price, instrument=instrument)
+            # Each agent gets a noisy conviction
+            agent_conviction = class_conviction + rng.gauss(0, dispersion)
+
+            if agent_conviction > 0.02:
+                agent_frac = min(abs(agent_conviction), 1.0)
+                buy_pool = pool if pool and side == "buy" else "cash"
+                spec = {"side": "buy", "pool": buy_pool, "fraction": agent_frac}
+                histogram["buy"] += 1
+            elif agent_conviction < -0.02:
+                agent_frac = min(abs(agent_conviction), 1.0)
+                sell_pool = pool if pool and side == "sell" else "holdings_in_target"
+                spec = {"side": "sell", "pool": sell_pool, "fraction": agent_frac}
+                histogram["sell"] += 1
+            else:
+                spec = {"side": "none", "pool": "none", "fraction": 0.0}
+                histogram["hold"] += 1
+
+            order = apply_action(agent_inst, spec, current_price, instrument=instrument, round_idx=round_idx)
             net_flow += order
 
         return ClassFlowResult(
@@ -530,7 +606,7 @@ def apply_distribution_to_agent_pop(
         histogram[action_name] = histogram.get(action_name, 0) + 1
         if spec is None:
             continue
-        order = apply_action(agent, spec, current_price, instrument=instrument)
+        order = apply_action(agent, spec, current_price, instrument=instrument, round_idx=round_idx)
         net_flow += order
 
     return ClassFlowResult(

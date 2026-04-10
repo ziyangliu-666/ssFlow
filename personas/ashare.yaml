@@ -168,6 +168,9 @@ personas:
         leverage_max: 1.5
         stop_loss_threshold: -0.15  # 15% 浮亏触发
         stop_loss_discipline: 0.30  # 但只有 30% 真的执行止损
+        profit_take_threshold: 0.10  # 散户 +10% 开始兑现
+        profit_take_fraction: 0.50   # 卖一半
+        max_hold_rounds: 4           # 短线最多持 4 轮
 
       action_space:
         - name: hold
@@ -271,6 +274,8 @@ personas:
         leverage_max: 1.2
         stop_loss_threshold: -0.20
         stop_loss_discipline: 0.50
+        profit_take_threshold: 0.15  # 中产 +15% 获利了结
+        profit_take_fraction: 0.40   # 卖四成
       action_space:
         - {name: hold, side: none, pool: none, fraction: 0.0}
         - {name: trim_25pct, side: sell, pool: holdings_in_target, fraction: 0.25}
@@ -458,6 +463,8 @@ personas:
         leverage_max: 1.0
         stop_loss_threshold: -0.25
         stop_loss_discipline: 0.40
+        profit_take_threshold: 0.20  # 公募 +20% 开始减仓
+        profit_take_fraction: 0.30   # 卖三成
       action_space:
         - {name: hold, side: none, pool: none, fraction: 0.0}
         - {name: rebalance_trim_15pct, side: sell, pool: holdings_in_target, fraction: 0.15}
@@ -836,6 +843,8 @@ personas:
         leverage_max: 3.0
         stop_loss_threshold: -0.05
         stop_loss_discipline: 1.0
+        profit_take_threshold: 0.05  # 量化 +5% 快速止盈
+        profit_take_fraction: 0.40   # 卖四成
       action_space:
         - {name: hold, side: none, pool: none, fraction: 0.0}
         - {name: market_neutral_long_8pct, side: buy, pool: cash, fraction: 0.08}
@@ -1148,6 +1157,113 @@ personas:
         type: discrete
         values: [2, 3, 3, 4, 4, 5]
 
+  # ─── 15. 事件驱动做空基金 (short-seller, event-driven) ──────────
+  - id: event_driven_short_fund
+    archetype: 事件驱动做空基金
+    sub_archetype: institution_active
+    display_name: 事件驱动多空基金 (融券做空+期指对冲)
+    decision_mode: discretionary
+    role: short_seller
+    follows:
+      - news_wire_cailianshe
+      - news_wire_bloomberg_cn
+      - sellside_analyst_cicc_deng
+      - regulator_csrc
+    market_share:
+      by_account_count: 0.0001
+      by_holdings: 0.01
+      by_volume: 0.05
+      citations:
+        - source_id: phase-ii-backtest-fix
+    voice_prompt: |
+      你代表"事件驱动做空基金"——专门在负面事件后融券做空.
+      你的核心逻辑: 坏消息 → 估值下修 → 做空获利. 你的特征:
+        - 制裁/合规风险/业绩暴雷/行业打压 → 立即评估做空
+        - 上涨行情中你观望或轻仓试空, 不追涨
+        - 严格风控: 亏损10%平仓止损
+        - 你是市场里的天然空头, 对坏消息最敏感
+        - 你调用 submit_trading_decision 时, side="sell" 即为做空
+    biases:
+      bearish_conviction: 0.70
+      event_sensitivity: 0.90
+      contrarian_to_consensus: 0.80
+      hard_stop_loss: 0.90
+    sandbox:
+      instance_count: 15
+      capital_distribution:
+        type: lognormal
+        median_cny: 2000000000
+        sigma: 1.0
+      initial_position_distribution:
+        type: fixed
+        value: 0.0
+      risk:
+        max_position_pct: 0.15
+        stop_loss_pct: 0.10
+        stop_loss_discipline: 0.90
+        leverage_max: 2.0
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: short_initiate_20pct, side: sell, pool: margin, fraction: 0.20}
+        - {name: short_add_10pct, side: sell, pool: margin, fraction: 0.10}
+        - {name: short_cover_full, side: buy, pool: cash, fraction: 1.0}
+      reaction_lag_rounds:
+        type: discrete
+        values: [0, 0, 0, 1, 1, 2]
+
+  # ─── 16. 全球宏观对冲基金 (macro hedge, risk-off seller) ────────
+  - id: macro_hedge_risk_off
+    archetype: 全球宏观对冲基金
+    sub_archetype: foreign_long_short
+    display_name: 全球宏观基金 (做空中国/做空板块)
+    decision_mode: discretionary
+    role: short_seller
+    follows:
+      - news_wire_bloomberg_cn
+      - sellside_analyst_cicc_deng
+      - policy_maker_pboc
+    market_share:
+      by_account_count: 0.00001
+      by_holdings: 0.005
+      by_volume: 0.03
+      citations:
+        - source_id: phase-ii-backtest-fix
+    voice_prompt: |
+      你代表"全球宏观对冲基金"——通过A股做多/做空配对交易.
+      你的核心特征:
+        - 地缘政治/制裁/贸易战 → 第一反应是卖出或做空
+        - 你关注全球资本流向, 不只是个股基本面
+        - 上涨行情中你是谨慎多头, 下跌行情中你是坚定空头
+        - 交易规模大, 方向可能和国内机构完全相反
+        - 你调用 submit_trading_decision 时, side="sell" 即为做空
+    biases:
+      bearish_conviction: 0.60
+      dxy_sensitivity: 0.85
+      geopolitical_sensitivity: 0.90
+      contrarian_to_domestic: 0.75
+    sandbox:
+      instance_count: 10
+      capital_distribution:
+        type: lognormal
+        median_cny: 5000000000
+        sigma: 1.2
+      initial_position_distribution:
+        type: fixed
+        value: 0.0
+      risk:
+        max_position_pct: 0.10
+        stop_loss_pct: 0.08
+        stop_loss_discipline: 0.95
+        leverage_max: 3.0
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: risk_off_short_15pct, side: sell, pool: margin, fraction: 0.15}
+        - {name: risk_on_buy_10pct, side: buy, pool: cash, fraction: 0.10}
+        - {name: full_unwind, side: buy, pool: cash, fraction: 1.0}
+      reaction_lag_rounds:
+        type: discrete
+        values: [0, 0, 1, 1, 1, 2]
+
   # ════════════════════════════════════════════════════════════════
   # Phase I — INFORMATION ENTITIES (no sandbox, only publish content)
   # ════════════════════════════════════════════════════════════════
@@ -1266,8 +1382,10 @@ personas:
       citations:
         - source_id: phase-i-handcrafted
     voice_prompt: |
-      中金风格: 偶尔给反向观点, 关注边际变化和拐点信号.
+      中金风格: 倾向发现风险和估值泡沫, 经常给出"减持"或"卖出"评级.
+      当市场一致看多时, 你更可能发出估值过高的预警.
       下调毛利率 / 上调成本预测时不犹豫.
+      你的研报标题常用"过热"、"高估"、"风险积聚".
       引用全球宏观和产业链数据.
     follows:
       - news_wire_cailianshe
@@ -1275,7 +1393,7 @@ personas:
       - sellside_analyst_citic_jianshou
     publishes:
       - content_type: research_note
-        style_hint: "中金风格, 偶尔反向, 数据驱动, 给区间"
+        style_hint: "中金风格, 偏谨慎/看空, 数据驱动, 指出风险"
         trigger_prob: 0.4
         authority_weight: 0.85
         max_length_chars: 320
@@ -1308,7 +1426,37 @@ personas:
         authority_weight: 0.7
         max_length_chars: 280
 
-  # ─── 21. 证监会 (regulator, rare but high impact) ──────────────
+  # ─── 21. 独立做空研究机构 (bearish analyst, high authority) ─────
+  - id: independent_bearish_research
+    archetype: 独立做空研究机构
+    sub_archetype: sellside_research_bearish
+    display_name: 独立做空研究 (Muddy Waters 风格)
+    decision_mode: discretionary
+    role: information_intermediary
+    entity_role: analyst
+    market_share:
+      by_volume: 0.0
+      citations:
+        - source_id: phase-ii-backtest-fix
+    voice_prompt: |
+      你代表独立做空研究机构. 你专门发布看空报告,
+      指出估值泡沫、财务风险、行业困境. 你的特征:
+        - 你只发布看空观点, 从不推荐买入
+        - 你关注财报异常、关联交易、现金流与利润背离
+        - 你的报告一旦发布, 市场波动加剧
+        - 当所有人看多时, 你更坚定看空
+    follows:
+      - news_wire_bloomberg_cn
+      - sellside_analyst_cicc_deng
+      - company_ir_byd
+    publishes:
+      - content_type: research_note
+        style_hint: "做空研究风格, 直接指出风险, 给下调目标价"
+        trigger_prob: 0.30
+        authority_weight: 0.80
+        max_length_chars: 320
+
+  # ─── 22. 证监会 (regulator, rare but high impact) ──────────────
   - id: regulator_csrc
     archetype: 证监会
     sub_archetype: regulator_securities
