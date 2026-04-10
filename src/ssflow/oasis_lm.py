@@ -125,6 +125,12 @@ class SsFishCamelModel(OpenAICompatibleModel):
         **kwargs: Any,
     ) -> None:
         # Default to ssFlow's settings if caller didn't override
+        if model_config_dict is None:
+            model_config_dict = {}
+        if "temperature" not in model_config_dict:
+            model_config_dict["temperature"] = settings.temperature
+        if "seed" not in model_config_dict and settings.seed is not None:
+            model_config_dict["seed"] = settings.seed
         resolved_model = model_type or settings.default_model
         resolved_api_key = api_key or settings.openai_api_key.get_secret_value()
         resolved_url = url or settings.openai_base_url

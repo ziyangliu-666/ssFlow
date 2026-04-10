@@ -49,9 +49,10 @@ MAX_DELTA_PCT_PER_ROUND: float = 0.10
 # We use a soft compression: effective_ratio = knee × (1 - e^(-raw/knee))
 # This is approximately linear for small flows (preserves signal) and
 # asymptotes to FLOW_KNEE for large flows (prevents saturation).
-# At knee=0.03: flow/ADV=3% passes through at ~1.9%, flow/ADV=30% compresses
-# to ~3.0%, flow/ADV=100% → ~3.0%. This produces Kyle deltas of 1-9%.
-FLOW_KNEE: float = 0.03
+# At knee=0.08: flow/ADV=1% → ~4.3%, 3% → ~7.8%, 5% → ~9.1%, 10%+ → capped
+# at ±10% (涨停板). The knee is set so that the A-share price limit is the
+# binding constraint, not the compression curve.
+FLOW_KNEE: float = 0.08
 
 
 def compute_dynamic_knee(

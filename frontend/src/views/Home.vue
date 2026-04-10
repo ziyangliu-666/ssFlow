@@ -11,7 +11,7 @@
       @drop.prevent="onDrop"
     >
       <div class="wrap">
-        <div class="eyebrow">A 股沙盘 · 群体推演</div>
+        <div class="eyebrow">市场事件 · 群体推演</div>
         <h1 aria-label="一条消息，如何在市场里发酵。">
           一条消息，如何在市场里<span class="verb-slot">
             <transition name="rip">
@@ -139,7 +139,15 @@
           >×</button>
         </div>
 
-        <div class="examples">
+        <!-- Pipeline visualization — replaces examples during extraction -->
+        <ExtractPipeline
+          :phase="pipelinePhase"
+          :local-files="files"
+          :detected-urls="detectedUrls"
+          @go-setup="goSetup"
+        />
+
+        <div v-if="pipelinePhase === 'idle'" class="examples">
           <div class="examples-h">试试这些例子</div>
           <div class="examples-list">
             <button
@@ -166,6 +174,7 @@ import { ensureSession } from '../api/client'
 import { uploadFiles } from '../api/upload'
 import { runExtract } from '../api/extract'
 import WorkflowRail from '../components/WorkflowRail.vue'
+import ExtractPipeline from '../components/ExtractPipeline.vue'
 
 const router = useRouter()
 
@@ -179,9 +188,10 @@ const isFocused = ref(false)
 const loading = ref(false)
 const status = ref('')
 const errorStatus = ref(0)  // HTTP status of the last failure, 0 if none
+const pipelinePhase = ref('idle')  // idle | uploading | extracting | distilling | done
 
 // Rotating accent verb — the signature gesture on Home. Cycles every
-// 2.8s through a native A-share editorial verb pool. Paused entirely
+// 2.8s through a native editorial verb pool. Paused entirely
 // when the user has prefers-reduced-motion set.
 const verbs = ['发酵', '消化', '兑现', '搅动', '推演']
 const verbIdx = ref(0)
@@ -291,6 +301,10 @@ function useExample (text) {
   taEl.value && taEl.value.focus()
 }
 
+function goSetup () {
+  router.push({ name: 'Setup' })
+}
+
 function formatBytes (n) {
   if (n < 1024) return n + 'B'
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'KB'
@@ -313,16 +327,24 @@ async function onStart () {
   status.value = ''
   session.lastError = ''
   errorStatus.value = 0
+  pipelinePhase.value = 'uploading'
   try {
     // Wipe last extraction so a re-run replaces it cleanly.
     session.eventProposal = null
     session.personasProposed = []
+    session.instrumentUniverse = null
+    session.roundSchedule = null
+    session.entityGraph = null
+    session.ingestedDocs = []
 
     await ensureSession()
     if (files.value.length > 0) {
       status.value = '上传文件中…'
       await uploadFiles(files.value)
     }
+
+    // Phase 2: Extract
+    pipelinePhase.value = 'extracting'
     status.value = '分析中…（LLM 分类 + 合成）'
 
     // Strip the detected URLs out of the prompt text we send to the backend
@@ -337,8 +359,8 @@ async function onStart () {
       urls,
     })
 
-    // After extraction, automatically distill the instrument universe
-    // and generate the entity sandbox. These run in parallel.
+    // Phase 3: Distill + Sandbox (parallel)
+    pipelinePhase.value = 'distilling'
     const ep = session.eventProposal || {}
     const topic = ep.event_text || strippedPrompt
     const ticker = ep.ticker || ''
@@ -358,18 +380,15 @@ async function onStart () {
       console.warn('Distill/sandbox failed (non-fatal):', distillErr)
     }
 
-    status.value = '完成，进入确认…'
-    router.push({ name: 'Setup' })
+    // Phase 4: Done — show results briefly, then auto-navigate
+    pipelinePhase.value = 'done'
+    status.value = ''
+    setTimeout(() => router.push({ name: 'Setup' }), 1500)
   } catch (err) {
     console.error(err)
-    // Clear the progress status so the error banner is unambiguous —
-    // leaving "analyzing…" up alongside a 401 error is misleading.
     status.value = ''
-    // Capture the HTTP status so the error banner can show a 401-specific
-    // hint (point the user at Settings). Fall back to 0 for network errors.
+    pipelinePhase.value = 'idle'
     errorStatus.value = err?.response?.status || 0
-    // If the interceptor didn't fill session.lastError for some reason,
-    // fall back to a generic message so the banner still appears.
     if (!session.lastError) {
       session.lastError =
         err?.response?.data?.detail ||
@@ -426,7 +445,7 @@ h1 {
 /* Signature gesture — one Noto Serif SC headline with one orange
    verb inline. We use weight 600 + color for emphasis (no italic —
    synthesized italic on CJK is ugly). The verb rotates through a
-   native A-share vocabulary pool; see the component script. */
+   native vocabulary pool; see the component script. */
 
 /* The verb sits inside a fixed-size "slot" so the slot-machine
    transition (incoming verb slides up from below, outgoing slides

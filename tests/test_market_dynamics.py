@@ -23,15 +23,15 @@ class TestComputePriceImpact:
 
     def test_spec_byd_example(self):
         """BYD net flow -3億 / ADV 80億 / λ=0.5. With soft compression
-        (knee=0.03), flow/ADV=3.75% → eff_ratio≈2.14% → delta≈-7.3%."""
+        (knee=0.08), flow/ADV=3.75% → eff_ratio≈2.99% → delta≈-8.65%."""
         result = compute_price_impact(
             net_flow_value=-3e8,
             adv_value=8e9,
             lambda_market=0.5,
         )
-        # Soft-compressed: eff = 0.03*(1-e^(-0.0375/0.03)) ≈ 0.0214
-        # delta = -0.5*sqrt(0.0214) ≈ -7.3%
-        assert result == pytest.approx(-0.073, abs=0.005)
+        # Soft-compressed: eff = 0.08*(1-e^(-0.0375/0.08)) ≈ 0.0299
+        # delta = -0.5*sqrt(0.0299) ≈ -8.65%
+        assert result == pytest.approx(-0.0865, abs=0.005)
 
     def test_spec_byd_example_raw_kyle(self):
         """Verify raw Kyle formula (no compression) still works."""
@@ -120,28 +120,33 @@ class TestComputePriceImpact:
         assert result == pytest.approx(-0.30, abs=1e-9)
 
     def test_soft_compression_preserves_ordering(self):
-        """Larger flow produces larger delta (soft compression, not clip)."""
+        """Larger flow produces larger delta (soft compression, not clip).
+
+        With knee=0.08, the 10% price cap kicks in around flow/ADV ≈ 5.5%.
+        We test with flows below that threshold to verify ordering.
+        """
         adv = 1e10
-        small = compute_price_impact(net_flow_value=1e8, adv_value=adv)
-        medium = compute_price_impact(net_flow_value=1e9, adv_value=adv)
-        large = compute_price_impact(net_flow_value=1e10, adv_value=adv)
+        small = compute_price_impact(net_flow_value=1e8, adv_value=adv)   # 1% ADV
+        medium = compute_price_impact(net_flow_value=3e8, adv_value=adv)  # 3% ADV
+        large = compute_price_impact(net_flow_value=5e8, adv_value=adv)   # 5% ADV
         assert 0 < small < medium < large
         # Small flow (1% of ADV) should pass nearly linearly
-        # knee=0.03: eff = 0.03*(1-e^(-0.01/0.03)) = 0.03*0.284 = 0.0085
-        # delta ≈ 0.5*sqrt(0.0085) = 4.6% — reasonable single-day move
-        assert small == pytest.approx(0.046, abs=0.005)
+        # knee=0.08: eff = 0.08*(1-e^(-0.01/0.08)) = 0.08*0.1175 = 0.0094
+        # delta ≈ 0.5*sqrt(0.0094) = 4.85% — reasonable single-day move
+        assert small == pytest.approx(0.0485, abs=0.005)
 
     def test_soft_compression_asymptotes(self):
-        """Very large flows converge toward the asymptote."""
+        """Very large flows converge toward the asymptote, then hit the price cap."""
         adv = 1e10
         d1 = compute_price_impact(net_flow_value=5e10, adv_value=adv)
         d2 = compute_price_impact(net_flow_value=1e11, adv_value=adv)
-        # Both should be close to the asymptote: 0.5*sqrt(0.03) = 8.66%
-        assert d1 == pytest.approx(0.0866, abs=0.001)
-        assert d2 == pytest.approx(0.0866, abs=0.001)
-        # Ordering preserved for more moderate sizes
-        d_small = compute_price_impact(net_flow_value=5e8, adv_value=adv)
-        d_medium = compute_price_impact(net_flow_value=2e9, adv_value=adv)
+        # With knee=0.08, raw asymptote is 0.5*sqrt(0.08) = 14.1%, but
+        # the A-share price cap (±10%) kicks in first — both should be capped.
+        assert d1 == pytest.approx(0.10, abs=0.001)
+        assert d2 == pytest.approx(0.10, abs=0.001)
+        # Ordering preserved for moderate sizes (below the cap)
+        d_small = compute_price_impact(net_flow_value=1e8, adv_value=adv)  # 1% ADV
+        d_medium = compute_price_impact(net_flow_value=3e8, adv_value=adv)  # 3% ADV
         assert d_small < d_medium < d1
 
 

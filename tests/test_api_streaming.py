@@ -392,7 +392,7 @@ def test_simulate_stream_emits_events_via_fake_engine(client):
                     price_after=100.5 + i,
                     delta_pct=0.005,
                     net_flow=12345.0,
-                    class_flows={},
+                    class_flows=[],
                     publications_this_round=[],
                 )
                 for i in range(2)

@@ -53,7 +53,7 @@ the intended layout at 1:1 fidelity.
 ## Voice — zh-primary, native, not translated
 
 The product ships **Chinese-primary for all UI chrome.** Audience is
-A-share, CNY, Chinese personas, Chinese examples, Chinese extracted
+Chinese personas, Chinese examples, Chinese extracted
 reports. Headlines, labels, buttons, empty states, error banners,
 filter chips, footer disclaimers — all Chinese.
 
@@ -123,7 +123,7 @@ number callouts like `*-3.5%*`).
 | Report | 业绩端利空，被市场折价 *-3.5%* 吸收。 |
 
 **Rotating verb pool.** On Home, Run, and Replay, the accent word cycles
-every 2.8s through a native A-share editorial pool:
+every 2.8s through a native editorial pool:
 `发酵 → 消化 → 兑现 → 搅动 → 推演`. All five are 2-character verbs so
 the layout is stable by construction. The cycle is disabled entirely
 under `prefers-reduced-motion`. Implementation: `<transition

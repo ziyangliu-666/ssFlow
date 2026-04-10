@@ -443,6 +443,17 @@ async def extract_event(
     else:
         final_price = synth.get("current_price")
         price_source = "llm:synth"
+        # LLM-synthesized prices are unreliable — cap confidence
+        confidence["prices"] = min(
+            float(synth.get("confidence_prices", 0.0)), 0.3,
+        )
+        if final_price is not None:
+            log.warning(
+                "[extract] LLM-synthesized price %.2f for %s/%s — "
+                "confidence capped at %.2f. Market API did not return data.",
+                final_price, market_for_quote, ticker_for_quote,
+                confidence["prices"],
+            )
 
     if market_quote and market_quote.adv_value and market_quote.adv_value > 0:
         final_adv = float(market_quote.adv_value)
@@ -460,6 +471,19 @@ async def extract_event(
     )
 
     warnings = list(synth.get("warnings", []))
+
+    # Sanity check: A-share prices should be in a reasonable range
+    if final_price is not None and market in ("ashare", "a-share"):
+        if final_price < 1.0 or final_price > 10000.0:
+            warnings.append(
+                f"SUSPICIOUS: A-share price {final_price} outside "
+                f"reasonable range [1.0, 10000.0] — verify manually."
+            )
+            confidence["prices"] = min(confidence.get("prices", 0.0), 0.1)
+            log.warning(
+                "[extract] Suspicious A-share price: %.4f for %s",
+                final_price, ticker_for_quote,
+            )
     if market_quote and market_quote.is_populated:
         warnings.append(
             f"Price + ADV sourced from {market_quote.source} "

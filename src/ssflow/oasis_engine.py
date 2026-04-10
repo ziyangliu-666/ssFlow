@@ -74,7 +74,12 @@ from .information.external_events import (
     SimSnapshot,
 )
 from .llm_client import BudgetExceeded, cost_tracker
-from .market_dynamics import AdaptiveADV, compute_price_impact, lambda_for_market
+from .market_dynamics import (
+    FLOW_KNEE,
+    AdaptiveADV,
+    compute_price_impact,
+    lambda_for_market,
+)
 from .oasis_feed_reader import (
     PublicationMetadata,
     PublicationRegistry,
@@ -1378,7 +1383,7 @@ async def run_simulation(
                     sentiment_modifier=clamped_sentiment,
                 )
                 price_after = current_price * (1.0 + delta_pct)
-                if dynamic_knee != 0.03:
+                if abs(dynamic_knee - FLOW_KNEE) > 1e-6:
                     log.info(
                         "  R%d dynamic_knee=%.4f (active=%d/%d, cum=%.1f%%, "
                         "sentiment=%+.2f)",
