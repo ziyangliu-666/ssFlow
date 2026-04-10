@@ -79,9 +79,6 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
     async def patched_perform_action_by_llm():
         env_prompt = await original_env.to_text_prompt()
         if is_trader:
-            # Trader agents: override the OASIS user prompt to prioritize
-            # the trading tool. The stock prompt says "pick one social action"
-            # which biases the LLM away from our custom tool.
             instruction = (
                 f"观察以下社交平台信息后，你需要做两件事:\n"
                 f"1. 先做一个社交动作（发帖/转发/点赞/评论中选一个）\n"
@@ -99,18 +96,39 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
         )
         try:
             response = await agent.astep(user_msg)
-            for tool_call in response.info.get("tool_calls", []):
-                action_name = tool_call.tool_name
-                args = tool_call.args
-                log.debug(
-                    "Agent %d action: %s args=%s",
-                    agent.social_agent_id, action_name, args,
+            tool_calls = response.info.get("tool_calls", [])
+            tool_names = [tc.tool_name for tc in tool_calls]
+            trading_tools = {"submit_order_distribution", "submit_trading_decision"}
+            has_trade = bool(trading_tools & set(tool_names))
+
+            # Log agent decision for observability
+            if is_trader:
+                log.info(
+                    "Agent %d (%s) tools=[%s] trade=%s",
+                    agent.social_agent_id,
+                    agent.user_info.user_name,
+                    ", ".join(tool_names),
+                    has_trade,
                 )
-                if action_name not in ALL_SOCIAL:
-                    log.debug(
-                        "Agent %d custom tool result: %s",
-                        agent.social_agent_id, tool_call.result,
+                if not has_trade:
+                    # Log why the trader didn't trade — this is the key diagnostic
+                    resp_text = getattr(response, "content", "") or ""
+                    log.warning(
+                        "Agent %d (%s) NO TRADE. tools=[%s] resp_preview=%.200s",
+                        agent.social_agent_id,
+                        agent.user_info.user_name,
+                        ", ".join(tool_names),
+                        resp_text,
                     )
+                for tc in tool_calls:
+                    if tc.tool_name in trading_tools:
+                        log.info(
+                            "Agent %d trade: %s args=%s",
+                            agent.social_agent_id,
+                            tc.tool_name,
+                            str(tc.args)[:300],
+                        )
+
             return response
         except Exception as e:
             log.warning("Agent %d error in patched perform: %s", agent.social_agent_id, e)

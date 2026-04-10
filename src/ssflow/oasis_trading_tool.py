@@ -236,9 +236,14 @@ def make_submit_order_tool(
     persona_id = persona.id
     action_names = [a["name"] for a in persona.sandbox.action_space]
     action_names_str = ", ".join(action_names)
+    # Default hold action for fallback when LLM omits action_distribution
+    hold_action = next(
+        (a["name"] for a in persona.sandbox.action_space if a.get("side") == "none"),
+        action_names[0],
+    )
 
     def submit_order_distribution(
-        action_distribution: dict,
+        action_distribution: dict = None,
         rationale: str = "",
     ) -> str:
         """Submit a class-wide trading action distribution for this round.
@@ -263,6 +268,15 @@ def make_submit_order_tool(
             Confirmation string. This goes into your agent memory, so next
             round you'll remember what your class did and why.
         """
+        # LLM sometimes omits action_distribution entirely — default to hold
+        if action_distribution is None:
+            log.warning(
+                "persona %s: submit_order_distribution called without "
+                "action_distribution, defaulting to hold",
+                persona_id,
+            )
+            action_distribution = {hold_action: 1.0}
+
         # Accept either a dict or a string-encoded dict (some LLMs do this)
         if isinstance(action_distribution, str):
             import json as _json
