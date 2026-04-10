@@ -516,6 +516,7 @@ async def run_simulation(
     seed = seed if seed is not None else settings.seed
     external_events = external_events or ExternalEventSchedule()
     # Determine lambda: explicit override > calibration library > literature default
+    _calibrated_knee: float = FLOW_KNEE  # default; overridden by calibration
     if lambda_market is not None:
         lambda_used = lambda_market
         _lambda_source = "explicit_override"
@@ -529,9 +530,10 @@ async def run_simulation(
         )
         lambda_used = _cal_params["lambda"]
         _lambda_source = _cal_params["source"]
+        _calibrated_knee = _cal_params["knee"]
         log.info(
             "Lambda selected: %.4f (source=%s, knee=%.4f) for event_type=%s",
-            lambda_used, _lambda_source, _cal_params["knee"],
+            lambda_used, _lambda_source, _calibrated_knee,
             event.event_type,
         )
 
@@ -763,6 +765,25 @@ async def run_simulation(
                         "  R%d schedule: %s (active_types=%s)",
                         round_idx, rd.label, rd.active_agent_types,
                     )
+                    # Detect trading-day boundary → reset limit board + T+1
+                    if round_idx > 0:
+                        prev_rd = round_schedule.get_round(round_idx - 1)
+                        if prev_rd:
+                            prev_day = int(prev_rd.hours_since_event // 24)
+                            curr_day = int(rd.hours_since_event // 24)
+                            if curr_day > prev_day:
+                                # New trading day: reset limit board with
+                                # yesterday's close as prev_close
+                                limit_board = LimitBoard(
+                                    prev_close=current_price,
+                                    board_type=_board_type,
+                                )
+                                t1_ledger.advance_day()
+                                log.info(
+                                    "  R%d NEW TRADING DAY (T+%d): "
+                                    "limit board reset at %.2f, T+1 ledger cleared",
+                                    round_idx, curr_day, current_price,
+                                )
 
             # Pre-compute inactive trader IDs for this round
             inactive_trader_ids: set[str] = set()
@@ -1411,6 +1432,8 @@ async def run_simulation(
                     round_idx=round_idx,
                     participation_rate=p_rate,
                     conviction_damper=damper,
+                    limit_board=limit_board,
+                    t1_ledger=t1_ledger,
                 )
                 class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
@@ -1465,6 +1488,8 @@ async def run_simulation(
                     rng=sample_rng,
                     rationale="(no tool call this round, held)",
                     round_idx=round_idx,
+                    limit_board=limit_board,
+                    t1_ledger=t1_ledger,
                 )
                 class_flows.append(hold_flow)
                 safe_emit(
@@ -1529,6 +1554,7 @@ async def run_simulation(
                 cumulative_abs = abs(cumulative_delta_pct)
                 dynamic_knee = compute_dynamic_knee(
                     n_active, n_total, cumulative_abs, round_idx,
+                    base_knee=_calibrated_knee,
                 )
                 # Clamp sentiment shift to [-0.5, 0.5]
                 clamped_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
@@ -1556,7 +1582,7 @@ async def run_simulation(
                         limit_board.unfilled_volume,
                     )
                 price_after = current_price * (1.0 + delta_pct)
-                if abs(dynamic_knee - FLOW_KNEE) > 1e-6:
+                if abs(dynamic_knee - _calibrated_knee) > 1e-6:
                     log.info(
                         "  R%d dynamic_knee=%.4f (active=%d/%d, cum=%.1f%%, "
                         "sentiment=%+.2f)",
