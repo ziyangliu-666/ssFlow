@@ -118,6 +118,9 @@ class RoundRecord:
     class_flows: list[ClassFlowResult]
     publications_this_round: list[Publication]
     external_events_injected: int = 0
+    limit_board_state: str = "normal"      # BoardState value
+    limit_board_unfilled: float = 0.0      # Unfilled queue volume
+    limit_board_seal: float = 0.0          # Seal strength (unfilled/ADV)
 
 
 @dataclass
@@ -619,6 +622,15 @@ async def run_simulation(
 
     # Single-instrument adaptive ADV
     adaptive_adv = AdaptiveADV(baseline=event.adv_value)
+
+    # ── Limit board + publication effects (A-share realism) ──
+    from .limit_board import LimitBoard, T1Ledger, infer_board_type
+    from .publication_effects import EffectTracker, compute_publication_effect, aggregate_round_effects
+
+    _board_type = infer_board_type(event.ticker) if event.ticker else "normal"
+    limit_board = LimitBoard(prev_close=initial_price, board_type=_board_type)
+    t1_ledger = T1Ledger()
+    effect_tracker = EffectTracker()
 
     # Accumulate per-ticker price trajectories (initial prices as first point)
     multi_trajectories: dict[str, list[float]] = {
@@ -1375,13 +1387,26 @@ async def run_simulation(
                 # Update adaptive ADV from observed round volume
                 total_abs_flow = sum(abs(cf.net_flow) for cf in class_flows)
                 effective_adv = adaptive_adv.update(total_abs_flow)
-                delta_pct = compute_price_impact(
+                raw_delta = compute_price_impact(
                     net_flow_value=net_flow_total,
                     adv_value=effective_adv,
                     lambda_market=lambda_used,
                     flow_knee=dynamic_knee,
                     sentiment_modifier=clamped_sentiment,
                 )
+                # Apply A-share limit-board clamping (涨跌停板)
+                delta_pct = limit_board.clamp_delta(raw_delta)
+                # Compute buy/sell volumes for limit-board state tracking
+                buy_vol = sum(cf.net_flow for cf in class_flows if cf.net_flow > 0)
+                sell_vol = abs(sum(cf.net_flow for cf in class_flows if cf.net_flow < 0))
+                limit_board.update(delta_pct, buy_volume=buy_vol, sell_volume=sell_vol)
+                if limit_board.at_limit:
+                    seal = limit_board.seal_strength(effective_adv)
+                    log.info(
+                        "  R%d LIMIT BOARD: %s (seal=%.2f, unfilled=%.2e)",
+                        round_idx, limit_board.state.value, seal,
+                        limit_board.unfilled_volume,
+                    )
                 price_after = current_price * (1.0 + delta_pct)
                 if abs(dynamic_knee - FLOW_KNEE) > 1e-6:
                     log.info(
@@ -1480,6 +1505,28 @@ async def run_simulation(
             )
             publications_this_round = social_publications + market_publications
 
+            # ── Track publication effects (quantitative) ──
+            for pub in publications_this_round:
+                content_type = getattr(pub, "content_type", None)
+                if content_type:
+                    try:
+                        eff = compute_publication_effect(content_type)
+                        effect_tracker.add(eff, round_idx=round_idx)
+                    except Exception:
+                        pass  # Unknown type — skip
+
+            # Aggregate active effects for this round (used in next round's context)
+            active_effects = effect_tracker.effects_at_round(round_idx)
+            if active_effects:
+                agg = aggregate_round_effects(active_effects)
+                round_sentiment_shift += agg.sentiment_shift
+                log.info(
+                    "  R%d publication effects: %d active, sentiment=%+.3f, "
+                    "participation=%.2fx, urgency=%.2fx",
+                    round_idx, len(active_effects), agg.sentiment_shift,
+                    agg.participation_modifier, agg.urgency_modifier,
+                )
+
             rounds.append(
                 RoundRecord(
                     round_idx=round_idx,
@@ -1490,6 +1537,9 @@ async def run_simulation(
                     class_flows=class_flows,
                     publications_this_round=publications_this_round,
                     external_events_injected=len(external_for_round),
+                    limit_board_state=limit_board.state.value,
+                    limit_board_unfilled=limit_board.unfilled_volume,
+                    limit_board_seal=limit_board.seal_strength(effective_adv) if not instrument_universe else 0.0,
                 )
             )
             safe_emit(
