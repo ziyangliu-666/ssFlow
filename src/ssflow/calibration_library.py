@@ -418,20 +418,20 @@ def _build_library() -> list[CalibrationEvent]:
         date="2025-03-31",
         ticker="000615.SZ",
         market="ashare",
-        board="main",
+        board="main",   # Main board; *ST applied after initial crash day
         event_type="delisting_risk",
         prev_close=3.85,
         float_market_cap=8.5,             # ~8.5亿 float (micro cap)
         adv_20d=12_000_000,
         adv_value_20d=46_000_000,         # ~4600万元/日
-        day1_open=3.47,                   # -10% one-word limit down
-        day1_close=3.47,
-        day1_high=3.47,
-        day1_low=3.47,
+        day1_open=3.46,                   # -10% one-word limit down (涨跌停价)
+        day1_close=3.46,
+        day1_high=3.46,
+        day1_low=3.46,
         day1_volume=500_000,              # Nearly zero — all sellers, no buyers
         day1_turnover=1_735_000,
         day1_limit_status="one_word_down",
-        path_close=[3.47, 3.12, 2.81, 2.53, 2.28],
+        path_close=[3.46, 3.11, 2.80, 2.52, 2.27],
         path_volume=[500_000, 800_000, 1_200_000, 2_000_000, 3_500_000],
         path_limit_status=[
             "one_word_down", "one_word_down", "one_word_down",

@@ -171,12 +171,56 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
     return "\n".join(lines)
 
 
+def _render_execution_state(round_record, currency: str = "CNY") -> str:
+    """Render limit-board execution diagnostics.
+
+    Only emits content when limit_board_state != "normal" to avoid
+    cluttering normal rounds.
+    """
+    state = getattr(round_record, "limit_board_state", "normal")
+    if state == "normal":
+        return ""
+
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+    big_div = fmt["big_divisor"]
+    big_unit = fmt["big_unit"]
+
+    unfilled = getattr(round_record, "limit_board_unfilled", 0.0)
+    seal = getattr(round_record, "limit_board_seal", 0.0)
+    avg_fill = getattr(round_record, "avg_fill_rate", 1.0)
+    total_unfilled = getattr(round_record, "total_unfilled_volume", 0.0)
+    total_t1 = getattr(round_record, "total_t1_blocked", 0)
+
+    # Count unfilled orders (class_flows with fill_rate < 1.0)
+    n_unfilled_orders = 0
+    if hasattr(round_record, "class_flows") and round_record.class_flows:
+        n_unfilled_orders = sum(
+            1 for cf in round_record.class_flows
+            if getattr(cf, "fill_rate", 1.0) < 1.0
+        )
+
+    state_label = state.upper().replace("_", " ")
+
+    lines = [
+        f"\n### 执行状态 / Execution State",
+        f"- 涨跌停状态: **{state_label}**",
+        f"- 封单量: {sym}{unfilled / big_div:.2f}{big_unit} (封单强度: {seal:.2f})",
+        f"- 平均成交率: {avg_fill * 100:.0f}% ({n_unfilled_orders}笔订单未成交)",
+    ]
+    if total_t1 > 0:
+        lines.append(f"- T+1锁定: {total_t1}笔卖单被限制")
+
+    return "\n".join(lines) + "\n"
+
+
 def _render_round_block(result: "OasisSimResult", round_record) -> str:
     currency = _event_currency(result)
     sym = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])["symbol"]
 
     pub_section = _render_round_publications(round_record.publications_this_round)
     flow_section = _render_round_order_flow(result, round_record)
+    exec_section = _render_execution_state(round_record, currency)
 
     delta_pct_str = f"{round_record.delta_pct * 100:+.2f}%"
     external_marker = ""
@@ -193,7 +237,7 @@ def _render_round_block(result: "OasisSimResult", round_record) -> str:
 
 ### Order flow
 {flow_section}
-
+{exec_section}
 ---
 """
 

@@ -126,6 +126,9 @@ class RoundRecord:
     limit_board_state: str = "normal"      # BoardState value
     limit_board_unfilled: float = 0.0      # Unfilled queue volume
     limit_board_seal: float = 0.0          # Seal strength (unfilled/ADV)
+    avg_fill_rate: float = 1.0             # Average fill rate across all personas
+    total_unfilled_volume: float = 0.0     # Total unfilled volume this round
+    total_t1_blocked: int = 0              # Total T+1 blocked sell attempts
 
 
 @dataclass
@@ -784,6 +787,129 @@ async def run_simulation(
                                     "limit board reset at %.2f, T+1 ledger cleared",
                                     round_idx, curr_day, current_price,
                                 )
+
+            # 0.6. Pre-open auction: estimate the opening shock and pre-set
+            #      the limit board state BEFORE any agent trades this day.
+            #      Without this, the first round of each day trades as if the
+            #      board is NORMAL, even when the event shock should immediately
+            #      create a one-word limit-down/up.
+            from .limit_board import gap_open as _gap_open
+
+            _is_new_trading_day = False
+            if round_idx == 0:
+                _is_new_trading_day = True
+            elif round_schedule is not None:
+                rd = round_schedule.get_round(round_idx)
+                prev_rd = round_schedule.get_round(round_idx - 1)
+                if rd and prev_rd:
+                    _is_new_trading_day = (
+                        int(rd.hours_since_event // 24)
+                        > int(prev_rd.hours_since_event // 24)
+                    )
+
+            if _is_new_trading_day:
+                # Estimate overnight sentiment for the gap-open model.
+                if round_idx == 0:
+                    # First round: estimate from event type severity.
+                    _severity_map = {
+                        "delisting_risk": -0.9,
+                        "geopolitical": -0.7,
+                        "supply_shock": 0.5,
+                        "mania": 0.8,
+                        "policy": 0.6,
+                        "earnings": 0.0,  # direction depends on context
+                    }
+                    _overnight_sent = _severity_map.get(
+                        event.event_type or "", 0.0
+                    )
+                    # If the calibration event provides an actual day-1 open, use
+                    # the implied gap direction instead of the heuristic map.
+                    _day1_open = getattr(event, "day1_open", None)
+                    if (
+                        _day1_open is not None
+                        and event.current_price
+                        and event.current_price > 0
+                    ):
+                        _overnight_sent = max(
+                            -1.0,
+                            min(
+                                1.0,
+                                (_day1_open - event.current_price)
+                                / event.current_price
+                                * 10.0,  # scale small gap to [-1, 1]
+                            ),
+                        )
+                else:
+                    # Later days: momentum from previous day's cumulative move.
+                    _cum_delta = (
+                        (current_price / initial_price - 1.0)
+                        if initial_price > 0
+                        else 0.0
+                    )
+                    _overnight_sent = max(-1.0, min(1.0, _cum_delta * 3.0))
+
+                # Gap volatility is event-type-dependent: extreme events
+                # (delisting, geopolitical) can gap to the limit on day 1,
+                # while moderate events (earnings) produce small gaps.
+                # On later days, scale by absolute sentiment magnitude.
+                _vol_by_type = {
+                    "delisting_risk": 0.25,
+                    "geopolitical": 0.15,
+                    "supply_shock": 0.10,
+                    "mania": 0.12,
+                    "policy": 0.10,
+                    "earnings": 0.05,
+                }
+                if round_idx == 0:
+                    _gap_vol = _vol_by_type.get(event.event_type or "", 0.05)
+                else:
+                    # Later days: scale by momentum strength
+                    _abs_sent = abs(_overnight_sent)
+                    _gap_vol = 0.05 + 0.10 * max(0.0, _abs_sent - 0.3)
+                _open_price = _gap_open(
+                    prev_close=limit_board.prev_close,
+                    overnight_sentiment=_overnight_sent,
+                    board_type=_board_type,
+                    volatility=_gap_vol,
+                )
+
+                # If the open price diverges from prev_close, simulate a
+                # pre-open auction that moves the board state before trading.
+                _gap_delta = (
+                    (_open_price - limit_board.prev_close)
+                    / limit_board.prev_close
+                    if limit_board.prev_close > 0
+                    else 0.0
+                )
+                _clamped_gap = limit_board.clamp_delta(_gap_delta)
+                if abs(_clamped_gap) > 0.001:
+                    # Simulate the auction: at-limit opens have extreme
+                    # order imbalance (one side >> the other).
+                    if _clamped_gap > 0:
+                        limit_board.update(
+                            _clamped_gap,
+                            buy_volume=1e10,
+                            sell_volume=1e8,
+                        )
+                    else:
+                        limit_board.update(
+                            _clamped_gap,
+                            buy_volume=1e8,
+                            sell_volume=1e10,
+                        )
+                    limit_board.current_price = _open_price
+                    # Adjust the running price so agents see the post-gap level
+                    current_price = _open_price
+                    log.info(
+                        "  R%d PRE-OPEN AUCTION: gap %.2f%% → board %s, "
+                        "price %.2f → %.2f (sentiment=%.2f)",
+                        round_idx,
+                        _gap_delta * 100,
+                        limit_board.state.value,
+                        limit_board.prev_close,
+                        limit_board.current_price,
+                        _overnight_sent,
+                    )
 
             # Pre-compute inactive trader IDs for this round
             inactive_trader_ids: set[str] = set()
@@ -1691,6 +1817,12 @@ async def run_simulation(
                     except Exception:
                         pass  # Unknown type — skip
 
+            # ── Aggregate fill metrics from class_flows ──
+            _fill_rates = [cf.fill_rate for cf in class_flows if cf.fill_rate is not None]
+            _avg_fill = (sum(_fill_rates) / len(_fill_rates)) if _fill_rates else 1.0
+            _total_unfilled = sum(cf.unfilled_volume for cf in class_flows)
+            _total_t1 = sum(cf.t1_blocked_sells for cf in class_flows)
+
             rounds.append(
                 RoundRecord(
                     round_idx=round_idx,
@@ -1704,6 +1836,9 @@ async def run_simulation(
                     limit_board_state=limit_board.state.value,
                     limit_board_unfilled=limit_board.unfilled_volume,
                     limit_board_seal=limit_board.seal_strength(effective_adv) if not instrument_universe else 0.0,
+                    avg_fill_rate=_avg_fill,
+                    total_unfilled_volume=_total_unfilled,
+                    total_t1_blocked=_total_t1,
                 )
             )
             safe_emit(
@@ -1716,6 +1851,11 @@ async def run_simulation(
                 class_flows_count=len(class_flows),
                 price_after=float(price_after),
                 net_flow_total=float(net_flow_total),
+                limit_board_state=limit_board.state.value,
+                fill_rate=float(_avg_fill),
+                unfilled_volume=float(_total_unfilled),
+                t1_blocked=int(_total_t1),
+                seal_strength=float(limit_board.seal_strength(effective_adv) if not instrument_universe else 0.0),
             )
 
             n_traders_total = sum(1 for p in personas if p.sandbox is not None)
