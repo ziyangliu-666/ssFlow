@@ -21,6 +21,7 @@ from typing import Any
 
 from .instrument import Instrument, InstrumentUniverse
 from .llm_client import chat_json_sync
+from .market_context import fetch_market_contexts
 from .market_data import fetch_kline_30d, fetch_market_quote
 
 log = logging.getLogger(__name__)
@@ -188,6 +189,28 @@ async def distill(
         raise ValueError(
             f"Distillation: all instruments had zero prices for: {topic!r}"
         )
+
+    # Step 4: Fetch rich market context (holders, margin) for all instruments
+    if market in ("ashare", "a-share", "cn-equity"):
+        try:
+            contexts = await fetch_market_contexts(
+                [inst.ticker for inst in instruments]
+            )
+            for inst in instruments:
+                ctx = contexts.get(inst.ticker)
+                if ctx:
+                    inst.holdings_by_persona = ctx.holdings_by_persona
+                    inst.margin_long_balance = ctx.margin_long_balance
+                    inst.margin_short_balance = ctx.margin_short_balance
+                    if ctx.holdings_by_persona:
+                        log.info(
+                            "  %s holder structure: %s",
+                            inst.ticker,
+                            {k: f"{v:.1f}%" for k, v in ctx.holdings_by_persona.items()
+                             if v > 0.5},
+                        )
+        except Exception as exc:
+            log.warning("Market context fetch failed, continuing without: %s", exc)
 
     universe = InstrumentUniverse(instruments=instruments, topic=topic)
 

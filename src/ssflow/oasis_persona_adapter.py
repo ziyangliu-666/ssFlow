@@ -245,6 +245,20 @@ def _user_info_for(
                     f"不指定标的的交易指令将被视为观望.\n"
                     f"你可以一轮内对不同标的分别下单.\n"
                 )
+                # Append per-instrument market context (holdings, margin)
+                ctx_lines = []
+                for inst in instrument_universe.instruments:
+                    parts = []
+                    if inst.holdings_by_persona and persona.id in inst.holdings_by_persona:
+                        parts.append(f"你这类持仓占比约{inst.holdings_by_persona[persona.id]:.1f}%")
+                    if inst.margin_long_balance:
+                        parts.append(f"融资余额{inst.margin_long_balance/1e8:.0f}亿")
+                    if parts:
+                        ctx_lines.append(f"  {inst.ticker}: {', '.join(parts)}")
+                if ctx_lines:
+                    profile_block += (
+                        f"\n# 市场微观结构\n" + "\n".join(ctx_lines) + "\n"
+                    )
         else:
             # Legacy fixed-action mode
             action_names = [a["name"] for a in persona.sandbox.action_space]

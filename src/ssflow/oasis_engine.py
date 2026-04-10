@@ -466,11 +466,19 @@ async def run_simulation(
     multi_prices_for_spawn = (
         instrument_universe.prices() if instrument_universe is not None else None
     )
+    # Build {ticker: {persona_id: pct}} from instrument holder data
+    holdings_by_persona_map: dict[str, dict[str, float]] | None = None
+    if instrument_universe is not None:
+        holdings_by_persona_map = {}
+        for inst in instrument_universe.instruments:
+            if inst.holdings_by_persona:
+                holdings_by_persona_map[inst.ticker] = inst.holdings_by_persona
     for persona in personas:
         if persona.sandbox is not None:
             agent_pops[persona.id] = spawn_agents(
                 persona, current_price=initial_price, rng=spawn_rng,
                 multi_prices=multi_prices_for_spawn,
+                holdings_by_persona=holdings_by_persona_map or None,
             )
 
     publication_registry = PublicationRegistry()

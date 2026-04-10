@@ -75,8 +75,17 @@ class Instrument:
     # Recent 30-day K-line data
     kline_30d: list[dict[str, Any]] = field(default_factory=list)
 
+    # Holdings by persona type (% of total/float shares).
+    # Populated by market_context.fetch_market_context during distillation.
+    # e.g. {"northbound_qfii": 12.5, "mutual_fund_active_pm": 8.3, ...}
+    holdings_by_persona: dict[str, float] = field(default_factory=dict)
+
+    # Margin balance (CNY)
+    margin_long_balance: float = 0
+    margin_short_balance: float = 0
+
     def to_serializable(self) -> dict[str, Any]:
-        return {
+        d = {
             "ticker": self.ticker,
             "name": self.name,
             "market": self.market,
@@ -87,6 +96,13 @@ class Instrument:
             "financials": dict(self.financials),
             "kline_30d": list(self.kline_30d),
         }
+        if self.holdings_by_persona:
+            d["holdings_by_persona"] = dict(self.holdings_by_persona)
+        if self.margin_long_balance:
+            d["margin_long_balance"] = self.margin_long_balance
+        if self.margin_short_balance:
+            d["margin_short_balance"] = self.margin_short_balance
+        return d
 
 
 @dataclass

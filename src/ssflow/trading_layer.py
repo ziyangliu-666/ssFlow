@@ -154,18 +154,18 @@ def spawn_agents(
     *,
     primary_ticker: str = _DEFAULT_TICKER,
     multi_prices: dict[str, float] | None = None,
+    holdings_by_persona: dict[str, dict[str, float]] | None = None,
 ) -> list[Agent]:
     """Sample N agent instances from a persona's sandbox config.
 
-    Same RNG-deterministic semantics as the legacy sandbox.spawn_agents:
-    feeding the same `rng` and same persona produces the same agent population.
-
     Args:
         primary_ticker: which ticker to assign initial holdings to in
-            single-instrument mode. Defaults to _DEFAULT_TICKER.
+            single-instrument mode.
         multi_prices: when provided (multi-instrument mode), initial holdings
-            are spread equally across all tickers using each ticker's price.
-            This ensures agents CAN sell from round 0, not just buy.
+            are distributed across tickers.
+        holdings_by_persona: {ticker: {persona_id: pct}} from real holder data.
+            When provided, initial positions are allocated proportionally to
+            the persona's real ownership stake in each instrument.
     """
     sandbox = persona.sandbox
     if sandbox is None:
@@ -192,12 +192,35 @@ def spawn_agents(
         cash = capital - holdings_value
 
         if multi_prices and len(multi_prices) > 0:
-            # Multi-instrument: spread initial holdings equally across all tickers
-            per_ticker_value = holdings_value / len(multi_prices)
+            # Multi-instrument: allocate initial holdings based on real
+            # holder structure data when available.
             holdings = {}
-            for ticker, price in multi_prices.items():
-                if price > 0:
-                    holdings[ticker] = per_ticker_value / price
+            if holdings_by_persona and persona.id in holdings_by_persona:
+                # Data-driven: this persona type owns X% of each instrument.
+                # Scale by holdings_value (not capital) to get the right NAV.
+                total_weight = 0.0
+                weights: dict[str, float] = {}
+                for tk in multi_prices:
+                    pct = holdings_by_persona.get(tk, {}).get(persona.id, 0)
+                    weights[tk] = pct
+                    total_weight += pct
+                if total_weight > 0:
+                    for tk, price in multi_prices.items():
+                        if price > 0 and weights.get(tk, 0) > 0:
+                            alloc = holdings_value * (weights[tk] / total_weight)
+                            holdings[tk] = alloc / price
+                else:
+                    # Persona type not found in any instrument's holders — equal split
+                    per_ticker_value = holdings_value / len(multi_prices)
+                    for tk, price in multi_prices.items():
+                        if price > 0:
+                            holdings[tk] = per_ticker_value / price
+            else:
+                # No holder data: spread equally
+                per_ticker_value = holdings_value / len(multi_prices)
+                for tk, price in multi_prices.items():
+                    if price > 0:
+                        holdings[tk] = per_ticker_value / price
             agents.append(
                 Agent(
                     persona_id=persona.id,
