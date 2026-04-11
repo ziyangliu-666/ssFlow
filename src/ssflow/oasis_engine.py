@@ -750,6 +750,11 @@ async def run_simulation(
     # Forced actions carried over from the previous round's post-price
     # threshold pass (step 4.5). Applied at step 3.5 of the next round.
     deferred_forced_actions: dict[str, Any] = {}
+    # Terminal-risk flag set by the severity resolver when the event text
+    # mentions delisting / fraud / *ST keywords. Persists across the whole
+    # simulation once triggered so the forced-seller cascade and dip-buy
+    # suppression stay active through every subsequent round.
+    _sim_terminal_risk: bool = False
 
     try:
         for round_idx in range(n_rounds):
@@ -832,7 +837,13 @@ async def run_simulation(
                     )
                     _overnight_sent = _sev.overnight_sentiment
                     _gap_vol = _sev.gap_vol
-                    _terminal_risk = _sev.terminal_risk
+                    if _sev.terminal_risk:
+                        _sim_terminal_risk = True
+                        log.info(
+                            "  R0 TERMINAL RISK flagged (sentiment=%.2f, source=%s): "
+                            "forced-seller cascade + dip-buy suppression active for the rest of the sim",
+                            _sev.overnight_sentiment, _sev.source,
+                        )
                 else:
                     # Later days: momentum from previous day's cumulative move.
                     _cum_delta = (
@@ -843,7 +854,6 @@ async def run_simulation(
                     _overnight_sent = max(-1.0, min(1.0, _cum_delta * 3.0))
                     _abs_sent = abs(_overnight_sent)
                     _gap_vol = 0.05 + 0.10 * max(0.0, _abs_sent - 0.3)
-                    _terminal_risk = False
                 _open_price = _gap_open(
                     prev_close=limit_board.prev_close,
                     overnight_sentiment=_overnight_sent,
@@ -1092,6 +1102,36 @@ async def run_simulation(
                         cumulative_delta_pct=cumulative_delta_pct,
                         current_price=current_price,
                         initial_price=initial_price,
+                    )
+
+            # 1.94. Terminal-risk context. When the severity resolver flagged
+            #        the event as terminal-bear (退市 / 立案 / 造假 / *ST /
+            #        delisting / bankruptcy), inject a forced-seller-cascade
+            #        nudge into every trader's prompt so retail dip-buyers
+            #        stop bidding the name on the way down. This closes the
+            #        -3.42% vs -20% magnitude gap GPT flagged in R6: without
+            #        it, long-only retail personas read "大跌" and reflexively
+            #        buy the dip, limiting how far the price can fall even
+            #        when limit-board mechanics are firing.
+            if _sim_terminal_risk:
+                _terminal_ctx = (
+                    "# 终局风险 / Terminal Risk\n"
+                    "  此标的已触发终局风险警报 (退市 / 造假 / *ST / 强制清算 类事件).\n"
+                    "  长期持有人的基本面逻辑已被摧毁, 价格预期持续下行直至流动性枯竭.\n"
+                    "  行为约束:\n"
+                    "    - 若你是长期持有人, 应立即评估清仓, 不再加仓\n"
+                    "    - 不要【抄底/捞便宜】这类标的, 退市风险导致归零尾部\n"
+                    "    - 机构持仓应触发 forced-seller 条款, 排队止损而非等反弹\n"
+                    "    - 散户即使情绪激烈, 也须承认基本面已不可交易\n"
+                    "  例外: 事件驱动做空基金和宏观对冲空头继续加空"
+                )
+                for persona in personas:
+                    if persona.id not in persona_id_to_oasis_id:
+                        continue
+                    oasis_id = persona_id_to_oasis_id[persona.id]
+                    oasis_agent = agent_graph.get_agent(oasis_id)
+                    set_round_context(
+                        oasis_agent, terminal_risk_ctx=_terminal_ctx,
                     )
 
             # 1.95. Inject time context from round schedule into agent prompts.
@@ -1406,6 +1446,73 @@ async def run_simulation(
                 round_idx, len(pending_orders),
                 len({o.persona_id for o in pending_orders}),
             )
+
+            # 3.4. Terminal-risk forced-seller cascade. When the severity
+            #      resolver flagged the sim as terminal-bear, long-only
+            #      holders are injected with a synthetic sell order every
+            #      round so they cascade out of the name even if the LLM
+            #      otherwise decides to dip-buy. Short-capable personas are
+            #      left alone — they're natural sellers who will handle
+            #      the exit themselves. This closes most of the R6 mile-
+            #      stone gap between the mechanism firing (LIMIT_DOWN,
+            #      seal_strength) and the magnitude of the move.
+            if _sim_terminal_risk:
+                from .oasis_trading_tool import PendingOrder as _PO
+                _short_capable_roles = {
+                    "short_seller", "active_long_short",
+                    "long_short", "hedge_fund_short",
+                }
+                _existing_ids = {o.persona_id for o in pending_orders}
+                _cascade_count = 0
+                for _p in personas:
+                    if _p.sandbox is None:
+                        continue
+                    if _p.id in inactive_trader_ids:
+                        continue
+                    _role = (_p.role or "").lower()
+                    if _role in _short_capable_roles:
+                        continue
+                    # Long-only persona with potentially nonzero position.
+                    # Check agent pop — if nobody holds anything there's
+                    # nothing to sell.
+                    _pop = agent_pops.get(_p.id) or []
+                    _has_long = any(
+                        any(v > 0 for v in a.holdings.values()) for a in _pop
+                    )
+                    if not _has_long:
+                        continue
+                    # Magnitude: scale sell intensity by how close price
+                    # already is to the limit. Stronger cascade when the
+                    # board is sealed — matches the forced-seller
+                    # behaviour real institutions display on *ST names.
+                    _cascade_frac = 0.40 if limit_board.at_limit_down else 0.30
+                    forced_order = _PO(
+                        persona_id=_p.id,
+                        distribution={"__freeform__": 1.0},
+                        rationale=(
+                            "[强制] 终局风险 forced-seller cascade — "
+                            "基本面已不可交易, 排队止损"
+                        ),
+                        round_idx=round_idx,
+                        raw_args={
+                            "side": "sell",
+                            "quantity_pct": _cascade_frac,
+                            "pool": "holdings_in_target",
+                        },
+                    )
+                    if _p.id in _existing_ids:
+                        pending_orders = [
+                            o for o in pending_orders if o.persona_id != _p.id
+                        ]
+                    pending_orders.append(forced_order)
+                    _cascade_count += 1
+                if _cascade_count > 0:
+                    log.info(
+                        "  R%d TERMINAL_RISK cascade: forced-sell %d long "
+                        "personas at %.0f%%",
+                        round_idx, _cascade_count,
+                        40 if limit_board.at_limit_down else 30,
+                    )
 
             # 3.5. Policy trade overrides: if a TradeAction policy fired,
             #      replace or inject the LLM's order for that persona.

@@ -64,6 +64,7 @@ def set_round_context(
     time_ctx: str = "",
     conviction_ctx: str = "",
     pub_effects_ctx: str = "",
+    terminal_risk_ctx: str = "",
 ) -> None:
     """Stash per-round context on an agent for the patched action loop to pick
     up. The patched ``perform_action_by_llm`` prepends these strings to the
@@ -78,6 +79,8 @@ def set_round_context(
         ctx["conviction_ctx"] = conviction_ctx
     if pub_effects_ctx:
         ctx["pub_effects_ctx"] = pub_effects_ctx
+    if terminal_risk_ctx:
+        ctx["terminal_risk_ctx"] = terminal_risk_ctx
     agent._ssflow_round_context = ctx
 
 
@@ -172,10 +175,11 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
         time_ctx = round_ctx.get("time_ctx", "")
         conviction_ctx = round_ctx.get("conviction_ctx", "")
         pub_effects_ctx = round_ctx.get("pub_effects_ctx", "")
+        terminal_risk_ctx = round_ctx.get("terminal_risk_ctx", "")
         extra_header = ""
-        if time_ctx or conviction_ctx or pub_effects_ctx:
+        if any((time_ctx, conviction_ctx, pub_effects_ctx, terminal_risk_ctx)):
             extra_header = (
-                f"{time_ctx}\n{conviction_ctx}\n{pub_effects_ctx}\n"
+                f"{terminal_risk_ctx}\n{time_ctx}\n{conviction_ctx}\n{pub_effects_ctx}\n"
             ).strip("\n") + "\n\n"
 
         if is_trader:

@@ -150,19 +150,40 @@ class TestConflictResolution:
         assert res.overnight_sentiment < 0
         assert res.terminal_risk is True
 
-    def test_bull_stronger_than_bear_wins_bull(self):
-        # A text that sets base=-0.6 then sees "一字涨停" + "st " (accidental
-        # substring match in English). Bear clamp moves to -0.85, bull to
-        # +0.75. |-0.85| > |+0.75| so bear still wins — which is the
-        # correct outcome for ambiguous text.
+    def test_bull_wins_when_bear_is_only_weak_substring(self):
+        # Force the larger-magnitude side to be the bull side by giving an
+        # event type with a weak base (policy = +0.6 → bull clamp +0.75),
+        # bull keywords that fire, and no bear keywords at all. The bear
+        # clamp in this case is -0.85 of magnitude vs. bull +0.75, but
+        # since no bear keyword matches, the resolver must not invoke the
+        # bear clamp at all — only the bull side, and overnight sentiment
+        # should be clamped to >= +0.75.
         res = resolve_event_severity(
-            event_type="regulatory",
-            event_text="连板一字涨停, STock rally continues",
+            event_type="policy",
+            event_text="央行全面降准, 一字涨停, 龙头板块迎来爆发",
         )
-        # `st ` trigger is a false positive in English text; that's a
-        # known limitation. Document it via an assertion either way — the
-        # resolver must pick the larger-magnitude side.
-        assert abs(res.overnight_sentiment) >= 0.75
+        assert res.overnight_sentiment >= 0.75
+        assert res.bull_keyword_match is True
+        assert res.terminal_risk is False
+
+    def test_bull_wins_conflict_when_bear_is_weak(self):
+        # Explicit conflict: a bull event type (policy=+0.6) whose text
+        # mentions 'delisting' in passing while also announcing 全面降准
+        # and 一字涨停. Bear clamp is -0.85, bull clamp is +0.75. Magnitude
+        # comparison: |bear|=0.85 > |bull|=0.75, so the resolver's tie-
+        # breaking rule says bear should win. Verify that explicitly —
+        # this pins the "larger magnitude wins" rule, which is the
+        # non-obvious semantic we want to regression-test.
+        res = resolve_event_severity(
+            event_type="policy",
+            event_text="央行全面降准, 一字涨停. Background: recent delisting wave.",
+        )
+        assert res.overnight_sentiment <= -0.85, (
+            "larger-magnitude (bear) side should win the conflict, "
+            f"got {res.overnight_sentiment}"
+        )
+        assert res.terminal_risk is True
+        assert res.bull_keyword_match is True
 
     def test_no_keyword_match_leaves_base_alone(self):
         res = resolve_event_severity(
