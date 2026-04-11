@@ -259,10 +259,11 @@ const cumulativeClass = computed(() => {
   return ''
 })
 
-// Primary ticker (for chart accent color). In replay we can't rely on
-// session.instrumentUniverse for direct-link visits, so extract the
-// event_subject from the first price_updated event's tickers or fall
-// back to the first ticker we see.
+// Primary ticker (for chart accent color). Priority order:
+//   1. session.instrumentUniverse event_subject (live session state)
+//   2. simulation_start.event_subject_ticker (engine-emitted, survives
+//      direct-link replays where session state is empty)
+//   3. first key of the full multi trajectories dict (best-effort fallback)
 const primaryTicker = computed(() => {
   const iu = session.instrumentUniverse
   if (iu && iu.instruments) {
@@ -271,20 +272,32 @@ const primaryTicker = computed(() => {
     )
     if (subj) return subj.ticker
   }
-  // Fallback: first key in the full multi trajectories dict (order
-  // preserved from the backend, where event_subject is typically emitted
-  // first by the distillation / engine).
+  const startEvt = allEvents.value.find(e => e && e.type === 'simulation_start')
+  if (startEvt && startEvt.event_subject_ticker) return startEvt.event_subject_ticker
   const fmt = fullMultiTrajectories.value
   if (fmt && Object.keys(fmt).length) return Object.keys(fmt)[0]
   return ''
 })
 
 const instrumentMeta = computed(() => {
-  const iu = session.instrumentUniverse
   const m = {}
+  // First pass: session.instrumentUniverse (populated when we came
+  // through Home → Setup in this browser session).
+  const iu = session.instrumentUniverse
   if (iu && iu.instruments) {
     for (const inst of iu.instruments) {
       m[inst.ticker] = inst
+    }
+  }
+  // Second pass: simulation_start.tickers (sent by the engine so
+  // direct-link replays get ticker names without needing live
+  // session state). Only adds when the session pass missed.
+  const startEvt = allEvents.value.find(e => e && e.type === 'simulation_start')
+  if (startEvt && Array.isArray(startEvt.tickers)) {
+    for (const entry of startEvt.tickers) {
+      if (entry && entry.ticker && !m[entry.ticker]) {
+        m[entry.ticker] = { ticker: entry.ticker, name: entry.name || entry.ticker }
+      }
     }
   }
   return m
@@ -454,6 +467,20 @@ function applyEvent (e) {
       currentPrice.value = payload.initial_price || 0
       totalRounds.value = payload.n_rounds || 0
       priceTrajectory.value = [payload.initial_price || 0]
+      // Seed per-ticker trajectories from the authoritative opening
+      // prices, same as Run view. Replay always plays simulation_start
+      // first so this lands before any price_updated.
+      if (payload.opening_prices && typeof payload.opening_prices === 'object') {
+        const seed = {}
+        for (const [ticker, price] of Object.entries(payload.opening_prices)) {
+          if (typeof price === 'number' && price > 0) {
+            seed[ticker] = [price]
+          }
+        }
+        if (Object.keys(seed).length) {
+          multiPriceTrajectories.value = seed
+        }
+      }
       break
     case 'round_start':
       currentRound.value = payload.round_idx || 0
@@ -542,8 +569,18 @@ function buildFullTrajectory () {
 // fixed {ticker: [prices]} dict from the entire event log. The chart
 // uses this as its stable x-axis; the live multiPriceTrajectories
 // (which grow during playback) are what drive the ticker grid.
+// Prepends opening_prices from simulation_start so the first plotted
+// point is the actual open, not the post-R0 price.
 function buildFullMultiTrajectories () {
   const result = {}
+  const startEvt = allEvents.value.find(e => e && e.type === 'simulation_start')
+  if (startEvt && startEvt.opening_prices && typeof startEvt.opening_prices === 'object') {
+    for (const [ticker, price] of Object.entries(startEvt.opening_prices)) {
+      if (typeof price === 'number' && price > 0) {
+        result[ticker] = [price]
+      }
+    }
+  }
   for (const e of allEvents.value) {
     if (e.type === 'price_updated' && e.prices && typeof e.prices === 'object') {
       for (const [ticker, price] of Object.entries(e.prices)) {

@@ -219,25 +219,41 @@ const tickInterval = ref(null)
 // Multi-instrument price trajectories: {ticker: [prices]}
 const multiPriceTrajectories = ref(null)
 
-// The ticker we mark with the brand accent (event_subject). Derived from
-// session.instrumentUniverse when available; otherwise left blank and the
-// chart falls back to "first series = primary".
+// The ticker we mark with the brand accent (event_subject). Prefers
+// session.instrumentUniverse; falls back to the engine-emitted
+// event_subject_ticker from the simulation_start event we captured.
 const primaryTicker = computed(() => {
   const iu = session.instrumentUniverse
-  if (!iu || !iu.instruments) return ''
-  const subject = iu.instruments.find(
-    inst => inst.relationship === 'event_subject' || inst.relationship === 'primary'
-  )
-  return subject ? subject.ticker : (iu.instruments[0]?.ticker || '')
+  if (iu && iu.instruments) {
+    const subject = iu.instruments.find(
+      inst => inst.relationship === 'event_subject' || inst.relationship === 'primary'
+    )
+    if (subject) return subject.ticker
+    if (iu.instruments[0]) return iu.instruments[0].ticker
+  }
+  const startEvt = events.value.find(e => e && e._type === 'simulation_start')
+  if (startEvt && startEvt.event_subject_ticker) return startEvt.event_subject_ticker
+  return ''
 })
 
-// Build a map of ticker → instrument metadata for name lookup.
+// Build a map of ticker → instrument metadata for name lookup. Merges
+// session.instrumentUniverse (live) with simulation_start.tickers
+// (engine-emitted) so direct-link Run views still get proper names.
 const instrumentMeta = computed(() => {
-  const iu = session.instrumentUniverse
-  if (!iu || !iu.instruments) return {}
   const m = {}
-  for (const inst of iu.instruments) {
-    m[inst.ticker] = inst
+  const iu = session.instrumentUniverse
+  if (iu && iu.instruments) {
+    for (const inst of iu.instruments) {
+      m[inst.ticker] = inst
+    }
+  }
+  const startEvt = events.value.find(e => e && e._type === 'simulation_start')
+  if (startEvt && Array.isArray(startEvt.tickers)) {
+    for (const entry of startEvt.tickers) {
+      if (entry && entry.ticker && !m[entry.ticker]) {
+        m[entry.ticker] = { ticker: entry.ticker, name: entry.name || entry.ticker }
+      }
+    }
   }
   return m
 })
@@ -491,6 +507,21 @@ function _processEvent (type, payload) {
       totalRounds.value = payload.n_rounds || 0
       priceTrajectory.value = [payload.initial_price || 0]
       startTime.value = Date.now()
+      // Seed per-ticker trajectories from the authoritative opening
+      // prices the engine emits. Without this, tickerRows would
+      // compute % moves starting from the post-round-0 price and
+      // R1's first update would show +0% against itself.
+      if (payload.opening_prices && typeof payload.opening_prices === 'object') {
+        const seed = {}
+        for (const [ticker, price] of Object.entries(payload.opening_prices)) {
+          if (typeof price === 'number' && price > 0) {
+            seed[ticker] = [price]
+          }
+        }
+        if (Object.keys(seed).length) {
+          multiPriceTrajectories.value = seed
+        }
+      }
       break
     case 'round_start':
       currentRound.value = payload.round_idx || 0

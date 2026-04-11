@@ -594,6 +594,20 @@ async def run_simulation(
     cost_at_start = cost_tracker.total_cost_usd
     t0 = time.time()
 
+    # Per-ticker opening prices — critical for the multi-instrument
+    # frontend to compute honest % moves against the actual open
+    # instead of against the post-round-0 price (which is what
+    # price_updated.prices dicts start with). Every ticker in the
+    # universe is emitted here.
+    opening_prices = {
+        inst.ticker: float(inst.current_price)
+        for inst in instrument_universe.instruments
+        if inst.current_price > 0
+    }
+    opening_tickers = [
+        {"ticker": inst.ticker, "name": inst.name}
+        for inst in instrument_universe.instruments
+    ]
     safe_emit(
         event_sink,
         EVENT_SIMULATION_START,
@@ -606,6 +620,11 @@ async def run_simulation(
         initial_price=initial_price,
         price_currency=event_currency,
         adv_value=initial_adv,
+        # Multi-instrument authoritative opening state. Frontend prefers
+        # this dict over `initial_price` so all tickers get correct base.
+        opening_prices=opening_prices,
+        tickers=opening_tickers,
+        event_subject_ticker=_subject_ticker,
         lambda_used=lambda_used,
         n_personas=len(personas),
         n_traders=sum(1 for p in personas if p.sandbox is not None),

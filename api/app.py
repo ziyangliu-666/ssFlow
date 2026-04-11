@@ -947,7 +947,9 @@ def create_app() -> Flask:
         # Multi-instrument: walk the persisted events.json to compute a
         # per-ticker final-vs-opening distribution. The scorecard only
         # stores the event_subject's scalar, so we use the richer events
-        # file as the source of truth for peer-mode display.
+        # file as the source of truth for peer-mode display. Opening
+        # prices come from simulation_start.opening_prices (authoritative)
+        # and fall back to the first price_updated when missing (old sims).
         per_ticker_finals: list[dict] | None = None
         events_path = settings.reports_dir / f"{simulation_id}.events.json"
         if events_path.exists():
@@ -957,6 +959,12 @@ def create_app() -> Flask:
                 first_prices: dict[str, float] = {}
                 last_prices: dict[str, float] = {}
                 for e in events_list:
+                    if e.get("type") == "simulation_start":
+                        op = e.get("opening_prices") or {}
+                        if isinstance(op, dict):
+                            for t, p in op.items():
+                                if isinstance(p, (int, float)) and float(p) > 0:
+                                    first_prices[t] = float(p)
                     if e.get("type") != "price_updated":
                         continue
                     prices = e.get("prices") or {}
