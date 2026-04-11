@@ -73,11 +73,18 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
                 "avg_position_pct": 0.40,
                 "margin_utilization": 0.65,
                 "sentiment_score": 0.0,
+                # price_change_pct is written by entity_engine each round from
+                # the cumulative price move. It must be declared here so the
+                # threshold at line ~191 (retail FOMO at +15%) can compile
+                # against this entity — without it the threshold is silently
+                # dropped by sandbox_generator as "unknown state variable".
+                "price_change_pct": 0.0,
             },
             "default_labels": {
                 "avg_position_pct": "平均仓位(%)",
                 "margin_utilization": "融资利用率",
                 "sentiment_score": "情绪指数",
+                "price_change_pct": "涨跌幅(%)",
             },
             "persona_link": "retail_short_term_chaser",
         },
@@ -180,18 +187,25 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
         # sim has no structural mechanism pushing marginal capital INTO
         # the trade. Real 924-style events see institutions chasing the
         # breakout + retail FOMO as momentum compounds.
+        #
+        # Thresholds tightened 2026-04-12 after iter2 backtest showed
+        # policy rallies rarely cross the +15%/+20% gates within the sim
+        # horizon because the bear doom-loop caps cumulative upside
+        # before the FOMO gates trigger. Lower gates (+5% retail,
+        # +8% institutional) match real A-share behavior where
+        # institutions start chasing at the first +5-10% breakout day.
         {
             "entity_slot": "institutional_class",
-            "condition": "price_change_pct > 20.0",
-            "description": "累计涨超20% → 机构动量跟随买入15%",
+            "condition": "price_change_pct > 8.0",
+            "description": "累计涨超8% → 机构动量跟随买入15%",
             "effect_type": "force_action",
             "forced_side": "buy",
             "forced_quantity_pct": 0.15,
         },
         {
             "entity_slot": "retail_class",
-            "condition": "price_change_pct > 15.0",
-            "description": "累计涨超15% → 散户FOMO追涨加仓20%",
+            "condition": "price_change_pct > 5.0",
+            "description": "累计涨超5% → 散户FOMO追涨加仓20%",
             "effect_type": "force_action",
             "forced_side": "buy",
             "forced_quantity_pct": 0.20,

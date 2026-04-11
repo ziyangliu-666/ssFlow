@@ -117,10 +117,13 @@ def update_conviction_context(
     lawsuits produce secular bear trajectories; policy super-cycles
     produce secular bulls. Injecting "price too low → bounce likely" on
     a secular bear silently kills v1's reach on 药明康德-class events.
+
+    R0 handling: when the persona has no last_action yet (R0), we still
+    inject the event-fundamentals block so agents get the directional
+    prior immediately. Before this was added, R0 agents drifted with
+    feed sentiment and set the tone for the whole sim.
     """
-    if persona_id not in last_actions:
-        return
-    la = last_actions[persona_id]
+    la = last_actions.get(persona_id, {})
     cum_pct = cumulative_delta_pct * 100
     etype = (event_type or "").lower()
     is_bear_permanent = etype in _BEAR_PERMANENT_EVENT_TYPES
@@ -161,10 +164,50 @@ def update_conviction_context(
         price_comment = ""
 
     side_zh = {"buy": "买入", "sell": "卖出", "hold": "观望"}.get(
-        str(la.get("side", "")), str(la.get("side", ""))
+        str(la.get("side", "")), str(la.get("side", "") or "尚无上一轮")
     )
+    round_label = f"R{la.get('round_idx', -1) + 1}" if la else "R0 (首轮)"
+
+    # Event fundamental direction — explicit prior for agents
+    # so policy-bull and regulatory-bear events steer trader flow
+    # instead of drifting with feed sentiment. Before this line was
+    # added (2026-04-12), the ``round_sentiment_shift`` severity prior
+    # only affected Kyle's raw delta via the additive bias — agents'
+    # own decisions were still anchored on the OASIS feed, which
+    # skewed bearish on every event type. Result: policy rallies
+    # (CATL / 东财) got stuck in doom loop because agents saw the
+    # event text once at init and then followed social noise.
+    event_fundamentals = ""
+    if is_bull_permanent:
+        event_fundamentals = (
+            f"# 事件基本面 / Event Fundamentals\n"
+            f"  类型: {etype} — 结构性利好, 市场应持续消化为上行行情.\n"
+            f"  历史先例: 政策组合拳/供给冲击/需求爆发类事件, 月度级别\n"
+            f"    典型涨幅 +20~+80%, 领涨标的弹性更大.\n"
+            f"  预期方向: 上涨 (做空或过度看空会被轧空).\n"
+            f"  当前如果你在观望, 考虑是不是错过了入场窗口.\n"
+        )
+    elif is_bear_permanent:
+        event_fundamentals = (
+            f"# 事件基本面 / Event Fundamentals\n"
+            f"  类型: {etype} — 结构性利空, 基本面被永久重定价.\n"
+            f"  历史先例: 监管打击/制裁/欺诈类事件, 月度级别典型跌幅\n"
+            f"    -30~-60%, 受冲击最大的标的跌更深.\n"
+            f"  预期方向: 下跌 (抄底或赌反弹会继续亏损).\n"
+            f"  长期持有人应评估止损, 不要试图接飞刀.\n"
+        )
+    elif etype == "earnings":
+        event_fundamentals = (
+            f"# 事件基本面 / Event Fundamentals\n"
+            f"  类型: 业绩事件 — 基于市场对未来盈利预期的重估.\n"
+            f"  解读: 观察业绩 vs 一致预期的差距 + 管理层指引 + "
+            f"渠道反馈.\n"
+            f"  预期方向: 取决于 miss / beat 幅度, 读 event_text 判断.\n"
+        )
+
     conviction_text = (
-        f"# 市场状态 / Market State (R{la['round_idx'] + 1})\n"
+        f"{event_fundamentals}"
+        f"# 市场状态 / Market State ({round_label})\n"
         f"  事件前价格: {initial_price:.2f}\n"
         f"  当前价格: {current_price:.2f} (事件后 {cum_pct:+.1f}%)\n"
         f"{price_comment}"
@@ -404,6 +447,43 @@ def _user_info_for(
         if event.prior_consensus and event.prior_consensus.strip():
             profile_block += (
                 f"\n市场此前预期: {event.prior_consensus.strip()[:300]}\n"
+            )
+
+        # Event-type historical precedents. Baked into the system prompt
+        # at init time so every LLM call sees the directional context
+        # before reading the feed — NOT just in the per-round conviction
+        # context. Before this was added (2026-04-12), agents on CATL
+        # would see "锂电产能过剩担忧压制" (prior_consensus) and weight
+        # that narrative over the policy catalyst, driving R0 to -0%
+        # instead of +6%. Real 924 policy saw CATL rally +33.8% in
+        # 6 months despite the same overcapacity narrative, so the
+        # prior needs to be in the agent's head from the first prompt.
+        _etype = (event.event_type or "").lower()
+        if _etype in _BULL_PERMANENT_EVENT_TYPES:
+            profile_block += (
+                "\n# 历史先例 / Historical Precedents — 政策/供给结构性事件\n"
+                "  1. 政策组合拳 (降准+降息+证监会维稳+回购再贷款) "
+                "是中国资本市场最强的正面催化剂之一.\n"
+                "  2. 2015年7月、2018年末、2020年3月的类似政策环境下, "
+                "大盘都在 2-4 个月内 +20~+50%; 券商/新能源/成长股弹性翻倍.\n"
+                "  3. 先入者获利最大, 观望者错过入场窗口, "
+                "事后解释永远是\"我当时怕XX\".\n"
+                "  4. 任何关于\"结构性担忧\"(产能过剩/估值偏高/基本面疑虑) "
+                "的叙事在政策级利好面前都是次要的 — 真金白银的资金会先买后问.\n"
+                "  5. 如果你是多头机构或散户追涨者: 这是典型的抢筹窗口.\n"
+            )
+        elif _etype in _BEAR_PERMANENT_EVENT_TYPES:
+            profile_block += (
+                "\n# 历史先例 / Historical Precedents — 监管/制裁结构性事件\n"
+                "  1. 监管打击/制裁/欺诈类事件的第一波下跌往往只是开始, "
+                "后续几个月持续有机构被动抛售.\n"
+                "  2. 2021年教培行业整治、2018年CFIUS/外资准入收紧、"
+                "2020年瑞幸造假类事件, 受冲击标的 3-6 个月跌 -40~-70%.\n"
+                "  3. 试图抄底 \"超跌\" 的散户通常继续承受二次下跌, "
+                "机构止损会在 -20% 和 -30% 两次加速抛盘.\n"
+                "  4. 任何关于\"已经跌够了 / 价格反映充分\"的论据在结构性 "
+                "利空面前都需要警惕 — 基本面定价还在持续重估.\n"
+                "  5. 如果你是多头持有人: 这是典型的止损/减仓窗口.\n"
             )
 
     # Trader-specific instructions: counter-balance OASIS's "perform social

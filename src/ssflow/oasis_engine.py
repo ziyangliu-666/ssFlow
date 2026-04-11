@@ -57,6 +57,7 @@ from .event_bus import (
     EVENT_ERROR,
     EVENT_EXTERNAL_EVENT_INJECTED,
     EVENT_FORCE_ACTION_OVERRIDE,
+    EVENT_PERSONA_STATE_UPDATED,
     EVENT_PERSONA_THOUGHT,
     EVENT_POLICY_CREATED,
     EVENT_POLICY_FIRED,
@@ -101,6 +102,10 @@ from .oasis_persona_adapter import (
 )
 from .oasis_trading_tool import OrderCollector, PendingOrder
 from .persona import Persona
+from .self_model import (
+    build_evaluators_for_personas,
+)
+from .self_model.schema import RoundCtx as SelfModelRoundCtx, TradeResult as SelfModelTradeResult
 from .trading_layer import (
     Agent,
     ClassFlowResult,
@@ -476,6 +481,7 @@ async def run_simulation(
     instrument_universe: "InstrumentUniverse | None" = None,
     round_schedule: "RoundSchedule | None" = None,
     sim_graph: "SimGraph | None" = None,
+    self_model_enabled: bool = True,
 ) -> OasisSimResult:
     """Run a Phase I OASIS-based market simulation.
 
@@ -677,6 +683,29 @@ async def run_simulation(
                 holdings_by_persona=holdings_by_persona_map or None,
             )
 
+    # ── Self-model evaluators ──
+    # One per trader persona. Holds the per-persona structured state,
+    # utility weights, and render sections. Personas without an explicit
+    # `self_model:` block in their YAML (= all 39 hand-authored ashare
+    # personas) get the DEFAULT_SELF_MODEL bundle applied automatically.
+    # Evaluator updates happen after sync_population_state each round
+    # (so nav / pnl figures reflect the authoritative post-trade state),
+    # and rendered output is appended to conviction_ctx at the START of
+    # the NEXT round so the agent sees its end-of-previous-round self.
+    #
+    # When ``self_model_enabled=False`` (A/B ablation) we skip the
+    # factory entirely and leave ``self_model_evaluators`` empty —
+    # every use site checks ``if sm_ev is None: continue`` so an empty
+    # dict fully disables rendering, update, and event emission.
+    if self_model_enabled:
+        self_model_evaluators = build_evaluators_for_personas(personas, event)
+    else:
+        self_model_evaluators = {}
+        log.info("self_model_enabled=False — skipping evaluator setup")
+    # Track the last round's price delta so atoms like `regret` can
+    # reason about missed moves.
+    _sm_prev_round_delta_pct: float = 0.0
+
     publication_registry = PublicationRegistry()
 
     # ── Round 0 prelude: post the seed event from the market broadcaster ──
@@ -815,6 +844,16 @@ async def run_simulation(
     # suppression stay active through every subsequent round.
     _sim_terminal_risk: bool = False
 
+    # Initial event severity resolution — populated at R0 and kept around
+    # so later rounds can propagate a decayed prior into the Kyle sentiment
+    # modifier. Without this the overnight_sentiment from the severity
+    # resolver only affected the R0 gap-open once and never reached the
+    # round-loop Kyle impact, so policy-bull priors died immediately.
+    # See analysis/backtest_monthly_v2_full.json (CATL / 东财 policy events
+    # that sim'd bearish despite +0.6 severity prior).
+    _initial_severity = None
+    _SEVERITY_PRIOR_DECAY = 0.7  # per-round geometric decay
+
     try:
         for round_idx in range(n_rounds):
             log.info("OASIS sim %s round %d starting at price %.2f",
@@ -896,6 +935,8 @@ async def run_simulation(
                     )
                     _overnight_sent = _sev.overnight_sentiment
                     _gap_vol = _sev.gap_vol
+                    # Stash for later rounds' Kyle sentiment bias propagation.
+                    _initial_severity = _sev
                     if _sev.terminal_risk:
                         _sim_terminal_risk = True
                         log.info(
@@ -978,8 +1019,18 @@ async def run_simulation(
                 (current_price / initial_price - 1.0) if initial_price > 0 else 0.0
             )
 
-            # Sentiment accumulator for this round
+            # Sentiment accumulator for this round. Seed with a decayed
+            # version of the event_severity prior so policy-bull /
+            # regulatory-bear directional bias carries through the sim,
+            # not just the R0 gap-open. Geometric decay at rate 0.7/round
+            # means a +0.6 policy prior at R0 is +0.42 at R1, +0.29 at R2,
+            # +0.20 at R3, etc. — a soft tilt, not a hard command.
             round_sentiment_shift = 0.0
+            if _initial_severity is not None:
+                round_sentiment_shift = (
+                    _initial_severity.overnight_sentiment
+                    * (_SEVERITY_PRIOR_DECAY ** round_idx)
+                )
 
             # 0.7. Compute aggregate publication effects from previous rounds'
             #      publications (decayed). These modifiers are applied to
@@ -1149,20 +1200,61 @@ async def run_simulation(
                 oasis_agent = agent_graph.get_agent(oasis_id)
                 clear_round_context(oasis_agent)
 
-            # 1.9. Inject price-anchored market context so agents judge
-            #      risk/reward at the current price level, not just repeat
-            #      their last decision.
+            # 1.9. Inject price-anchored market context + event
+            #      fundamentals so agents judge risk/reward at the
+            #      current price level, not just repeat their last
+            #      decision. Runs for every trader persona in EVERY
+            #      round including R0 — the event_fundamentals block
+            #      is a directional prior that agents need even before
+            #      any trading has happened. Before R0 coverage was
+            #      added, CATL / 东财 agents drifted with feed sentiment
+            #      in R0 and set the bearish tone for the whole sim.
             for persona in personas:
-                if persona.sandbox is not None and persona.id in last_actions:
-                    oasis_id = persona_id_to_oasis_id[persona.id]
-                    oasis_agent = agent_graph.get_agent(oasis_id)
-                    update_conviction_context(
-                        oasis_agent, persona.id, last_actions,
-                        cumulative_delta_pct=cumulative_delta_pct,
-                        current_price=current_price,
-                        initial_price=initial_price,
-                        event_type=event.event_type or "",
+                if persona.sandbox is None:
+                    continue
+                oasis_id = persona_id_to_oasis_id[persona.id]
+                oasis_agent = agent_graph.get_agent(oasis_id)
+                update_conviction_context(
+                    oasis_agent, persona.id, last_actions,
+                    cumulative_delta_pct=cumulative_delta_pct,
+                    current_price=current_price,
+                    initial_price=initial_price,
+                    event_type=event.event_type or "",
+                )
+
+            # 1.92. Self-model render: append each trader's structured
+            #       self-state (financial snapshot, last-trade outcome,
+            #       emotional state, peer watchlist, utility breakdown)
+            #       to the conviction_ctx stash. At R0 this shows the
+            #       initial untouched state; from R1 onward it reflects
+            #       the end-of-previous-round evaluator state (written
+            #       by the post-Kyle update step ~L1945). The text is
+            #       concatenated to whatever update_conviction_context
+            #       already wrote, separated by a blank line.
+            for persona in personas:
+                if persona.sandbox is None:
+                    continue
+                sm_ev = self_model_evaluators.get(persona.id)
+                if sm_ev is None:
+                    continue
+                if persona.id not in persona_id_to_oasis_id:
+                    continue
+                oasis_id = persona_id_to_oasis_id[persona.id]
+                oasis_agent = agent_graph.get_agent(oasis_id)
+                try:
+                    peers = sm_ev.select_peers(self_model_evaluators)
+                    self_ctx = sm_ev.render_prompt(peers)
+                except Exception as exc:
+                    log.warning(
+                        "  R%d self_model render failed for %s: %s",
+                        round_idx, persona.id, exc,
                     )
+                    continue
+                existing = (
+                    getattr(oasis_agent, "_ssflow_round_context", None) or {}
+                ).get("conviction_ctx", "")
+                merged = (existing + "\n\n" + self_ctx) if existing else self_ctx
+                set_round_context(oasis_agent, conviction_ctx=merged)
 
             # 1.94. Terminal-risk context. When the severity resolver flagged
             #        the event as terminal-bear (退市 / 立案 / 造假 / *ST /
@@ -1727,12 +1819,15 @@ async def run_simulation(
                 # Record for conviction persistence
                 if order.raw_args:
                     _side = order.raw_args.get("side", "hold")
+                    _qty = float(order.raw_args.get("quantity_pct", 0.0) or 0.0)
                 else:
-                    # Legacy dist: infer dominant side
+                    # Legacy dist: infer dominant side and use its fraction
                     _dominant = max(order.distribution.items(), key=lambda kv: kv[1])
                     _side = _dominant[0]
+                    _qty = float(_dominant[1])
                 last_actions[order.persona_id] = {
                     "side": _side,
+                    "quantity_pct": _qty,
                     "rationale": (order.rationale or "")[:200],
                     "round_idx": round_idx,
                 }
@@ -1795,7 +1890,10 @@ async def run_simulation(
 
             # 4. Per-instrument flow aggregation + independent Kyle
             if instrument_universe is not None and current_prices:
-                from .market_dynamics import compute_multi_instrument_impact
+                from .market_dynamics import (
+                    compute_dynamic_knee,
+                    compute_multi_instrument_impact,
+                )
 
                 # Group flows by instrument (skip _default — shouldn't happen
                 # in multi-instrument mode, but guard defensively)
@@ -1807,9 +1905,37 @@ async def run_simulation(
                         flows_by_ticker.get(cf.instrument, 0.0) + cf.net_flow
                     )
 
+                # Pre-compute the same cadence-aware inputs as the
+                # single-instrument path (see line ~1929). Until the
+                # 2026-04-12 bug fix, this call was silently using the
+                # compute_price_impact defaults (max_delta_pct=0.10,
+                # sentiment_modifier=0, flow_knee=FLOW_KNEE), which meant:
+                #   - All monthly sims were clipped to daily ±10% caps
+                #   - The severity-prior decay (P0.3) never reached Kyle
+                #   - The dynamic knee never engaged
+                # Result: backtest_monthly_v3_full_smonly.json showed
+                # deltas hitting ±10% hard on regulatory events and
+                # policy-bull events getting zero sentiment lift.
+                _mi_n_active = len({
+                    cf.persona_id for cf in class_flows if cf.net_flow != 0
+                })
+                _mi_n_total = sum(1 for p in personas if p.sandbox is not None)
+                _mi_cum_abs = abs(cumulative_delta_pct)
+                _mi_knee = compute_dynamic_knee(
+                    _mi_n_active, _mi_n_total, _mi_cum_abs, round_idx,
+                    base_knee=_calibrated_knee,
+                    resistance_scale=_resistance_scale,
+                )
+                _mi_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
+
                 # Independent Kyle per instrument with direct orders
                 delta_by_ticker = compute_multi_instrument_impact(
-                    flows_by_ticker, adv_values, lambda_market=lambda_used,
+                    flows_by_ticker,
+                    adv_values,
+                    lambda_market=lambda_used,
+                    max_delta_pct=_max_delta_pct,
+                    flow_knee=_mi_knee,
+                    sentiment_modifier=_mi_sentiment,
                 )
                 for ticker, delta in delta_by_ticker.items():
                     current_prices[ticker] = current_prices[ticker] * (1.0 + delta)
@@ -1921,6 +2047,81 @@ async def run_simulation(
             sim_graph.sync_population_state(agent_pops, price_after, round_idx)
             sim_graph.update_price_derived_state(price_after, initial_price)
             sim_graph.record_all_snapshots()
+
+            # 4.65. Self-model round update — advance each trader's
+            #       evaluator using the authoritative post-trade SimAgent
+            #       state + class_flow for this round. After update()
+            #       and step_utility(), emit a persona_state_updated
+            #       event so the frontend's PersonaStatePanel can render
+            #       the updated state card (archetype, nav, pnl, utility,
+            #       utility_delta, utility_breakdown).
+            _sm_flows_by_persona = {cf.persona_id: cf for cf in class_flows}
+            _sm_round_hours = 0.0
+            if round_schedule is not None:
+                _rd_now = round_schedule.get_round(round_idx)
+                if _rd_now is not None:
+                    _sm_round_hours = float(_rd_now.hours_since_event)
+            _sm_round_ctx = SelfModelRoundCtx(
+                round_idx=round_idx,
+                round_hours=_sm_round_hours,
+                n_rounds=n_rounds,
+                current_price=float(price_after),
+                initial_price=float(initial_price),
+                cumulative_delta_pct=float(
+                    (price_after / initial_price - 1.0) if initial_price > 0 else 0.0
+                ),
+                prev_round_delta_pct=_sm_prev_round_delta_pct,
+                event_type=event.event_type or "",
+            )
+            for _p in personas:
+                if _p.sandbox is None:
+                    continue
+                sm_ev = self_model_evaluators.get(_p.id)
+                if sm_ev is None:
+                    continue
+                _sim_agent = sim_graph.agent_by_persona(_p.id)
+                if _sim_agent is None:
+                    continue
+                _la = last_actions.get(_p.id, {})
+                _flow = _sm_flows_by_persona.get(_p.id)
+                _tr = SelfModelTradeResult(
+                    persona_id=_p.id,
+                    side=str(_la.get("side", "hold")),
+                    quantity_pct=float(_la.get("quantity_pct", 0.0) or 0.0),
+                    rationale=str(_la.get("rationale", "")),
+                    nav=float(_sim_agent.get("total_nav", 0.0)),
+                    cash=float(_sim_agent.get("total_nav", 0.0)) *
+                    (1.0 - float(_sim_agent.get("avg_position_pct", 0.0))),
+                    holdings_value=float(_sim_agent.get("total_nav", 0.0)) *
+                    float(_sim_agent.get("avg_position_pct", 0.0)),
+                    unrealized_pnl_pct=float(_sim_agent.get("unrealized_pnl_pct", 0.0)),
+                    avg_position_pct=float(_sim_agent.get("avg_position_pct", 0.0)),
+                    net_flow=float(_flow.net_flow) if _flow is not None else 0.0,
+                )
+                try:
+                    sm_ev.update(_sm_round_ctx, _tr)
+                    sm_ev.step_utility()
+                except Exception as exc:
+                    log.warning(
+                        "  R%d self_model.update failed for %s: %s",
+                        round_idx, _p.id, exc,
+                    )
+                    continue
+                safe_emit(
+                    event_sink,
+                    EVENT_PERSONA_STATE_UPDATED,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    persona_id=_p.id,
+                    archetype=_p.archetype,
+                    display_name=_p.display_name or _p.id,
+                    state=sm_ev.state_public_snapshot(),
+                    state_labels=sm_ev.state_labels(),
+                    utility=float(sm_ev.last_utility),
+                    utility_delta=float(sm_ev.last_utility_delta),
+                    utility_breakdown=dict(sm_ev.last_utility_breakdown),
+                )
+            _sm_prev_round_delta_pct = float(delta_pct)
 
             # 4.7. Second policy pass: price-sensitive policies may fire now
             #      that price-derived state has been updated. Trade overrides

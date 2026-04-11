@@ -489,6 +489,36 @@ _PRESETS: dict[str, list[dict[str, Any]]] = {
          )}
         for d in range(1, 10)
     ],
+
+    # ── Weekly-6m — 26 rounds, one per trading week, 6-month horizon ──
+    #
+    # Middle ground between intraday presets (too short for policy
+    # aftershock) and monthly-6m (too few decision points for dynamic
+    # event stream to land). Each round represents a full trading
+    # week (168 hours = 7 days). The schedule is long enough to span
+    # policy / earnings tail decay, short enough to let the self_model
+    # evaluators update state 26 times with richer peer/sentiment diffs.
+    #
+    # Analysts + retail drive early weeks; strategic holders dominate
+    # after week 8. Self-model atoms that decay by round_hours (rather
+    # than round_idx) calibrate correctly here vs daily/monthly.
+    "weekly-6m": [
+        {
+            "id": f"W{w}",
+            "label": f"事件后第{w+1}周",
+            "hours": 168.0 * w,
+            "start": "09:30",
+            "end": "15:00",
+            "active": (
+                ["retail", "kol", "media", "news_wire", "analyst", "institutional"]
+                if w == 0
+                else ["retail", "analyst", "institutional"] if w < 4
+                else ["institutional", "strategic", "analyst"] if w < 12
+                else ["strategic", "institutional"]
+            ),
+        }
+        for w in range(26)
+    ],
 }
 
 PRESET_NAMES: list[str] = sorted(_PRESETS.keys())

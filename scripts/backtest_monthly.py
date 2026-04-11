@@ -40,7 +40,15 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 
+import random
+
 from ssflow.event import Event
+from ssflow.information.external_events import (
+    ConditionalEvent,
+    DynamicEventStream,
+    ExternalEvent,
+    SimSnapshot,
+)
 from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.market_data import fetch_kline_historical
 from ssflow.oasis_engine import run_simulation
@@ -52,6 +60,244 @@ from ssflow.sandbox_generator import build_from_template
 PERSONAS_PATH = Path("personas/ashare.yaml")
 SCHEDULE_NAME = "monthly-6m"
 MONTHS_FORWARD = 6
+
+# ── CLI ablation flags (populated by argparse in main) ──
+# Used by `_run_one_sim` to decide whether to wire in the dynamic event
+# stream and/or self_model subsystem for the A/B comparison runs in
+# Phase 8. Defaults to "everything on"; --disable-self-model and
+# --no-events flip these off so we can attribute direction-accuracy
+# improvements to specific subsystems.
+FLAG_DISABLE_SELF_MODEL: bool = False
+FLAG_DISABLE_EVENTS: bool = False
+
+
+# ────────────────────── Dynamic event stream factory ──────────────────────
+
+
+def _make_random_event_stream(
+    event_meta: dict,
+    rng_seed: int,
+) -> DynamicEventStream:
+    """Build a per-sim DynamicEventStream with conditional + random events.
+
+    Three sources combine:
+      1. ~15 conditional templates keyed off SimSnapshot cumulative_delta /
+         round_idx / net_flow — fire when the sim state matches their
+         trigger (e.g., "cum down > 10% AND round >= 2 → CSRC verbal
+         support statement"). Each has max_fires + cooldown to avoid
+         spamming the feed.
+      2. A background generator callback that rolls a d20 each round and
+         may inject one random peer/sector/macro headline from a pool of
+         ~12. This simulates the ambient news flow a real trading day has.
+      3. (Phase 4) factory-generated static events can be layered in via
+         DynamicEventStream.add() — not used yet.
+
+    The goal is to give the self_model evaluators something to react to
+    beyond the initial R0 shock. Without it, monthly-6m sims run a single
+    shock for 6 rounds and then decay, which the 2026-04-11 backtest
+    showed collapses to doom-loop for policy-bull events.
+    """
+    rng = random.Random(rng_seed)
+    subject_ticker = event_meta.get("ticker", "")
+    event_type = event_meta.get("event_type", "")
+
+    conditionals: list[ConditionalEvent] = [
+        # ── Regulatory / stabilisation floor ──
+        ConditionalEvent(
+            condition=lambda s: s.cumulative_delta_pct < -0.10 and s.round_idx >= 1,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="policy_statement",
+                author_persona_id="__market__",
+                text=(
+                    f"证监会新闻发言人: 高度关注近期 {subject_ticker} "
+                    f"股价异常波动 (累计 {s.cumulative_delta_pct*100:+.1f}%), "
+                    f"将依法依规采取必要措施维护市场稳定."
+                ),
+                authority_weight=0.90,
+            ),
+            max_fires=2, cooldown_rounds=1,
+        ),
+        ConditionalEvent(
+            condition=lambda s: s.cumulative_delta_pct < -0.15 and s.round_idx >= 2,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"市场消息: 国家队/汇金系资金悄然加仓 {subject_ticker} "
+                    f"相关 ETF, 或标志底部企稳信号."
+                ),
+                authority_weight=0.70,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        # ── Over-heat / profit taking ──
+        ConditionalEvent(
+            condition=lambda s: s.cumulative_delta_pct > 0.20 and s.round_idx >= 1,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"交易所问询函: {subject_ticker} 股价累计涨幅 "
+                    f"{s.cumulative_delta_pct*100:+.1f}% 异常, "
+                    f"要求公司核实并说明是否存在未披露重大信息."
+                ),
+                authority_weight=0.85,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        ConditionalEvent(
+            condition=lambda s: s.cumulative_delta_pct > 0.30,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"券商研报: 上调 {subject_ticker} 目标价 25%, "
+                    f"认为当前估值仍具吸引力 (政策催化 + 基本面验证)."
+                ),
+                authority_weight=0.70,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        # ── Policy tailwind (for policy / supply_disruption event types) ──
+        ConditionalEvent(
+            condition=(
+                lambda s: event_type == "policy" and s.round_idx == 1
+            ),
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="policy_statement",
+                author_persona_id="__market__",
+                text=(
+                    "央行辅导会: 重申对政策传导机制的信心, "
+                    "流动性将通过银行间市场持续释放至实体经济."
+                ),
+                authority_weight=0.95,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        ConditionalEvent(
+            condition=(
+                lambda s: event_type == "policy" and s.round_idx == 2
+            ),
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    "卖方券商首席策略: 维持对政策敏感板块的高配建议, "
+                    "认为本次政策组合拳是年度级别的拐点."
+                ),
+                authority_weight=0.75,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        # ── Regulatory aftershock (bear events) ──
+        ConditionalEvent(
+            condition=(
+                lambda s: event_type in ("regulatory", "lawsuit", "geopolitical")
+                and s.round_idx == 2
+            ),
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"路透社: 多家机构客户正与 {subject_ticker} 磋商合同变更条款, "
+                    f"对其 2024 下半年业绩承压担忧加剧."
+                ),
+                authority_weight=0.75,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        ConditionalEvent(
+            condition=(
+                lambda s: event_type in ("regulatory", "lawsuit")
+                and s.round_idx >= 3
+                and s.cumulative_delta_pct < -0.20
+            ),
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"外资机构下调 {subject_ticker} 评级, 目标价再下调 15%, "
+                    f"提示基本面风险尚未出清."
+                ),
+                authority_weight=0.70,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        # ── Earnings miss / soft demand aftershock ──
+        ConditionalEvent(
+            condition=(
+                lambda s: event_type == "earnings" and s.round_idx == 2
+            ),
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"渠道调研: {subject_ticker} 所属行业 Q4 开门红动销普遍偏弱, "
+                    f"经销商回款与预收款同比下滑."
+                ),
+                authority_weight=0.65,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+        # ── Sector rotation / peer spillover ──
+        ConditionalEvent(
+            condition=lambda s: s.round_idx == 3,
+            event_factory=lambda s: ExternalEvent(
+                round_idx=s.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=(
+                    f"板块联动: 同板块龙头今日涨跌 {s.cumulative_delta_pct*100:+.1f}%, "
+                    f"资金在板块内轮动."
+                ),
+                authority_weight=0.55,
+            ),
+            max_fires=1, cooldown_rounds=0,
+        ),
+    ]
+
+    # Background random headline pool — the generator picks at most one
+    # per round with 20% probability.
+    background_pool = [
+        "北向资金今日净买入 32.1 亿元, 连续 3 日回流.",
+        "融资余额较上周增加 1.7%, 杠杆资金情绪回暖.",
+        "十年期国债收益率下行 4bp 至 2.24%, 无风险利率继续下探.",
+        "离岸人民币兑美元升破 7.15 关口, 外汇情绪转好.",
+        "A股两市成交额突破 1.1 万亿, 活跃度明显提升.",
+        "私募仓位指数环比上升 2.1 个百分点至 72%.",
+        "公募基金发行回暖, 本周新成立规模 85 亿元.",
+        "产业资本增持数据: 本周 18 家上市公司公告控股股东增持.",
+        "深股通近 5 日净买入前十榜单出现结构性变化.",
+        "雪球/富途活跃用户数据显示散户情绪指数环比上升 3pp.",
+        "国务院国资委强调央企要发挥市值管理主力军作用.",
+        "沪深 300 ETF 单日净申购 12 亿份, 机构买入明显.",
+    ]
+
+    def _generator(snapshot: SimSnapshot) -> list[ExternalEvent]:
+        if rng.random() < 0.20:
+            text = rng.choice(background_pool)
+            return [ExternalEvent(
+                round_idx=snapshot.round_idx,
+                content_type="news_wire",
+                author_persona_id="__market__",
+                text=text,
+                authority_weight=0.55,
+            )]
+        return []
+
+    return DynamicEventStream(
+        conditionals=conditionals,
+        generator=_generator,
+    )
 
 # ── Event catalogue ────────────────────────────────────────────
 # Tuned for diversity: 2 bear events, 2 policy-driven bull events,
@@ -204,11 +450,21 @@ async def _run_one_sim(ev: dict) -> dict:
         current_price=ev["anchor_price"],
     )
 
+    # Build the event stream unless --no-events ablation is set. The
+    # stream seeds off a deterministic per-ticker hash so the same event
+    # config produces reproducible noise across ablation runs.
+    external_events = None
+    if not FLAG_DISABLE_EVENTS:
+        seed = abs(hash(ev["ticker"])) % (2**32)
+        external_events = _make_random_event_stream(ev, rng_seed=seed)
+
     result = await run_simulation(
         event, personas, n_rounds=schedule.n_rounds,
         round_schedule=schedule,
         entity_graph=entity_graph,
         instrument_universe=instrument_universe,  # trivial single-instrument universe
+        external_events=external_events,
+        self_model_enabled=not FLAG_DISABLE_SELF_MODEL,
     )
 
     # Collect per-class net flow + action histogram across all rounds
@@ -354,13 +610,35 @@ def _print_comparison_chart(name: str, sim_traj: list[float], real_closes: list[
 
 
 async def main() -> None:
+    global FLAG_DISABLE_SELF_MODEL, FLAG_DISABLE_EVENTS
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-run", action="store_true", help="skip LLM sims")
     parser.add_argument("--only", default=None,
                         help="comma-sep ticker list to restrict run")
     parser.add_argument("--out", default="analysis/backtest_monthly_v1.json",
                         help="path for JSON dump")
+    parser.add_argument(
+        "--disable-self-model",
+        action="store_true",
+        help="A/B ablation: skip the self_model subsystem entirely "
+             "(personas fall back to pre-self_model behavior)",
+    )
+    parser.add_argument(
+        "--no-events",
+        action="store_true",
+        help="A/B ablation: don't inject DynamicEventStream mid-sim events. "
+             "Use with --disable-self-model to measure P0 bug fixes alone.",
+    )
     args = parser.parse_args()
+    FLAG_DISABLE_SELF_MODEL = bool(args.disable_self_model)
+    FLAG_DISABLE_EVENTS = bool(args.no_events)
+    if FLAG_DISABLE_SELF_MODEL or FLAG_DISABLE_EVENTS:
+        print(
+            f"[ablation] disable_self_model={FLAG_DISABLE_SELF_MODEL} "
+            f"disable_events={FLAG_DISABLE_EVENTS}",
+            file=sys.stderr,
+        )
 
     only = set(args.only.split(",")) if args.only else None
     event_list = [

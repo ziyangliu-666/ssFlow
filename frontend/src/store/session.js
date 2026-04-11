@@ -29,6 +29,11 @@ const initial = {
   // Entity State Sandbox
   entityGraph: null,           // serialized EntityGraph from /sandbox/generate or build_from_template
   entityStates: {},            // live state updates during sim, keyed by entity_id
+  // Per-persona self_model state (separate namespace from entityStates
+  // so the two visualisations never collide). Keyed by persona_id,
+  // populated from persona_state_updated events. See
+  // src/ssflow/self_model/ for the backend subsystem.
+  personaStates: {},
   // Multi-instrument universe (persisted to localStorage for Replay access)
   instrumentUniverse: null,
   roundSchedule: null,
@@ -92,6 +97,7 @@ export function resetSession () {
   session.lastError = ''
   session.entityGraph = null
   session.entityStates = {}
+  session.personaStates = {}
   session.instrumentUniverse = null
   session.roundSchedule = null
 }

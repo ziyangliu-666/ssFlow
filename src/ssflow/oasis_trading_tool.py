@@ -168,7 +168,7 @@ def make_freeform_trading_tool(
         hints = f"\nExample decisions for reference: {', '.join(examples)}\n"
 
     def submit_trading_decision(
-        side: str,
+        side: str = "hold",
         quantity_pct: float = 0.0,
         rationale: str = "",
         instrument: str = "",

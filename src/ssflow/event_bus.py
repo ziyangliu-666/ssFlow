@@ -54,6 +54,13 @@ EVENT_AGENT_ACTION = "agent_action"
 # Dynamic policy creation (Phase 4)
 EVENT_POLICY_CREATED = "policy_created"
 
+# Per-persona self-model state (Phase 5 — self_model subsystem).
+# Emitted once per trader persona per round with state dict, utility,
+# and utility_delta. Frontend's PersonaStatePanel reads this into the
+# session.personaStates store — separate from entity_state_updated
+# (which is for EntityGraph entities) so the two domains never collide.
+EVENT_PERSONA_STATE_UPDATED = "persona_state_updated"
+
 ALL_EVENT_TYPES: frozenset[str] = frozenset(
     {
         EVENT_SIMULATION_START,
@@ -73,6 +80,7 @@ ALL_EVENT_TYPES: frozenset[str] = frozenset(
         EVENT_POLICY_FIRED,
         EVENT_AGENT_ACTION,
         EVENT_POLICY_CREATED,
+        EVENT_PERSONA_STATE_UPDATED,
     }
 )
 

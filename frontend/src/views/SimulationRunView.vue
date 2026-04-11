@@ -112,6 +112,9 @@
           </div>
           <div v-else class="flow-empty">（暂无订单）</div>
 
+          <!-- Per-persona self_model state (from persona_state_updated) -->
+          <PersonaStatePanel />
+
           <!-- Entity State Panel (Entity Sandbox mode) -->
           <EntityStatePanel />
 
@@ -196,6 +199,7 @@ import { session } from '../store/session'
 import WorkflowRail from '../components/WorkflowRail.vue'
 import PriceChart from '../components/PriceChart.vue'
 import EntityStatePanel from '../components/EntityStatePanel.vue'
+import PersonaStatePanel from '../components/PersonaStatePanel.vue'
 import TimelineEvent from '../components/TimelineEvent.vue'
 import { openSimulationStream } from '../api/simulate'
 
@@ -391,6 +395,8 @@ const visibleEvents = computed(() => {
     if (e._type === 'persona_thought' && (!e.text || !e.text.trim())) return false
     // Hide entity_state_updated from timeline (shown in EntityStatePanel)
     if (e._type === 'entity_state_updated') return false
+    // Hide persona_state_updated from timeline (shown in PersonaStatePanel)
+    if (e._type === 'persona_state_updated') return false
     return true
   })
 })
@@ -601,6 +607,22 @@ function _processEvent (type, payload) {
           type: payload.entity_type,
           state: payload.state,
           labels: payload.state_labels,
+          round: payload.round_idx,
+        },
+      }
+      break
+    // ── Self-model per-persona state ──
+    case 'persona_state_updated':
+      session.personaStates = {
+        ...session.personaStates,
+        [payload.persona_id]: {
+          archetype: payload.archetype,
+          displayName: payload.display_name,
+          state: payload.state,
+          labels: payload.state_labels,
+          utility: payload.utility,
+          utilityDelta: payload.utility_delta,
+          breakdown: payload.utility_breakdown,
           round: payload.round_idx,
         },
       }

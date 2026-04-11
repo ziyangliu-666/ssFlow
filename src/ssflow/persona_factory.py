@@ -720,10 +720,69 @@ KNOWN_MARKETS["crude-oil-wti"] = MarketDescriptor(
 # structural fields (id, market_share, decision_mode, role, capital_range)
 # are passed through verbatim from Stage 1's research output. This prevents
 # the LLM from hallucinating market_share values that don't sum to 1.0.
-PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT = """You are a persona pack designer for ssFlow, \
+def _build_self_model_catalog_prompt() -> str:
+    """Render the Library enum fragment for the Stage 3 persona prompt.
+
+    Pulls live keys from the self_model package so the prompt is always
+    in sync with the Python Library — if you add a new atom / utility
+    component / render section, it shows up in the next persona_factory
+    run automatically. No manual string maintenance.
+    """
+    # Lazy import: keep module-level import graph small
+    from .self_model.atoms import STATE_ATOMS, atom_keys_by_category
+    from .self_model.utility import UTILITY_COMPONENTS
+    from .self_model.render import RENDER_SECTIONS
+
+    cat = atom_keys_by_category()
+    atom_lines = []
+    for category in ["financial", "trajectory", "emotional",
+                     "accountability", "benchmark", "mandate", "company"]:
+        if category not in cat:
+            continue
+        atom_lines.append(
+            f"    {category}: [{', '.join(sorted(cat[category]))}]"
+        )
+    atoms_block = "\n".join(atom_lines)
+
+    components_list = ", ".join(sorted(UTILITY_COMPONENTS.keys()))
+    sections_list = ", ".join(sorted(RENDER_SECTIONS.keys()))
+
+    return (
+        f"  \"self_model\": {{\n"
+        f"    // Pick atoms from the library below that match this persona's reality.\n"
+        f"    // A retail day-trader does NOT need benchmark_gap_pct or client_net_redemption.\n"
+        f"    // A central banker does NOT need cash. A CEO needs the company_* atoms.\n"
+        f"    \"state_atoms\": [ /* pick from catalog */ ],\n"
+        f"    // Weights reflect this role's TRUE incentives from research.\n"
+        f"    // Clientele-facing roles weight client_retention/reputation high.\n"
+        f"    // Performance-measured roles weight benchmark_outperformance high.\n"
+        f"    \"utility_weights\": {{ \"nav_growth\": 1.0, /* etc */ }},\n"
+        f"    // 3-5 sections max — token budget.\n"
+        f"    \"render_sections\": [ /* pick from catalog */ ],\n"
+        f"    \"peer_watchlist_filter\": {{\n"
+        f"      \"role_match\": [\"pattern_*\"],  // glob, picks peers this role actually watches\n"
+        f"      \"top_k\": 3,\n"
+        f"      \"sort_by\": \"nav_growth_desc\"\n"
+        f"    }}\n"
+        f"  }}\n"
+        f"\n"
+        f"AVAILABLE state_atoms (pick only from these exact names):\n"
+        f"{atoms_block}\n"
+        f"\n"
+        f"AVAILABLE utility_components (for utility_weights keys):\n"
+        f"    [{components_list}]\n"
+        f"\n"
+        f"AVAILABLE render_sections:\n"
+        f"    [{sections_list}]\n"
+    )
+
+
+PERSONA_CREATIVE_FIELDS_SYSTEM_PROMPT = (
+    """You are a persona pack designer for ssFlow, \
 an agent-based market simulation tool. Given a participant class identified \
 in market research, generate ONLY the creative fields for the persona:
-sandbox config, voice_prompt, behavior, biases, information, knowledge.
+sandbox config, voice_prompt, behavior, biases, information, knowledge,
+and a self_model block that declares the persona's internal state + utility.
 
 Your output MUST be valid JSON with EXACTLY these keys (no others):
 
@@ -775,8 +834,10 @@ Your output MUST be valid JSON with EXACTLY these keys (no others):
       {"name": "...", "side": "buy|sell", "pool": "cash|holdings_in_target", "fraction": <0-1>}
     ],
     "reaction_lag_rounds": {"type": "discrete", "values": [<int>, ...]}
-  }
-}
+  },
+"""
+    + _build_self_model_catalog_prompt()
+    + """}
 
 DO NOT include market_share, decision_mode, role, capital_range_cny,
 time_horizon_days, sub_archetype, archetype, or id. Those will be merged
@@ -809,7 +870,23 @@ CRITICAL RULES:
    - Institutions: 0.05-0.15 (concentration limits)
    - Strategic: 1.0 (already at target)
 7. **voice_prompt** 100-300 chars, second person, market's source language.
-8. Return ONLY the JSON, no commentary, no markdown fences."""
+8. **self_model** must pick atoms/components/sections ONLY from the catalogs above.
+   Unknown names will be silently dropped by the engine, so invest in making
+   each role's atom/weight choice authentic. Typical starter sets:
+   - Retail active chaser: financial + trajectory + emotional, weights on
+     nav_growth + regret_penalty + drawdown_penalty, sections [financial_snapshot,
+     last_trade_outcome, emotional_state, peer_watchlist]
+   - Mutual fund PM: + benchmark + accountability + mandate, weights on
+     benchmark_outperformance (2x) + client_retention + career_anxiety +
+     mandate_breach_penalty, sections [financial_snapshot, benchmark_gap,
+     mandate_headroom, career_pressure, emotional_state]
+   - Short seller / event-driven: + conviction_reward high, weights on
+     nav_growth + conviction_reward + stress_penalty
+   - Company IR / management: company_* atoms, weights on runway_safety +
+     board_pressure_pain + customer_loss_pain, sections [runway_status,
+     board_pressure, financial_snapshot]
+9. Return ONLY the JSON, no commentary, no markdown fences."""
+)
 
 
 # Mapping from research role/decision_mode to default action_space templates.
@@ -912,6 +989,23 @@ def _merge_creative_into_structural(
     })
     sandbox.setdefault("risk", {"max_position_pct": 0.95})
 
+    # Validate + clean the LLM-generated self_model spec before writing
+    # it into the persona. Unknown atom / component / section names get
+    # stripped with a warning rather than crashing the whole pack.
+    raw_self_model = creative.get("self_model")
+    if raw_self_model is not None:
+        from .self_model.schema import validate_self_model_spec
+        cleaned_self_model, warnings = validate_self_model_spec(raw_self_model)
+        if warnings:
+            log.warning(
+                "[merge] persona %s self_model cleanups: %s",
+                class_def.id,
+                "; ".join(warnings[:5]),
+            )
+        self_model_value = cleaned_self_model
+    else:
+        self_model_value = None
+
     persona = {
         "id": class_def.id,
         "archetype": class_def.archetype,
@@ -928,6 +1022,8 @@ def _merge_creative_into_structural(
         "information": creative.get("information"),
         "sandbox": sandbox,
     }
+    if self_model_value is not None:
+        persona["self_model"] = self_model_value
     if capital_range is not None:
         persona["capital_range_cny"] = capital_range
     if time_horizon is not None:

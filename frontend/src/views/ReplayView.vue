@@ -86,6 +86,10 @@
         </div>
         <div v-else class="flow-empty">（暂无流向）</div>
 
+        <!-- Per-persona self_model state — reconstructed from
+             persona_state_updated events by the reducer. -->
+        <PersonaStatePanel />
+
         <!-- Tiny meta -->
         <div class="tiny-meta mono">
           <span><em>事件</em>{{ visibleEvents.length }}</span>
@@ -180,6 +184,7 @@ import { http } from '../api/client'
 import WorkflowRail from '../components/WorkflowRail.vue'
 import PriceChart from '../components/PriceChart.vue'
 import TimelineEvent from '../components/TimelineEvent.vue'
+import PersonaStatePanel from '../components/PersonaStatePanel.vue'
 
 const props = defineProps({ simulationId: { type: String, required: true } })
 const router = useRouter()
@@ -518,6 +523,25 @@ function applyEvent (e) {
     case 'simulation_done':
       phase.value = 'done'
       break
+    case 'persona_state_updated':
+      // Rebuild the persona_state map as the playback cursor advances.
+      // Replay scrubs bi-directionally so we write the latest snapshot
+      // for each persona — the panel displays the state at the current
+      // cursor position, not a historical accumulation.
+      session.personaStates = {
+        ...session.personaStates,
+        [payload.persona_id]: {
+          archetype: payload.archetype,
+          displayName: payload.display_name,
+          state: payload.state,
+          labels: payload.state_labels,
+          utility: payload.utility,
+          utilityDelta: payload.utility_delta,
+          breakdown: payload.utility_breakdown,
+          round: payload.round_idx,
+        },
+      }
+      break
   }
 }
 
@@ -532,6 +556,7 @@ function resetPlaybackState () {
   multiPriceTrajectories.value = null
   latestFlows.value = {}
   phase.value = 'idle'
+  session.personaStates = {}
 }
 
 function buildRoundAnchors () {

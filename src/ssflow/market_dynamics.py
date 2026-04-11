@@ -67,7 +67,13 @@ FLOW_KNEE: float = 0.08
 CADENCE_CAPS: dict[str, tuple[float, float]] = {
     "daily": (0.10, 0.08),   # A-share 涨跌停 + standard knee (default)
     "weekly": (0.20, 0.15),  # relaxed but still bounded
-    "monthly": (0.40, 0.30), # policy-level events can move >30% in a month
+    # Monthly cap tightened from 0.40 → 0.25 after 2026-04-12 A/B:
+    # backtest_monthly_v3_full_fixed showed agent stochasticity (random
+    # bearish bursts) exploiting the 40% leash and flipping direction
+    # wrong on 4/5 events. 25% still lets policy months run +20-25% but
+    # keeps noise rounds smaller than the severity-prior corrective
+    # push. Real A-share monthly moves rarely exceed ±20% anyway.
+    "monthly": (0.25, 0.20),
 }
 
 
@@ -197,8 +203,12 @@ def compute_price_impact(
         lambda_market: Market impact coefficient (default 0.5 for A-share).
         max_delta_pct: Per-round price-change cap (default ±10%).
         flow_knee: Soft compression knee point (default 0.03 = 3% of ADV).
-        sentiment_modifier: Multiplier on the raw delta from announcements/
-            regulations. Positive amplifies, negative dampens. Default 0.0.
+        sentiment_modifier: Directional bias in [-0.5, +0.5] applied
+            additively to the Kyle delta. Positive TILTS UP, negative
+            TILTS DOWN — independent of whatever direction the net flow
+            already points to. Load-bearing semantic for announcement/
+            regulation events: a policy-bull prior should SOFTEN a
+            sell-driven drop, not amplify it. Default 0.0.
 
     Returns:
         Fractional price change (e.g., -0.05 means -5%).
@@ -230,9 +240,17 @@ def compute_price_impact(
     magnitude = math.sqrt(eff_ratio)
     raw_delta = lambda_market * sign * magnitude
 
-    # Stage 2.5: sentiment modifier — announcements/regulations shift the delta
+    # Stage 2.5: sentiment bias — additive tilt, not multiplicative.
+    # The old formula ``raw_delta * (1 + sentiment_modifier)`` amplified
+    # whatever direction the flow already pointed to (positive sentiment
+    # on a sell day made the drop WORSE, exact wrong semantic). Switching
+    # to an additive push keyed off the cadence-aware max_delta_pct gives
+    # the correct directional bias: +0.5 sentiment on a daily cadence adds
+    # ~1.5pp to the delta, on monthly adds ~6pp. See
+    # tests/test_market_dynamics_sentiment_bias.py for the 4-quadrant
+    # regression that locks this in.
     if sentiment_modifier != 0.0:
-        raw_delta = raw_delta * (1.0 + sentiment_modifier)
+        raw_delta = raw_delta + sentiment_modifier * max_delta_pct * 0.3
 
     clamped = max(-max_delta_pct, min(max_delta_pct, raw_delta))
     if abs(raw_delta) > max_delta_pct:
@@ -262,12 +280,21 @@ def compute_multi_instrument_impact(
     adv_by_ticker: dict[str, float],
     lambda_market: float = LAMBDA_LITERATURE["default"],
     max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
+    flow_knee: float = FLOW_KNEE,
+    sentiment_modifier: float = 0.0,
 ) -> dict[str, float]:
     """Per-instrument Kyle impact for multiple instruments.
 
     Each ticker with non-zero flow gets its own independent Kyle
     calculation using its own ADV. Tickers not in flows_by_ticker
     are excluded (they may get spillover elsewhere).
+
+    All four knobs (max_delta_pct, lambda_market, flow_knee,
+    sentiment_modifier) MUST be propagated from the caller — defaults
+    here are the single-ticker baselines, which silently break monthly
+    cadence, severity-prior injection, and dynamic-knee scaling when
+    the multi-instrument path is active. See
+    ``oasis_engine.py:1899`` for the correct call convention.
 
     Returns dict[ticker, delta_pct].
     """
@@ -281,6 +308,8 @@ def compute_multi_instrument_impact(
             adv_value=adv,
             lambda_market=lambda_market,
             max_delta_pct=max_delta_pct,
+            flow_knee=flow_knee,
+            sentiment_modifier=sentiment_modifier,
         )
     return result
 
