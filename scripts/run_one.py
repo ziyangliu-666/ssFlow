@@ -56,6 +56,7 @@ logging.basicConfig(
 )
 
 from ssflow.config import settings
+from ssflow.distillation import distill
 from ssflow.event import VALID_EVENT_TYPES, Event
 from ssflow.event_extractor import extract_event
 from ssflow.llm_client import cost_tracker
@@ -147,6 +148,13 @@ Two ways to invoke:
         default=None,
         help="Average daily volume in the same currency as --current-price "
              "(auto-extracted in --input mode)",
+    )
+    p.add_argument(
+        "--no-universe",
+        action="store_true",
+        help="Skip distillation — run in single-instrument mode. By default "
+             "run_one.py builds a 3-6 instrument universe with real K-line "
+             "history for each so agents see sector context.",
     )
     return p.parse_args()
 
@@ -278,12 +286,53 @@ async def amain() -> int:
           f"{len(entity_graph.thresholds)} thresholds "
           f"({sum(1 for t in entity_graph.thresholds if t.effect.effect_type == 'force_action')} force_action)",
           file=sys.stderr)
+
+    # Distillation: build InstrumentUniverse with 3-6 related instruments +
+    # real 30-day K-line history, so agents see sector context and trends
+    # instead of just a single ticker's current price.
+    instrument_universe = None
+    if not args.no_universe:
+        print(f"#   distilling instrument universe (LLM + Sina fetches)...", file=sys.stderr, flush=True)
+        try:
+            instrument_universe = await distill(
+                topic=event.event_text[:400] if event.event_text else f"{event.ticker} {event.event_type}",
+                market=event.market or "ashare",
+                event_ticker=event.ticker,
+                event_price=float(event.current_price or 0) or None,
+            )
+            tickers_str = ", ".join(
+                f"{i.ticker}[{i.relationship}]"
+                for i in instrument_universe.instruments
+            )
+            kline_counts = [
+                len(i.kline_30d) for i in instrument_universe.instruments
+            ]
+            print(
+                f"#   universe: {len(instrument_universe.instruments)} "
+                f"instruments — {tickers_str}",
+                file=sys.stderr,
+            )
+            print(
+                f"#   K-line bars per instrument: "
+                f"{sum(kline_counts)} total (min={min(kline_counts) if kline_counts else 0}, "
+                f"max={max(kline_counts) if kline_counts else 0})",
+                file=sys.stderr,
+            )
+        except Exception as exc:
+            print(
+                f"#   distillation failed ({exc}) — falling back to "
+                f"single-instrument mode",
+                file=sys.stderr,
+            )
+            instrument_universe = None
+
     print(f"#   running OASIS simulation...", file=sys.stderr, flush=True)
 
     # OASIS engine is async; await it from amain.
     result = await run_simulation(
         event, personas, n_rounds=n_rounds, round_schedule=schedule,
         entity_graph=entity_graph,
+        instrument_universe=instrument_universe,
     )
     display, ok = render_simulation_safe_or_quarantine(result)
     report_path = save_report(display, result.simulation_id)

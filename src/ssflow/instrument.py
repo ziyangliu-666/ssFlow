@@ -22,6 +22,19 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _format_money(value: float) -> str:
+    """Render a currency amount in a human-readable Chinese scale."""
+    if value <= 0:
+        return "—"
+    if value >= 1e12:
+        return f"{value / 1e12:.2f}万億"
+    if value >= 1e8:
+        return f"{value / 1e8:.2f}億"
+    if value >= 1e4:
+        return f"{value / 1e4:.1f}萬"
+    return f"{value:.0f}"
+
+
 VALID_RELATIONSHIPS = {
     "event_subject",
     "supplier",
@@ -103,6 +116,112 @@ class Instrument:
         if self.margin_short_balance:
             d["margin_short_balance"] = self.margin_short_balance
         return d
+
+    # ── Prompt helpers ──────────────────────────────────────────────────
+
+    def _valid_kline_bars(self) -> list[dict[str, Any]]:
+        """Return bars with all OHLC fields populated, in chronological order."""
+        bars = [
+            b for b in self.kline_30d
+            if b.get("close", 0) > 0 and b.get("open", 0) > 0
+        ]
+        # Sort by date string if present; Sina returns ascending already.
+        bars.sort(key=lambda b: str(b.get("date", "")))
+        return bars
+
+    def compact_kline_summary(self) -> str:
+        """Terse 30-day statistical summary for agent prompts.
+
+        Returns a multi-line block with cumulative return, daily volatility,
+        high/low, 20-day moving average, mean daily turnover, and the last
+        five daily returns. Empty string when no K-line data is available —
+        callers can guard on that.
+        """
+        bars = self._valid_kline_bars()
+        if len(bars) < 2:
+            return ""
+
+        closes = [float(b["close"]) for b in bars]
+        opens = [float(b["open"]) for b in bars]
+        highs = [float(b.get("high", b["close"])) for b in bars]
+        lows = [float(b.get("low", b["close"])) for b in bars]
+        volumes = [float(b.get("volume", 0)) for b in bars]
+
+        # Cumulative return (oldest open → newest close)
+        first_open = opens[0]
+        last_close = closes[-1]
+        cum_return_pct = (
+            (last_close / first_open - 1.0) * 100 if first_open > 0 else 0.0
+        )
+
+        # Daily log returns and volatility
+        log_returns: list[float] = []
+        for i in range(1, len(closes)):
+            if closes[i - 1] > 0 and closes[i] > 0:
+                log_returns.append(math.log(closes[i] / closes[i - 1]))
+        if len(log_returns) >= 2:
+            try:
+                vol_pct = statistics.stdev(log_returns) * 100
+            except statistics.StatisticsError:
+                vol_pct = 0.0
+        else:
+            vol_pct = 0.0
+
+        period_high = max(highs)
+        period_low = min(lows)
+
+        # 20-day simple moving average (uses last 20 closes, or all if fewer)
+        ma_window = closes[-20:] if len(closes) >= 20 else closes
+        ma_20 = sum(ma_window) / len(ma_window) if ma_window else 0.0
+
+        # Mean daily turnover in currency — volume × close approximates CNY.
+        turnovers = [
+            v * c for v, c in zip(volumes, closes) if v > 0 and c > 0
+        ]
+        mean_turnover = sum(turnovers) / len(turnovers) if turnovers else 0.0
+
+        # Last 5 daily return strings
+        recent_returns: list[str] = []
+        for i in range(max(1, len(closes) - 5), len(closes)):
+            prev = closes[i - 1]
+            cur = closes[i]
+            if prev > 0:
+                recent_returns.append(f"{(cur / prev - 1) * 100:+.2f}%")
+
+        days = len(bars)
+        lines = [
+            f"    {days}日: {cum_return_pct:+.2f}% | "
+            f"波动率 {vol_pct:.2f}%/日 | "
+            f"最高{period_high:.2f} / 最低{period_low:.2f}",
+            f"    20日均线{ma_20:.2f} | "
+            f"成交额均值 {_format_money(mean_turnover)}",
+        ]
+        if recent_returns:
+            lines.append(
+                f"    近{len(recent_returns)}日走势: " + " / ".join(recent_returns)
+            )
+        return "\n".join(lines)
+
+    def recent_ohlcv_table(self, n_days: int = 5) -> str:
+        """Compact OHLCV table for the last n daily bars (markdown-ish)."""
+        bars = self._valid_kline_bars()
+        if not bars:
+            return ""
+        recent = bars[-n_days:]
+        lines = ["    日期       开盘   最高   最低   收盘   成交额"]
+        for b in recent:
+            date = str(b.get("date", ""))[:10]
+            o = float(b.get("open", 0))
+            h = float(b.get("high", 0))
+            lo = float(b.get("low", 0))
+            c = float(b.get("close", 0))
+            v = float(b.get("volume", 0))
+            turnover = v * c
+            lines.append(
+                f"    {date:10s} {o:7.2f} {h:7.2f} {lo:7.2f} {c:7.2f} "
+                f"{_format_money(turnover)}"
+            )
+        return "\n".join(lines)
 
 
 @dataclass
@@ -273,7 +392,13 @@ class InstrumentUniverse:
         return result
 
     def prompt_summary(self) -> str:
-        """Summary for agent prompts listing all instruments equally."""
+        """Summary for agent prompts listing all instruments equally.
+
+        Each instrument gets: name, ticker, relationship, current price.
+        When K-line data is present, a compact 30-day statistical block is
+        appended for every instrument, and the ``event_subject`` additionally
+        gets a 5-day OHLCV table so agents can anchor on the recent tape.
+        """
         REL_ZH = {
             "event_subject": "事件相关", "primary": "事件相关",
             "supplier": "供应商", "competitor": "竞品",
@@ -288,6 +413,14 @@ class InstrumentUniverse:
                 f"  - {inst.name} ({inst.ticker}) [{rel}] "
                 f"当前价 {inst.price_currency}{inst.current_price:.2f}"
             )
+            summary = inst.compact_kline_summary()
+            if summary:
+                lines.append(summary)
+            if inst.relationship in ("event_subject", "primary"):
+                ohlcv = inst.recent_ohlcv_table(n_days=5)
+                if ohlcv:
+                    lines.append("    最近5日日线:")
+                    lines.append(ohlcv)
         return "\n".join(lines)
 
     @classmethod
