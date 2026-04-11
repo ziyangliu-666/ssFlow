@@ -59,8 +59,19 @@ class RoundSchedule:
             return self.rounds[round_idx]
         return None
 
-    def prompt_context(self, round_idx: int) -> str:
-        """Time context string for injection into agent prompts."""
+    def prompt_context(
+        self,
+        round_idx: int,
+        *,
+        cumulative_delta_pct: float | None = None,
+        current_price: float | None = None,
+    ) -> str:
+        """Time context string for injection into agent prompts.
+
+        Optional ``cumulative_delta_pct`` (in percent, e.g. 5.4 for +5.4%)
+        and ``current_price`` are rendered into the context so agents can
+        anchor decisions on realised price movement since the event.
+        """
         rd = self.get_round(round_idx)
         if rd is None:
             return f"\n# 时间 / Time: 第 {round_idx + 1} 轮"
@@ -70,6 +81,15 @@ class RoundSchedule:
             f"  时间段: {rd.calendar_start} ~ {rd.calendar_end}",
             f"  距事件发生: {rd.hours_since_event:.0f} 小时",
         ]
+        if current_price is not None and cumulative_delta_pct is not None:
+            lines.append(
+                f"  当前价格: {current_price:.2f}  "
+                f"(事件以来 {cumulative_delta_pct:+.2f}%)"
+            )
+        elif current_price is not None:
+            lines.append(f"  当前价格: {current_price:.2f}")
+        elif cumulative_delta_pct is not None:
+            lines.append(f"  事件以来累计涨跌: {cumulative_delta_pct:+.2f}%")
         if round_idx > 0:
             prev = self.rounds[round_idx - 1]
             lines.append(f"  上一轮: {prev.label}")
