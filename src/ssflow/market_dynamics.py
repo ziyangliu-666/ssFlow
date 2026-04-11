@@ -245,10 +245,12 @@ def compute_price_impact(
     # whatever direction the flow already pointed to (positive sentiment
     # on a sell day made the drop WORSE, exact wrong semantic). Switching
     # to an additive push keyed off the cadence-aware max_delta_pct gives
-    # the correct directional bias: +0.5 sentiment on a daily cadence adds
-    # ~1.5pp to the delta, on monthly adds ~6pp. See
-    # tests/test_market_dynamics_sentiment_bias.py for the 4-quadrant
-    # regression that locks this in.
+    # the correct directional bias.
+    #
+    # Scale 0.3 — the 2026-04-12 iter4 A/B showed scale 0.6 hurts earnings
+    # events (五粮液 flipped from -19% to +2% due to severity=0 making
+    # additive bias irrelevant while other changes destabilised the
+    # context). Keeping 0.3 as the calibrated value that iter3 used.
     if sentiment_modifier != 0.0:
         raw_delta = raw_delta + sentiment_modifier * max_delta_pct * 0.3
 

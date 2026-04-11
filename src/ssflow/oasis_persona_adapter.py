@@ -444,20 +444,16 @@ def _user_info_for(
             f"{price_line}"
             f"\n{event.event_text.strip()[:500]}\n"
         )
-        if event.prior_consensus and event.prior_consensus.strip():
-            profile_block += (
-                f"\n市场此前预期: {event.prior_consensus.strip()[:300]}\n"
-            )
 
-        # Event-type historical precedents. Baked into the system prompt
-        # at init time so every LLM call sees the directional context
-        # before reading the feed — NOT just in the per-round conviction
-        # context. Before this was added (2026-04-12), agents on CATL
-        # would see "锂电产能过剩担忧压制" (prior_consensus) and weight
-        # that narrative over the policy catalyst, driving R0 to -0%
-        # instead of +6%. Real 924 policy saw CATL rally +33.8% in
-        # 6 months despite the same overcapacity narrative, so the
-        # prior needs to be in the agent's head from the first prompt.
+        # Event-type historical precedents. Rendered BEFORE prior_consensus
+        # so the LLM reads the directional frame first — recency bias in
+        # most LLMs weights the last-read block higher. Previously this
+        # block sat after prior_consensus, which meant CATL agents saw
+        # "锂电产能过剩担忧" (bearish) as their last contextual anchor
+        # and skewed sells against the policy catalyst. Moving the
+        # precedents before prior_consensus flips the anchor order:
+        # agents see "政策是中国资本市场最强的正面催化剂" first, then
+        # "市场此前担忧..." as secondary context.
         _etype = (event.event_type or "").lower()
         if _etype in _BULL_PERMANENT_EVENT_TYPES:
             profile_block += (
@@ -484,6 +480,11 @@ def _user_info_for(
                 "  4. 任何关于\"已经跌够了 / 价格反映充分\"的论据在结构性 "
                 "利空面前都需要警惕 — 基本面定价还在持续重估.\n"
                 "  5. 如果你是多头持有人: 这是典型的止损/减仓窗口.\n"
+            )
+
+        if event.prior_consensus and event.prior_consensus.strip():
+            profile_block += (
+                f"\n市场此前预期: {event.prior_consensus.strip()[:300]}\n"
             )
 
     # Trader-specific instructions: counter-balance OASIS's "perform social

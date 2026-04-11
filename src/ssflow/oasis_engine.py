@@ -733,6 +733,18 @@ async def run_simulation(
             ),
         )
 
+    # Note: a "R0 catalyst amplifier post" idea was tried in iter5 and
+    # reverted. Adding a second market-wire post at R0 with "国家队
+    # 净流入 ¥58亿" framing helped CATL marginally (-6.57 → -0.14) but
+    # caused 东财 to flip negative (+12.6 → -10.78) in the same run —
+    # probably because the extra post shifted recency anchors in ways
+    # the LLM sampled differently per event. Across iter3 / iter3_repeat
+    # / iter5, the 5-event direction accuracy oscillates between 2/5 and
+    # 4/5 purely on LLM sampling; the engine-level config can't
+    # eliminate that variance without per-event overfitting. Reverting
+    # to iter3's stable config (scale 0.3, no catalyst amplifier) as
+    # the final tuned state.
+
     # ── Cross-market context: extract and inject as round 0 events ──
     from .information.cross_market import (
         cross_market_from_explicit,
