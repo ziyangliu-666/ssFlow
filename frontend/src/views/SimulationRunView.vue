@@ -336,8 +336,11 @@ const chartPrices = computed(() => {
   return priceTrajectory.value
 })
 
-// Round-by-round pause: buffer events when paused at a round boundary
-const autoProceed = ref(false)        // false = pause after each round
+// Round-by-round pause: buffer events when paused at a round boundary.
+// Default to auto-advance — the SSE events are arriving in real time
+// anyway, and "watch it happen live" is the entire point of this view.
+// Users who want to pause can flip the 自动/手动 toggle in the filter bar.
+const autoProceed = ref(true)
 const pausedAtRound = ref(false)      // true when waiting for user click
 const eventBuffer = ref([])           // buffered events while paused
 
@@ -543,10 +546,16 @@ function _processEvent (type, payload) {
     case 'error':
       phase.value = 'error'
       // Dead stream — clear activeStreamId so the rail doesn't keep
-      // saying "running…". The error panel on this page takes over
-      // the recovery UX (see template).
+      // saying "running…". If we know the last successful simulation
+      // id, the user almost certainly wants to see that replay rather
+      // than land on a full-page "your link expired" error card, so
+      // redirect immediately. Otherwise the in-page recovery panel
+      // takes over.
       session.activeStreamId = ''
       if (sse.value) sse.value.close()
+      if (session.lastSimulationId) {
+        router.replace({ name: 'Replay', params: { simulationId: session.lastSimulationId } })
+      }
       break
 
     // ── Entity State Sandbox events ──
@@ -615,6 +624,12 @@ onMounted(() => {
       if (phase.value !== 'done') {
         phase.value = 'error'
         session.activeStreamId = ''
+        // Same auto-redirect rule as the explicit 'error' event
+        // above — if we have a replayable target, skip the
+        // error-card view and jump the user straight there.
+        if (session.lastSimulationId) {
+          router.replace({ name: 'Replay', params: { simulationId: session.lastSimulationId } })
+        }
       }
     },
   })
