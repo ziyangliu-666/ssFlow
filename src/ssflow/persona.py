@@ -504,6 +504,7 @@ _SUBARCH_TO_AGENT_TYPE: dict[str, str] = {
     "sellside_research_conservative": "analyst",
     "sellside_research_contrarian": "analyst",
     "sellside_research_growth": "analyst",
+    "sellside_research_bearish": "analyst",
     "regulator_securities": "regulator",
     "policy_central_bank": "policy",
     "policy_industrial": "policy",

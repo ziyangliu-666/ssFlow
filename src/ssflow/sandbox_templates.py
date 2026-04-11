@@ -138,9 +138,9 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
         {
             "entity_slot": "subject_company",
             "condition": "inventory_months > 3.0",
-            "description": "库存积压超过3个月 → 降价促销",
+            "description": "库存积压超过3个月 → 去库存压力",
             "effect_type": "inject_event",
-            "event_text_template": "[公司公告] {display_name}宣布终端优惠扩大,加速库存消化",
+            "event_text_template": "[预警] {display_name}库存积压超过3个月,面临去库存压力,可能影响未来利润率",
         },
         {
             "entity_slot": "subject_company",

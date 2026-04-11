@@ -44,6 +44,12 @@ class TestRoundSchedule:
         assert "24 小时" in ctx
         assert "上一轮" in ctx
 
+    def test_prompt_context_with_price_data(self):
+        sched = make_default_schedule("2026-04-09")
+        ctx = sched.prompt_context(2, cumulative_delta_pct=5.3, current_price=220.50)
+        assert "+5.30%" in ctx
+        assert "220.50" in ctx
+
     def test_serializable_roundtrip(self):
         sched = make_default_schedule("2026-04-09", n_trading_days=3)
         s = sched.to_serializable()
