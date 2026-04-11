@@ -199,7 +199,7 @@ class TestThresholdToPolicyConversion:
         eg = build_from_template("test", market="ashare", current_price=100.0)
         event = Event(
             ticker="TEST", event_text="test", event_type="other",
-            event_date="2026-01-01", current_price=100.0, adv_value=1e9,
+            event_date="2026-01-01",
         )
         personas = load_personas(Path("personas/ashare.yaml"))
         sg = build_sim_graph(personas, eg, event)

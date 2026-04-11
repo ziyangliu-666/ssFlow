@@ -1,16 +1,15 @@
 """Event input schema.
 
-An Event is what the user uploads. The schema explicitly includes prior context
-because, per Codex's review, "markets price surprise relative to consensus, not
-events in isolation". Without prior_consensus / recent_price_action, the
-simulation only sees ~25% of the actual signal.
+An Event is what the user uploads. It carries event metadata only:
+ticker classification, type, date, free-form text, and prior context.
+Per Codex's review, "markets price surprise relative to consensus, not
+events in isolation" — without prior_consensus / recent_price_action,
+the simulation only sees ~25% of the actual signal.
 
-This module is currency-agnostic. The Event carries:
-  - `current_price`     in the instrument's native currency
-  - `adv_value`         in the same currency as current_price
-  - `price_currency`    e.g. "CNY", "USD", "JPY", "BTC"
-  - `market`            slug like "ashare", "us-equity", "crude-oil-wti"
-  - `instrument`        display name (e.g. "BYD" or "比亚迪")
+Price, average daily volume, and currency live on `Instrument` inside the
+`InstrumentUniverse`. Every simulation must construct a universe (even a
+trivial one-element one for single-instrument runs); the engine reads
+prices and ADV from `instrument_universe.event_subject`, never from Event.
 
 VALID_EVENT_TYPES is intentionally broad — covers equity events, commodity
 events, crypto events, policy events, etc. Add new types here as new
@@ -64,13 +63,8 @@ class Event:
     recent_price_action: str = ""
     sector_context: str = ""
 
-    # ── Sandbox required fields (current state of the instrument) ──
-    current_price: float | None = None
-    adv_value: float | None = None  # average daily volume in the same currency as price
-
-    # ── Market metadata (for currency formatting + persona pack selection) ──
+    # ── Market metadata (for persona pack selection) ──
     market: str | None = None        # slug like "ashare", "us-equity"
-    price_currency: str = "CNY"      # currency code; default CNY for backward compat
     instrument: str | None = None    # human-readable display name (e.g. "BYD")
 
     # ── Reserved for future cross-asset spillover modeling ──
@@ -93,27 +87,8 @@ class Event:
             )
         if not self.event_date or len(self.event_date) != 10:
             raise ValueError("Event.event_date must be YYYY-MM-DD")
-        if self.current_price is not None and self.current_price <= 0:
-            raise ValueError(
-                f"Event.current_price must be > 0 if set, got {self.current_price}"
-            )
-        if self.adv_value is not None and self.adv_value <= 0:
-            raise ValueError(
-                f"Event.adv_value must be > 0 if set, got {self.adv_value}"
-            )
-        # Default instrument to ticker if not set
         if self.instrument is None:
             self.instrument = self.ticker
-
-    @property
-    def adv_cny(self) -> float | None:
-        """Backward-compat alias for adv_value (deprecated)."""
-        return self.adv_value
-
-    @property
-    def is_sandbox_ready(self) -> bool:
-        """True iff the event has the fields required for sandbox-mode simulation."""
-        return self.current_price is not None and self.adv_value is not None
 
     @property
     def context_completeness(self) -> float:

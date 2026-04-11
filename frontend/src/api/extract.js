@@ -23,14 +23,14 @@ export async function fetchPersonaTemplate (decisionMode = 'discretionary') {
 
 /**
  * Distill: from a topic string, identify related instruments + build round schedule.
+ * Real market prices/ADVs come from the distill endpoint per ticker.
  * Returns { instrument_universe, round_schedule }.
  */
-export async function runDistill ({ topic, market, eventTicker, eventPrice, eventDate }) {
+export async function runDistill ({ topic, market, eventTicker, eventDate }) {
   const r = await http.post('/distill', {
     topic: topic || '',
     market: market || 'ashare',
     event_ticker: eventTicker || undefined,
-    event_price: eventPrice || undefined,
     event_date: eventDate || '',
   })
   session.instrumentUniverse = r.data.instrument_universe
@@ -42,11 +42,10 @@ export async function runDistill ({ topic, market, eventTicker, eventPrice, even
  * Generate sandbox: from a topic, build an EntityGraph (template-only or LLM-tuned).
  * Returns the serialized EntityGraph.
  */
-export async function generateSandbox ({ topic, market, currentPrice, useLlm, entityOverrides }) {
+export async function generateSandbox ({ topic, market, useLlm, entityOverrides }) {
   const r = await http.post('/sandbox/generate', {
     topic: topic || '',
     market: market || 'ashare',
-    current_price: currentPrice || 0,
     use_llm: useLlm || false,
     entity_overrides: entityOverrides || undefined,
   })

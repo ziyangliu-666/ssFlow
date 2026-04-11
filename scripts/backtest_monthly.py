@@ -41,6 +41,7 @@ logging.basicConfig(
 )
 
 from ssflow.event import Event
+from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.market_data import fetch_kline_historical
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas
@@ -176,11 +177,22 @@ async def _run_one_sim(ev: dict) -> dict:
         event_text=ev["event_text"],
         event_type=ev["event_type"],
         event_date=ev["event_date"],
-        current_price=ev["anchor_price"],
-        adv_value=ev["adv"],
         prior_consensus=ev.get("prior_consensus", ""),
         recent_price_action="",
         sector_context="",
+    )
+    instrument_universe = InstrumentUniverse(
+        instruments=[
+            Instrument(
+                ticker=ev["ticker"],
+                name=ev["ticker"],
+                market="ashare",
+                relationship="event_subject",
+                current_price=float(ev["anchor_price"]),
+                adv_value=float(ev["adv"]),
+            )
+        ],
+        topic=ev["event_text"][:200],
     )
 
     personas = load_personas(PERSONAS_PATH)
@@ -196,7 +208,7 @@ async def _run_one_sim(ev: dict) -> dict:
         event, personas, n_rounds=schedule.n_rounds,
         round_schedule=schedule,
         entity_graph=entity_graph,
-        instrument_universe=None,  # skip distillation (no as_of_date support)
+        instrument_universe=instrument_universe,  # trivial single-instrument universe
     )
 
     # Collect per-class net flow + action histogram across all rounds

@@ -143,14 +143,30 @@ def _fake_proposal():
         prior_consensus="市场预期 +12%",
         recent_price_action="过去 10 日 +5%",
         sector_context="新能源车出货放量",
-        current_price=218.5,
-        adv_value=8e9,
-        price_currency="CNY",
         confidence={"market": 0.95, "instrument": 0.95, "ticker": 0.95},
         suggested_personas_path="personas/ashare.yaml",
         sources_consulted=[],
         extraction_warnings=[],
     )
+
+
+def _fake_universe_payload():
+    """The instrument_universe shape /simulate-stream/init expects."""
+    return {
+        "topic": "BYD Q1",
+        "instruments": [
+            {
+                "ticker": "002594",
+                "name": "BYD",
+                "market": "ashare",
+                "relationship": "event_subject",
+                "current_price": 218.5,
+                "adv_value": 8e9,
+                "price_currency": "CNY",
+                "kline_30d": [],
+            }
+        ],
+    }
 
 
 def test_extract_with_prompt_only(client):
@@ -260,6 +276,7 @@ def test_simulate_stream_init_returns_stream_id(client):
             "n_rounds": 2,
             "seed": 42,
             "base_personas_path": "personas/ashare.yaml",
+            "instrument_universe": _fake_universe_payload(),
         },
     )
     assert r.status_code == 200, r.get_data(as_text=True)
@@ -279,6 +296,7 @@ def test_simulate_stream_init_rejects_empty_personas(client):
             "event": event,
             "personas": [],
             "n_rounds": 2,
+            "instrument_universe": _fake_universe_payload(),
         },
     )
     assert r.status_code == 400
@@ -287,20 +305,19 @@ def test_simulate_stream_init_rejects_empty_personas(client):
 
 def test_simulate_stream_init_rejects_unready_event(client):
     sess, partials, event = _real_partial_for_init(client)
-    bad_event = dict(event)
-    bad_event["current_price"] = None  # makes it not sandbox-ready
+    # No instrument_universe → can't run the sim.
     r = client.post(
         "/simulate-stream/init",
         headers=AUTH_HEADER,
         json={
             "session_id": sess,
-            "event": bad_event,
+            "event": event,
             "personas": partials[:1],
             "n_rounds": 2,
         },
     )
     assert r.status_code == 400
-    assert r.get_json()["error"] == "sandbox_not_ready"
+    assert r.get_json()["error"] == "instrument_universe_required"
 
 
 # ─────────────────────── /simulate-stream/<id> SSE ───────────────────────
@@ -347,6 +364,7 @@ def test_simulate_stream_emits_events_via_fake_engine(client):
             "n_rounds": 2,
             "seed": 42,
             "base_personas_path": "personas/ashare.yaml",
+            "instrument_universe": _fake_universe_payload(),
         },
     )
     stream_id = init.get_json()["stream_id"]

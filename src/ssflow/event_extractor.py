@@ -7,11 +7,10 @@ description of intent). The agent does the rest:
   - Classifies the event type (earnings / opec / supply_disruption / ...)
   - Extracts the date (or defaults to today)
   - Searches the web for prior consensus / recent price action / sector context
-  - Looks up current price + ADV
   - Returns an EventProposal that the user can review + edit + confirm
 
-This is the input-side automation that makes ssFlow usable for ANY market
-without the user having to fill 10 form fields manually.
+Price + ADV are NOT looked up here — those are populated per instrument
+by the distillation step that builds the InstrumentUniverse.
 
 Architecture (3 stages):
 
@@ -33,7 +32,6 @@ from typing import Any
 
 from .event import VALID_EVENT_TYPES, Event
 from .llm_client import JsonChatResult, chat_json
-from .market_data import MarketQuote, fetch_market_quote
 from .persona_factory import (
     KNOWN_MARKETS,
     fetch_corpus,
@@ -55,6 +53,9 @@ class EventProposal:
     The user reviews this in the web UI / CLI, edits any field, and then
     confirms. The confirmed proposal is converted to an Event and runs
     through the sandbox simulation.
+
+    Price/ADV/currency are NOT on the proposal — they live on the
+    InstrumentUniverse built by distillation.
     """
 
     # Required fields (matching Event)
@@ -69,11 +70,6 @@ class EventProposal:
     prior_consensus: str = ""
     recent_price_action: str = ""
     sector_context: str = ""
-
-    # Sandbox-required market state
-    current_price: float | None = None
-    adv_value: float | None = None
-    price_currency: str = "CNY"
 
     # Per-field confidence (0-1) — surfaced to user so they know what to verify
     confidence: dict[str, float] = field(default_factory=dict)
@@ -97,10 +93,7 @@ class EventProposal:
             prior_consensus=self.prior_consensus,
             recent_price_action=self.recent_price_action,
             sector_context=self.sector_context,
-            current_price=self.current_price,
-            adv_value=self.adv_value,
             market=self.market,
-            price_currency=self.price_currency,
             instrument=self.instrument,
         )
 
@@ -242,6 +235,10 @@ SYNTHESIZE_SYSTEM_PROMPT = """You are a market event synthesis agent. Given a \
 preliminary classification and a corpus of web pages about an instrument, produce \
 a complete EventProposal that ssFlow can run through its sandbox simulation.
 
+Price, ADV, and currency are NOT your job — those are populated separately
+by the distillation step that hits real market data APIs per instrument.
+Focus on the narrative fields.
+
 Output STRICT JSON matching this schema:
 
 {
@@ -249,34 +246,22 @@ Output STRICT JSON matching this schema:
   "prior_consensus": "What the market expected before this event (1-3 sentences from the corpus)",
   "recent_price_action": "Recent price + volume context (1-3 sentences from the corpus)",
   "sector_context": "Industry / supply-demand context (1-3 sentences from the corpus)",
-  "current_price": <float or null — instrument's current price in its native currency>,
-  "adv_value": <float or null — average daily volume in same currency, NOT shares>,
-  "currency_used": "CNY | USD | EUR | JPY | ... (currency the prices above are in)",
   "suggested_personas_path": "personas/ashare.yaml | personas/us-equity-v1.yaml | personas/crude-oil-wti-v1.yaml | (or another path)",
-  "confidence_prices": 0.0-1.0,
   "confidence_context": 0.0-1.0,
   "warnings": ["list of any caveats — missing data, conflicting sources, etc."]
 }
 
 CRITICAL RULES:
-1. **NEVER hallucinate prices.** If the corpus doesn't have a clear current
-   price for the instrument, return null for current_price + adv_value and
-   add a warning. The user can fill it in manually.
-2. **DO NOT use forbidden vocabulary** in any text field: 建议, 推荐, 应该,
+1. **DO NOT use forbidden vocabulary** in any text field: 建议, 推荐, 应该,
    买入, 卖出, BUY, SELL, target price, recommend, should buy, etc.
    Use descriptive language: "市场预期", "consensus expected", "趋势", etc.
-3. ADV is in MONEY, not shares (e.g., $80 billion, not 12 million shares).
-   If the source gives shares, you must convert: shares × price = ADV in money.
-4. For A-share markets (CNY), ADV is typically in 億 (1e8). Convert to plain
-   CNY (so 80 億 → 8e9).
-5. For US equity (USD), ADV is typically in $B (1e9).
-6. suggested_personas_path: pick the closest match from the available packs:
+2. suggested_personas_path: pick the closest match from the available packs:
    - ashare market → personas/ashare.yaml (canonical hand-written) OR
                       personas/ashare-auto-2026-04-08.yaml (auto-generated)
    - us-equity     → personas/us-equity-v1.yaml OR personas/us-equity-auto-2026-04-08.yaml
    - crude-oil-wti → personas/crude-oil-wti-v1.yaml OR personas/crude-oil-wti-auto-2026-04-08.yaml
    - other markets → "personas/<market>.yaml" (may not exist yet)
-7. Return ONLY the JSON, no commentary, no markdown fences."""
+3. Return ONLY the JSON, no commentary, no markdown fences."""
 
 
 async def _synthesize_proposal(
@@ -357,47 +342,6 @@ async def extract_event(
         classification.get("event_type"),
     )
 
-    # Stage 0a.5: authoritative market data lookup
-    #
-    # Before firing off the (slow, hit-or-miss) web research in Stage 0b,
-    # query a real market data API for the current price + 20-day ADV
-    # of the classified ticker. For A-share this hits Sina Finance; for
-    # US equity / HK / futures / crypto it hits yfinance.
-    #
-    # The result is treated as authoritative — Stage 0c's synthesize
-    # prompt no longer has to guess prices from scraped news, which was
-    # the #1 reason current_price came back null. Web research still
-    # runs for context (consensus, sector, recent action) but the
-    # numeric fields are locked in here.
-    market_quote: MarketQuote | None = None
-    ticker_for_quote = classification.get("ticker") or ""
-    market_for_quote = classification.get("market") or ""
-    if ticker_for_quote or market_for_quote:
-        try:
-            market_quote = await fetch_market_quote(
-                market_for_quote,
-                ticker_for_quote,
-                instrument_hint=classification.get("instrument"),
-            )
-            if market_quote and market_quote.is_populated:
-                log.info(
-                    "[extract] market data: %s %s → price=%.4f adv=%.0f (%s) via %s",
-                    market_quote.market, market_quote.ticker,
-                    market_quote.current_price, market_quote.adv_value,
-                    market_quote.price_currency, market_quote.source,
-                )
-            else:
-                log.info(
-                    "[extract] market data: no authoritative quote for "
-                    "%s/%s (quote=%s)",
-                    market_for_quote, ticker_for_quote, market_quote,
-                )
-        except Exception as exc:
-            log.warning(
-                "[extract] market data fetch crashed: %s", exc,
-            )
-            market_quote = None
-
     # Stage 0b: research (or skip if caller supplied a corpus)
     if pre_fetched_corpus is not None:
         sources = [
@@ -429,66 +373,9 @@ async def extract_event(
     event_date = classification.get("event_date") or today
 
     confidence = dict(classification.get("confidence", {}))
-    confidence["prices"] = synth.get("confidence_prices", 0.0)
     confidence["context"] = synth.get("confidence_context", 0.0)
 
-    # Price + ADV priority: real market API > LLM synthesis > None.
-    # If the authoritative quote populated both fields, use them and
-    # bump price confidence to 1.0. Otherwise fall back to whatever
-    # the synthesize stage dug out of the scraped corpus.
-    if market_quote and market_quote.current_price and market_quote.current_price > 0:
-        final_price = float(market_quote.current_price)
-        price_source = f"api:{market_quote.source}"
-        confidence["prices"] = 1.0
-    else:
-        final_price = synth.get("current_price")
-        price_source = "llm:synth"
-        # LLM-synthesized prices are unreliable — cap confidence
-        confidence["prices"] = min(
-            float(synth.get("confidence_prices", 0.0)), 0.3,
-        )
-        if final_price is not None:
-            log.warning(
-                "[extract] LLM-synthesized price %.2f for %s/%s — "
-                "confidence capped at %.2f. Market API did not return data.",
-                final_price, market_for_quote, ticker_for_quote,
-                confidence["prices"],
-            )
-
-    if market_quote and market_quote.adv_value and market_quote.adv_value > 0:
-        final_adv = float(market_quote.adv_value)
-        adv_source = f"api:{market_quote.source}"
-    else:
-        final_adv = synth.get("adv_value")
-        adv_source = "llm:synth"
-
-    # Currency: market_quote wins (it was set by the API), else synth,
-    # else classification hint.
-    final_currency = (
-        (market_quote.price_currency if market_quote and market_quote.current_price else None)
-        or synth.get("currency_used")
-        or classification.get("price_currency", "USD")
-    )
-
     warnings = list(synth.get("warnings", []))
-
-    # Sanity check: A-share prices should be in a reasonable range
-    if final_price is not None and market in ("ashare", "a-share"):
-        if final_price < 1.0 or final_price > 10000.0:
-            warnings.append(
-                f"SUSPICIOUS: A-share price {final_price} outside "
-                f"reasonable range [1.0, 10000.0] — verify manually."
-            )
-            confidence["prices"] = min(confidence.get("prices", 0.0), 0.1)
-            log.warning(
-                "[extract] Suspicious A-share price: %.4f for %s",
-                final_price, ticker_for_quote,
-            )
-    if market_quote and market_quote.is_populated:
-        warnings.append(
-            f"Price + ADV sourced from {market_quote.source} "
-            f"(last trade {market_quote.last_trade_date or 'unknown'})."
-        )
 
     proposal = EventProposal(
         ticker=ticker,
@@ -500,9 +387,6 @@ async def extract_event(
         prior_consensus=synth.get("prior_consensus", ""),
         recent_price_action=synth.get("recent_price_action", ""),
         sector_context=synth.get("sector_context", ""),
-        current_price=final_price,
-        adv_value=final_adv,
-        price_currency=final_currency,
         confidence=confidence,
         suggested_personas_path=synth.get("suggested_personas_path"),
         extracted_at=today,
@@ -512,12 +396,9 @@ async def extract_event(
     )
 
     log.info(
-        "[extract] DONE: %s · %s · price=%s (src=%s) adv=%s (src=%s) "
-        "confidence_prices=%.2f",
+        "[extract] DONE: %s · %s · context_confidence=%.2f",
         proposal.market, proposal.instrument,
-        proposal.current_price, price_source,
-        proposal.adv_value, adv_source,
-        confidence.get("prices", 0.0),
+        confidence.get("context", 0.0),
     )
     return proposal
 

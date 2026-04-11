@@ -391,11 +391,36 @@ def create_app() -> Flask:
         except (TypeError, ValueError) as exc:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
 
-        if not event.is_sandbox_ready:
+        # Validate that the universe carries a usable event-subject price.
+        # Price/ADV/currency live on Instrument now, never on Event.
+        instrument_universe_data = payload.get("instrument_universe")
+        if not instrument_universe_data:
             return jsonify(
                 {
-                    "error": "sandbox_not_ready",
-                    "detail": "event requires current_price and adv_value > 0",
+                    "error": "instrument_universe_required",
+                    "detail": "ssFlow requires an instrument_universe with at least the event subject priced.",
+                }
+            ), 400
+        _iu_instruments = instrument_universe_data.get("instruments") or []
+        _iu_subject = next(
+            (
+                inst for inst in _iu_instruments
+                if inst.get("relationship") in ("event_subject", "primary")
+                and (inst.get("current_price") or 0) > 0
+            ),
+            None,
+        )
+        if _iu_subject is None and _iu_instruments:
+            # No tagged subject — fall back to the first priced instrument
+            _iu_subject = next(
+                (inst for inst in _iu_instruments if (inst.get("current_price") or 0) > 0),
+                None,
+            )
+        if _iu_subject is None:
+            return jsonify(
+                {
+                    "error": "no_priced_instrument",
+                    "detail": "instrument_universe has no instrument with current_price > 0.",
                 }
             ), 400
 
@@ -421,9 +446,9 @@ def create_app() -> Flask:
         if not personas:
             return jsonify({"error": "no_resolved_personas"}), 400
 
-        # Entity graph + instrument universe + round schedule (optional)
+        # Entity graph + round schedule (optional). instrument_universe_data
+        # was validated above.
         entity_graph_data = payload.get("entity_graph")
-        instrument_universe_data = payload.get("instrument_universe")
         round_schedule_data = payload.get("round_schedule")
 
         # Stash everything in the store. The actual run happens when the
@@ -703,9 +728,6 @@ def create_app() -> Flask:
             return jsonify({"error": "invalid_json"}), 400
 
         try:
-            adv = payload.get("adv_value")
-            if adv is None:
-                adv = payload.get("adv_cny")
             event = Event(
                 ticker=payload.get("ticker", "").strip(),
                 event_text=payload.get("event_text", "").strip(),
@@ -714,22 +736,41 @@ def create_app() -> Flask:
                 prior_consensus=payload.get("prior_consensus", "").strip(),
                 recent_price_action=payload.get("recent_price_action", "").strip(),
                 sector_context=payload.get("sector_context", "").strip(),
-                current_price=payload.get("current_price"),
-                adv_value=adv,
                 market=payload.get("market"),
-                price_currency=payload.get("price_currency", "CNY"),
                 instrument=payload.get("instrument"),
             )
         except (TypeError, ValueError) as exc:
             return jsonify({"error": "invalid_event", "detail": str(exc)}), 400
 
-        if not event.is_sandbox_ready:
+        # Build a one-element InstrumentUniverse from the legacy explicit
+        # current_price/adv_value request fields. This keeps the legacy CLI
+        # path working without requiring the caller to construct a universe.
+        legacy_price = payload.get("current_price")
+        legacy_adv = payload.get("adv_value")
+        if legacy_adv is None:
+            legacy_adv = payload.get("adv_cny")
+        if legacy_price is None or legacy_price <= 0 or legacy_adv is None or legacy_adv <= 0:
             return jsonify(
                 {
-                    "error": "sandbox_not_ready",
-                    "detail": "ssFlow requires current_price and adv_value in the request body",
+                    "error": "instrument_required",
+                    "detail": "ssFlow requires current_price and adv_value > 0 in the request body to build an instrument universe.",
                 }
             ), 400
+        from ssflow.instrument import Instrument, InstrumentUniverse
+        instrument_universe = InstrumentUniverse(
+            instruments=[
+                Instrument(
+                    ticker=event.ticker,
+                    name=event.instrument or event.ticker,
+                    market=event.market or "ashare",
+                    relationship="event_subject",
+                    current_price=float(legacy_price),
+                    adv_value=float(legacy_adv),
+                    price_currency=str(payload.get("price_currency", "CNY")),
+                )
+            ],
+            topic=event.event_text[:200],
+        )
 
         personas_path = payload.get("personas_path")
         if not personas_path:
@@ -746,7 +787,9 @@ def create_app() -> Flask:
             return jsonify({"error": "personas_load_failed", "detail": str(exc)}), 500
 
         try:
-            result = asyncio.run(run_simulation(event, personas))
+            result = asyncio.run(
+                run_simulation(event, personas, instrument_universe=instrument_universe)
+            )
         except BudgetExceeded as exc:
             return jsonify({"error": "budget_exceeded", "detail": str(exc)}), 429
         except Exception as exc:
@@ -1353,9 +1396,6 @@ def _rebuild_entity_graph(data: dict, event: "Event") -> "EntityGraph":
 
 def _build_event_from_dict(data: dict) -> Event:
     """Construct an Event from the loose JSON shape we accept on the wire."""
-    adv = data.get("adv_value")
-    if adv is None:
-        adv = data.get("adv_cny")
     event_type = data.get("event_type", "other")
     if event_type not in VALID_EVENT_TYPES:
         event_type = "other"
@@ -1367,10 +1407,7 @@ def _build_event_from_dict(data: dict) -> Event:
         prior_consensus=str(data.get("prior_consensus", "")).strip(),
         recent_price_action=str(data.get("recent_price_action", "")).strip(),
         sector_context=str(data.get("sector_context", "")).strip(),
-        current_price=data.get("current_price"),
-        adv_value=adv,
         market=data.get("market"),
-        price_currency=data.get("price_currency", "CNY"),
         instrument=data.get("instrument"),
     )
 
@@ -1384,10 +1421,7 @@ def _event_to_dict(event: Event) -> dict:
         "prior_consensus": event.prior_consensus,
         "recent_price_action": event.recent_price_action,
         "sector_context": event.sector_context,
-        "current_price": event.current_price,
-        "adv_value": event.adv_value,
         "market": event.market,
-        "price_currency": event.price_currency,
         "instrument": event.instrument,
     }
 

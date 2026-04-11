@@ -359,12 +359,13 @@ async function onStart () {
       urls,
     })
 
-    // Phase 3: Distill + Sandbox (parallel)
+    // Phase 3: Distill + Sandbox (parallel). Distillation hits real
+    // market data per ticker — that's where price/ADV come from now,
+    // not from the EventProposal.
     pipelinePhase.value = 'distilling'
     const ep = session.eventProposal || {}
     const topic = ep.event_text || strippedPrompt
     const ticker = ep.ticker || ''
-    const price = ep.current_price || 0
     const market = ep.market || 'ashare'
     const eventDate = ep.event_date || ''
 
@@ -372,8 +373,8 @@ async function onStart () {
     try {
       const { runDistill, generateSandbox } = await import('../api/extract')
       await Promise.all([
-        runDistill({ topic, market, eventTicker: ticker, eventPrice: price, eventDate }),
-        generateSandbox({ topic, market, currentPrice: price }),
+        runDistill({ topic, market, eventTicker: ticker, eventDate }),
+        generateSandbox({ topic, market }),
       ])
     } catch (distillErr) {
       // Non-fatal: if distill/sandbox fails, proceed without them

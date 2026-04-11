@@ -130,25 +130,28 @@ async def test_full_pipeline_byd_earnings(tmp_path: Path):
         f"expected ashare market, got {proposal.market}"
     )
     log.info(
-        "[e2e] extracted: market=%s ticker=%s instrument=%s price=%s adv=%s",
+        "[e2e] extracted: market=%s ticker=%s instrument=%s",
         proposal.market, proposal.ticker, proposal.instrument,
-        proposal.current_price, proposal.adv_value,
     )
 
-    # Current price + ADV: the LLM usually extracts these from the corpus,
-    # but if it doesn't we force-set them from our sample text so the sim
-    # is sandbox-ready.
-    if proposal.current_price is None or proposal.current_price == 0:
-        proposal.current_price = 218.50
-        log.info("[e2e] fallback: current_price=218.50")
-    if proposal.adv_value is None or proposal.adv_value == 0:
-        proposal.adv_value = 8.5e9
-        log.info("[e2e] fallback: adv_value=8.5e9")
-
     event = proposal.to_event()
-    assert event.is_sandbox_ready, (
-        f"event not sandbox ready: current_price={event.current_price}, "
-        f"adv_value={event.adv_value}"
+
+    # Build a one-element InstrumentUniverse with the BYD price/ADV
+    # baked into the sample text. The engine reads price/ADV from here,
+    # not from the event itself.
+    from ssflow.instrument import Instrument, InstrumentUniverse
+    instrument_universe = InstrumentUniverse(
+        instruments=[
+            Instrument(
+                ticker=event.ticker,
+                name=event.instrument or event.ticker,
+                market=event.market or "ashare",
+                relationship="event_subject",
+                current_price=218.50,
+                adv_value=8.5e9,
+            )
+        ],
+        topic=event.event_text[:200],
     )
 
     # 4. Propose personas against the ashare pack
@@ -188,6 +191,7 @@ async def test_full_pipeline_byd_earnings(tmp_path: Path):
         n_rounds=2,
         seed=42,
         event_sink=sink,
+        instrument_universe=instrument_universe,
     )
     log.info(
         "[e2e] sim done: %d rounds, price %.2f → %.2f, cost $%.4f, elapsed %.1fs",
@@ -196,7 +200,7 @@ async def test_full_pipeline_byd_earnings(tmp_path: Path):
     )
 
     assert result.n_rounds == 2
-    assert result.initial_price == pytest.approx(event.current_price)
+    assert result.initial_price == pytest.approx(218.50)
     assert isinstance(result.final_price, float)
     assert result.final_price > 0
 

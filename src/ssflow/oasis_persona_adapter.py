@@ -377,14 +377,28 @@ def _user_info_for(
     # Inject the market event context so every agent (trader + info) knows
     # what event triggered the simulation — not just from the social feed.
     if event is not None:
+        # Pull the event-subject's price + currency from the universe.
+        subject_price: float | None = None
+        subject_currency = "CNY"
+        if instrument_universe is not None and instrument_universe.instruments:
+            subject = instrument_universe.get(
+                instrument_universe.event_subject_ticker
+            )
+            if subject is not None:
+                subject_price = subject.current_price
+                subject_currency = subject.price_currency
         sym = {"CNY": "¥", "USD": "$", "EUR": "€", "JPY": "¥",
-               "HKD": "HK$", "BTC": "₿"}.get(event.price_currency, "$")
+               "HKD": "HK$", "BTC": "₿"}.get(subject_currency, "$")
+        price_line = (
+            f"  当前价格: {sym}{subject_price:.2f}\n"
+            if subject_price is not None else ""
+        )
         profile_block += (
             f"\n\n# 当前市场事件\n"
             f"  标的: {event.instrument or event.ticker} ({event.ticker})\n"
             f"  事件类型: {event.event_type}\n"
             f"  事件日期: {event.event_date}\n"
-            f"  当前价格: {sym}{event.current_price:.2f}\n"
+            f"{price_line}"
             f"\n{event.event_text.strip()[:500]}\n"
         )
         if event.prior_consensus and event.prior_consensus.strip():

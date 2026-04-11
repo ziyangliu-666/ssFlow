@@ -63,8 +63,6 @@ async def main():
         event_text=topic,
         event_type="other",
         event_date="2026-04-10",
-        current_price=es.current_price,
-        adv_value=es.adv_value,
         market="ashare",
         instrument=es.name,
     )

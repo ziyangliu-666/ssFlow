@@ -27,22 +27,6 @@
       </div>
     </div>
 
-    <div class="two">
-      <div class="field">
-        <label>现价</label>
-        <input v-model.number="local.current_price" type="number" step="0.01" />
-      </div>
-      <div class="field">
-        <label>币种</label>
-        <input v-model="local.price_currency" />
-      </div>
-    </div>
-
-    <div class="field">
-      <label>日均成交额 (同币种)</label>
-      <input v-model.number="local.adv_value" type="number" />
-    </div>
-
     <div class="field">
       <label>事件描述</label>
       <textarea v-model="local.event_text" rows="3" />

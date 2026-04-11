@@ -21,6 +21,7 @@ logging.basicConfig(
 )
 
 from ssflow.event import Event
+from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas
 from ssflow.round_schedule import make_schedule
@@ -117,11 +118,22 @@ async def run_one(ev_def: dict) -> dict:
         event_text=ev_def["event_text"],
         event_type=ev_def["event_type"],
         event_date=ev_def["event_date"],
-        current_price=ev_def["current_price"],
-        adv_value=ev_def["adv"],
         prior_consensus=ev_def.get("prior_consensus", ""),
         recent_price_action="",
         sector_context="",
+    )
+    instrument_universe = InstrumentUniverse(
+        instruments=[
+            Instrument(
+                ticker=ev_def["ticker"],
+                name=ev_def["ticker"],
+                market="ashare",
+                relationship="event_subject",
+                current_price=float(ev_def["current_price"]),
+                adv_value=float(ev_def["adv"]),
+            )
+        ],
+        topic=ev_def["event_text"][:200],
     )
 
     personas = load_personas(PERSONAS_PATH)
@@ -138,6 +150,7 @@ async def run_one(ev_def: dict) -> dict:
         event, personas, n_rounds=n_rounds,
         round_schedule=schedule,
         entity_graph=entity_graph,
+        instrument_universe=instrument_universe,
     )
 
     elapsed = time.time() - t0

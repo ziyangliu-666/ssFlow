@@ -59,6 +59,7 @@ from ssflow.config import settings
 from ssflow.distillation import distill
 from ssflow.event import VALID_EVENT_TYPES, Event
 from ssflow.event_extractor import extract_event
+from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.llm_client import cost_tracker
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas, persona_set_hash
@@ -177,14 +178,12 @@ async def _build_event_from_input(args: argparse.Namespace) -> tuple[Event, str 
     print(f"  Instrument:    {proposal.instrument} ({proposal.ticker})", file=sys.stderr)
     print(f"  Event type:    {proposal.event_type}", file=sys.stderr)
     print(f"  Event date:    {proposal.event_date}", file=sys.stderr)
-    print(f"  Currency:      {proposal.price_currency}", file=sys.stderr)
-    print(f"  Current price: {proposal.current_price}", file=sys.stderr)
-    print(f"  ADV:           {proposal.adv_value}", file=sys.stderr)
     print(f"  Pack:          {proposal.suggested_personas_path}", file=sys.stderr)
     print(f"  Confidence:    {proposal.confidence}", file=sys.stderr)
     if proposal.extraction_warnings:
         print(f"  Warnings:      {proposal.extraction_warnings}", file=sys.stderr)
     print(f"  Sources:       {len(proposal.sources_consulted)} URLs consulted", file=sys.stderr)
+    print(f"  (price + ADV will be fetched by the distillation step)", file=sys.stderr)
     print(file=sys.stderr)
 
     if not args.confirm:
@@ -197,15 +196,6 @@ async def _build_event_from_input(args: argparse.Namespace) -> tuple[Event, str 
             print("Aborted by user. Re-run with --confirm to skip this prompt.",
                   file=sys.stderr)
             sys.exit(0)
-
-    if proposal.current_price is None or proposal.adv_value is None:
-        print(
-            "ERROR: extraction did not produce current_price + adv_value. "
-            "Either edit the proposal manually or pass --current-price + --adv "
-            "explicitly.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
 
     return proposal.to_event(), proposal.suggested_personas_path
 
@@ -245,8 +235,6 @@ async def amain() -> int:
                 prior_consensus=_read_or_blank(args.prior_consensus),
                 recent_price_action=_read_or_blank(args.recent_price_action),
                 sector_context=_read_or_blank(args.sector_context),
-                current_price=args.current_price,
-                adv_value=args.adv,
             )
         except ValueError as exc:
             print(f"ERROR: invalid event: {exc}", file=sys.stderr)
@@ -274,23 +262,10 @@ async def amain() -> int:
           file=sys.stderr)
     print(f"#   context completeness: {event.context_completeness:.0%}", file=sys.stderr)
 
-    # Build entity graph for the Entity State Sandbox.
-    # Uses template defaults (no LLM call, zero cost).
-    entity_graph = build_from_template(
-        topic=event.event_text or f"{event.ticker} {event.event_type}",
-        market=event.market or "ashare",
-        current_price=float(event.current_price or 0),
-    )
-    print(f"#   entity graph: {len(entity_graph.entities)} entities, "
-          f"{len(entity_graph.flows)} flows, "
-          f"{len(entity_graph.thresholds)} thresholds "
-          f"({sum(1 for t in entity_graph.thresholds if t.effect.effect_type == 'force_action')} force_action)",
-          file=sys.stderr)
-
     # Distillation: build InstrumentUniverse with 3-6 related instruments +
     # real 30-day K-line history, so agents see sector context and trends
     # instead of just a single ticker's current price.
-    instrument_universe = None
+    instrument_universe: InstrumentUniverse | None = None
     if not args.no_universe:
         print(f"#   distilling instrument universe (LLM + Sina fetches)...", file=sys.stderr, flush=True)
         try:
@@ -298,7 +273,7 @@ async def amain() -> int:
                 topic=event.event_text[:400] if event.event_text else f"{event.ticker} {event.event_type}",
                 market=event.market or "ashare",
                 event_ticker=event.ticker,
-                event_price=float(event.current_price or 0) or None,
+                event_price=args.current_price,
             )
             tickers_str = ", ".join(
                 f"{i.ticker}[{i.relationship}]"
@@ -321,10 +296,53 @@ async def amain() -> int:
         except Exception as exc:
             print(
                 f"#   distillation failed ({exc}) — falling back to "
-                f"single-instrument mode",
+                f"single-instrument universe",
                 file=sys.stderr,
             )
             instrument_universe = None
+
+    # If distillation was skipped or failed, build a one-element universe
+    # from the explicit --current-price + --adv args. The engine requires
+    # a non-empty universe; the event itself no longer carries price/ADV.
+    if instrument_universe is None:
+        if args.current_price is None or args.adv is None:
+            print(
+                "ERROR: no instrument universe available — pass --current-price + --adv "
+                "to build a single-instrument universe, or drop --no-universe to let "
+                "distillation fetch real market data.",
+                file=sys.stderr,
+            )
+            return 2
+        instrument_universe = InstrumentUniverse(
+            instruments=[
+                Instrument(
+                    ticker=event.ticker or "TEST",
+                    name=event.instrument or event.ticker or "TEST",
+                    market=event.market or "ashare",
+                    relationship="event_subject",
+                    current_price=float(args.current_price),
+                    adv_value=float(args.adv),
+                )
+            ],
+            topic=(event.event_text or "")[:200],
+        )
+
+    # Build entity graph for the Entity State Sandbox.
+    # Uses template defaults (no LLM call, zero cost). We seed it with the
+    # event-subject's price from the universe so any threshold rules that
+    # reference an absolute price level start out sane.
+    _subject = instrument_universe.get(instrument_universe.event_subject_ticker)
+    _subject_price = _subject.current_price if _subject else 0.0
+    entity_graph = build_from_template(
+        topic=event.event_text or f"{event.ticker} {event.event_type}",
+        market=event.market or "ashare",
+        current_price=float(_subject_price),
+    )
+    print(f"#   entity graph: {len(entity_graph.entities)} entities, "
+          f"{len(entity_graph.flows)} flows, "
+          f"{len(entity_graph.thresholds)} thresholds "
+          f"({sum(1 for t in entity_graph.thresholds if t.effect.effect_type == 'force_action')} force_action)",
+          file=sys.stderr)
 
     print(f"#   running OASIS simulation...", file=sys.stderr, flush=True)
 

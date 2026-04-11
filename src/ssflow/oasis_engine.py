@@ -229,11 +229,16 @@ def _currency_symbol(currency: str) -> str:
     }.get(currency, "$")
 
 
-def _build_initial_event_post(event: Event) -> str:
+def _build_initial_event_post(
+    event: Event,
+    *,
+    initial_price: float,
+    currency: str,
+) -> str:
     """Render the seed event as the first post the market broadcaster makes
     at round 0. Lands in everyone's feed before round 1's social step.
     """
-    sym = _currency_symbol(event.price_currency)
+    sym = _currency_symbol(currency)
     parts = [
         f"[Market Event] {event.instrument or event.ticker} · "
         f"{event.event_type} · {event.event_date}",
@@ -243,7 +248,7 @@ def _build_initial_event_post(event: Event) -> str:
         parts.append(f"Prior consensus: {event.prior_consensus.strip()[:200]}")
     if event.recent_price_action.strip():
         parts.append(f"Recent price action: {event.recent_price_action.strip()[:200]}")
-    parts.append(f"Current price: {sym}{event.current_price:.2f}")
+    parts.append(f"Current price: {sym}{initial_price:.2f}")
     return "\n".join(parts)
 
 
@@ -255,9 +260,11 @@ def _build_price_update_post(
     net_flow: float,
     round_label: str = "",
     initial_price: float = 0.0,
+    *,
+    currency: str = "CNY",
 ) -> str:
     """The synthetic market broadcaster's price-update post."""
-    sym = _currency_symbol(event.price_currency)
+    sym = _currency_symbol(currency)
     delta_pct = (price_after / price_before - 1.0) * 100 if price_before else 0.0
     cumulative = (
         (price_after / initial_price - 1.0) * 100
@@ -478,8 +485,13 @@ async def run_simulation(
     into OASIS as `__market__` posts.
 
     Args:
-        event: must be sandbox-ready (current_price + adv_value set)
+        event: event metadata (ticker, type, date, text, context strings)
         personas: schema v3 list (mix of trader + non-trader entities)
+        instrument_universe: REQUIRED. The full set of tradeable instruments.
+            Price, ADV, and currency are read from the `event_subject`
+            instrument inside this universe; the engine never reads them
+            from the Event itself. For single-instrument runs, build a
+            one-element universe.
         n_rounds: defaults to settings.n_rounds
         simulation_id: stable id for scorecard tracking
         lambda_market: market impact coefficient; defaults to lookup by event.market
@@ -491,9 +503,6 @@ async def run_simulation(
         entity_graph: optional EntityGraph for the Entity State Sandbox.
             When provided, each round executes resource flows, evaluates
             thresholds, and injects entity state ("处境") into agent prompts.
-        instrument_universe: optional InstrumentUniverse for multi-instrument
-            simulations. When provided, agents can trade across multiple
-            instruments with independent Kyle pricing per ticker.
         round_schedule: optional RoundSchedule for time-aware rounds.
             When provided, each round's time context is injected into
             agent prompts.
@@ -505,18 +514,31 @@ async def run_simulation(
         OasisSimResult with the full price trajectory + publication log.
 
     Raises:
-        ValueError: if event is not sandbox-ready or personas list is empty
+        ValueError: if instrument_universe is missing/empty or personas list is empty
         BudgetExceeded: if cost guard trips mid-run
     """
     _patch_oasis_recsys()
 
     if not personas:
         raise ValueError("run_simulation requires at least one persona")
-    if not event.is_sandbox_ready:
+    if instrument_universe is None or not instrument_universe.instruments:
         raise ValueError(
-            f"event {event.ticker} is not sandbox-ready: "
-            f"current_price={event.current_price}, adv_value={event.adv_value}"
+            "run_simulation requires a non-empty instrument_universe — "
+            "build one from your event's primary instrument before calling."
         )
+
+    # Resolve the event-subject scalars once. Every downstream reference to
+    # "the price" / "the ADV" / "the currency" reads from this single point.
+    _subject_ticker = instrument_universe.event_subject_ticker
+    _subject = instrument_universe.get(_subject_ticker)
+    if _subject is None or _subject.current_price <= 0:
+        raise ValueError(
+            f"instrument_universe event_subject {_subject_ticker!r} has no "
+            f"valid price — cannot run simulation."
+        )
+    initial_price = float(_subject.current_price)
+    initial_adv = float(_subject.adv_value)
+    event_currency = _subject.price_currency
 
     n_rounds = n_rounds or settings.n_rounds
     simulation_id = simulation_id or f"oasis_{uuid.uuid4().hex[:12]}"
@@ -533,7 +555,7 @@ async def run_simulation(
             event_type=event.event_type or "",
             board=getattr(event, "board", "normal") or "normal",
             float_cap_cny=getattr(event, "float_market_cap", None),
-            adv_value=event.adv_value if event.adv_value > 0 else None,
+            adv_value=initial_adv if initial_adv > 0 else None,
         )
         lambda_used = _cal_params["lambda"]
         _lambda_source = _cal_params["source"]
@@ -565,7 +587,7 @@ async def run_simulation(
         "initial_price=%.2f adv=%.0f lambda=%.3f seed=%s db=%s",
         simulation_id, event.ticker, len(personas),
         sum(1 for p in personas if p.sandbox is not None),
-        n_rounds, event.current_price, event.adv_value,
+        n_rounds, initial_price, initial_adv,
         lambda_used, seed, db_path_obj,
     )
 
@@ -581,9 +603,9 @@ async def run_simulation(
         market=event.market,
         market_event_type=event.event_type,
         event_date=event.event_date,
-        initial_price=float(event.current_price),
-        price_currency=event.price_currency,
-        adv_value=float(event.adv_value),
+        initial_price=initial_price,
+        price_currency=event_currency,
+        adv_value=initial_adv,
         lambda_used=lambda_used,
         n_personas=len(personas),
         n_traders=sum(1 for p in personas if p.sandbox is not None),
@@ -618,24 +640,15 @@ async def run_simulation(
     # ── Initialize trading state for trader personas ──
     spawn_rng = random.Random(seed if seed is not None else 0)
     sample_rng = random.Random((seed if seed is not None else 0) + 1000)
-    initial_price = float(event.current_price)
     agent_pops: dict[str, list[Agent]] = {}
-    multi_prices_for_spawn = (
-        instrument_universe.prices() if instrument_universe is not None else None
-    )
+    multi_prices_for_spawn = instrument_universe.prices()
     # Build {ticker: {persona_id: pct}} from instrument holder data
-    holdings_by_persona_map: dict[str, dict[str, float]] | None = None
-    if instrument_universe is not None:
-        holdings_by_persona_map = {}
-        for inst in instrument_universe.instruments:
-            if inst.holdings_by_persona:
-                holdings_by_persona_map[inst.ticker] = inst.holdings_by_persona
-    # Single-instrument mode: spawn holdings under the real event ticker so
-    # all bookkeeping (initial holdings, orders, P&L) shares one key.
-    _primary_ticker = (
-        event.ticker if event.ticker and instrument_universe is None
-        else "_default"
-    )
+    holdings_by_persona_map: dict[str, dict[str, float]] = {}
+    for inst in instrument_universe.instruments:
+        if inst.holdings_by_persona:
+            holdings_by_persona_map[inst.ticker] = inst.holdings_by_persona
+    # All bookkeeping is keyed by real instrument tickers from the universe.
+    _primary_ticker = "_default"
     for persona in personas:
         if persona.sandbox is not None:
             agent_pops[persona.id] = spawn_agents(
@@ -649,7 +662,9 @@ async def run_simulation(
 
     # ── Round 0 prelude: post the seed event from the market broadcaster ──
     market_agent = agent_graph.get_agent(persona_id_to_oasis_id[MARKET_AGENT_ID_NAME])
-    initial_post_text = _build_initial_event_post(event)
+    initial_post_text = _build_initial_event_post(
+        event, initial_price=initial_price, currency=event_currency,
+    )
     last_post_id = _max_post_id(str(db_path_obj))
     await env.step({
         market_agent: ManualAction(
@@ -711,22 +726,14 @@ async def run_simulation(
                 profile["other_info"] = other
 
     # ── Multi-instrument price tracking ──
-    # When instrument_universe is present, we track prices per ticker.
-    # The single current_price variable remains as the primary instrument's price
-    # for backward compat with all the existing code paths.
-    if instrument_universe is not None:
-        current_prices: dict[str, float] = instrument_universe.prices()
-        adv_values: dict[str, float] = instrument_universe.adv_values()
-        adaptive_advs: dict[str, AdaptiveADV] = {
-            t: AdaptiveADV(baseline=v) for t, v in adv_values.items()
-        }
-    else:
-        current_prices = {}
-        adv_values = {}
-        adaptive_advs = {}
-
-    # Single-instrument adaptive ADV
-    adaptive_adv = AdaptiveADV(baseline=event.adv_value)
+    # All prices/ADVs flow from the InstrumentUniverse — single source of truth.
+    current_prices: dict[str, float] = instrument_universe.prices()
+    adv_values: dict[str, float] = instrument_universe.adv_values()
+    adaptive_advs: dict[str, AdaptiveADV] = {
+        t: AdaptiveADV(baseline=v) for t, v in adv_values.items()
+    }
+    # Scalar adaptive ADV for the single-instrument legacy path / event-subject view.
+    adaptive_adv = AdaptiveADV(baseline=initial_adv)
 
     # ── Cadence-aware caps ──
     # Schedules that step in month-scale jumps need relaxed Kyle caps +
@@ -866,7 +873,7 @@ async def run_simulation(
                         event_type=event.event_type or "",
                         event_text=event.event_text or "",
                         day1_open=getattr(event, "day1_open", None),
-                        current_price=event.current_price,
+                        current_price=initial_price,
                     )
                     _overnight_sent = _sev.overnight_sentiment
                     _gap_vol = _sev.gap_vol
@@ -1877,10 +1884,10 @@ async def run_simulation(
                 price_after=float(price_after),
                 delta_pct=float(delta_pct),
                 net_flow_total=float(net_flow_total),
-                price_currency=event.price_currency,
+                price_currency=event_currency,
                 prices=dict(current_prices) if current_prices else None,
                 adv_effective=float(adaptive_adv.effective),
-                adv_baseline=float(event.adv_value),
+                adv_baseline=initial_adv,
             )
 
             # Accumulate multi-instrument trajectories
@@ -1914,6 +1921,7 @@ async def run_simulation(
                 event, round_idx, current_price, price_after, net_flow_total,
                 round_label=round_label,
                 initial_price=initial_price,
+                currency=event_currency,
             )
             pre_price_post_id = _max_post_id(str(db_path_obj))
             try:
@@ -2070,7 +2078,7 @@ async def run_simulation(
         cost_usd_at_end=cost_at_end,
         llm_seed=seed,
         lambda_used=lambda_used,
-        adv_value_used=event.adv_value,
+        adv_value_used=initial_adv,
         oasis_db_path=str(db_path_obj),
         final_agents_by_class=agent_pops,
         price_trajectories=(

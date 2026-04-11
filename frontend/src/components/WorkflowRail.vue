@@ -219,9 +219,18 @@ const contextCard = computed(() => {
     title = '当前事件'
   }
 
-  const price = ep && ep.current_price
-    ? (currencySymbol(ep.price_currency || 'CNY') + Number(ep.current_price).toFixed(2))
-    : ''
+  // Pull the event-subject's price from the instrument_universe (price now
+  // lives there, not on the event proposal).
+  const universe = session.instrumentUniverse
+  let price = ''
+  if (universe && Array.isArray(universe.instruments) && universe.instruments.length) {
+    const subj = universe.instruments.find(
+      (i) => i.relationship === 'event_subject' || i.relationship === 'primary'
+    ) || universe.instruments[0]
+    if (subj && typeof subj.current_price === 'number' && subj.current_price > 0) {
+      price = currencySymbol(subj.price_currency || 'CNY') + subj.current_price.toFixed(2)
+    }
+  }
 
   return {
     title,

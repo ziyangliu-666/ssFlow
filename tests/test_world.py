@@ -182,7 +182,7 @@ class TestSimGraphBuilder:
         # Create a minimal event
         event = Event(
             ticker="TEST", event_text="test", event_type="other",
-            event_date="2026-01-01", current_price=100.0, adv_value=1e9,
+            event_date="2026-01-01",
         )
 
         # Load personas

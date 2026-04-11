@@ -73,7 +73,6 @@
               <span class="tag">{{ marketLabel(eventProposal.market) }}</span>
               <span class="tag">{{ eventTypeLabel(eventProposal.event_type) }}</span>
               <span v-if="eventProposal.event_date" class="tag mono">{{ eventProposal.event_date }}</span>
-              <span v-if="eventProposal.current_price" class="tag mono">{{ eventProposal.price_currency || '¥' }}{{ eventProposal.current_price }}</span>
             </div>
             <!-- Confidence bars -->
             <div v-if="eventProposal.confidence" class="conf-grid">

@@ -27,12 +27,32 @@ logging.basicConfig(
 
 from ssflow.event import Event
 from ssflow.information.external_events import ExternalEvent, ExternalEventSchedule
+from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas
 from ssflow.round_schedule import make_schedule
 from ssflow.sandbox_generator import build_from_template
 
 PERSONAS_PATH = Path("personas/ashare.yaml")
+
+
+def _trivial_universe(
+    *, ticker: str, name: str, current_price: float, adv_value: float
+) -> InstrumentUniverse:
+    """Build a one-element InstrumentUniverse for single-instrument backtests."""
+    return InstrumentUniverse(
+        instruments=[
+            Instrument(
+                ticker=ticker,
+                name=name,
+                market="ashare",
+                relationship="event_subject",
+                current_price=float(current_price),
+                adv_value=float(adv_value),
+            )
+        ],
+        topic=name,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -54,14 +74,14 @@ WUXI_EVENT = Event(
     ),
     event_type="regulatory",
     event_date="2024-01-25",
-    current_price=72.0,
-    adv_value=5_000_000_000,
     prior_consensus=(
         "药明康德是全球CRO/CDMO龙头，2023年业绩稳健增长。"
         "市场一致预期2024年营收400亿+，PE约25x。"
         "中美脱钩风险存在但此前未实质落地。"
     ),
 )
+WUXI_PRICE = 72.0
+WUXI_ADV = 5_000_000_000
 
 WUXI_EXTERNAL_EVENTS = ExternalEventSchedule()
 # R2 (T+1): 公司紧急电话会议，安抚市场
@@ -152,8 +172,6 @@ CITIC_EVENT = Event(
     ),
     event_type="policy",
     event_date="2024-09-24",
-    current_price=20.50,
-    adv_value=10_000_000_000,
     prior_consensus=(
         "924之前A股持续阴跌，上证跌破2700。"
         "市场极度悲观，融资余额降至1.3万亿，北向资金持续流出。"
@@ -161,6 +179,8 @@ CITIC_EVENT = Event(
         "市场预期降准降息空间有限，未预期到'金融组合拳'。"
     ),
 )
+CITIC_PRICE = 20.50
+CITIC_ADV = 10_000_000_000
 
 CITIC_EXTERNAL_EVENTS = ExternalEventSchedule()
 # R2 (T+1): 延续狂热 + 各路资金涌入
@@ -246,14 +266,14 @@ CATL_EVENT = Event(
     ),
     event_type="earnings",
     event_date="2024-10-18",
-    current_price=235.0,
-    adv_value=8_000_000_000,
     prior_consensus=(
         "市场预期Q3营收980亿(miss)，净利润120亿(beat)。"
         "锂电池价格持续下跌，碳酸锂从60万跌至8万。"
         "市场主要分歧：是否已经进入成熟期低增长阶段。PE约20x。"
     ),
 )
+CATL_PRICE = 235.0
+CATL_ADV = 8_000_000_000
 
 CATL_EXTERNAL_EVENTS = ExternalEventSchedule()
 # R2: 利润超预期 → 多头解读
@@ -330,6 +350,8 @@ SCENARIOS = [
     {
         "name": "药明康德 BIOSECURE 多日博弈",
         "event": WUXI_EVENT,
+        "current_price": WUXI_PRICE,
+        "adv_value": WUXI_ADV,
         "external_events": WUXI_EXTERNAL_EVENTS,
         "schedule": "policy-10d",
         "real_outcome": "2个月跌30-49%,但中间有反弹。非单调下跌。",
@@ -338,6 +360,8 @@ SCENARIOS = [
     {
         "name": "924政策 中信证券 狂热→回调",
         "event": CITIC_EVENT,
+        "current_price": CITIC_PRICE,
+        "adv_value": CITIC_ADV,
         "external_events": CITIC_EXTERNAL_EVENTS,
         "schedule": "policy-10d",
         "real_outcome": "1周涨70%,然后回调20%。先暴涨后震荡回落。",
@@ -346,6 +370,8 @@ SCENARIOS = [
     {
         "name": "宁德时代 Q3混合信号 拉锯战",
         "event": CATL_EVENT,
+        "current_price": CATL_PRICE,
+        "adv_value": CATL_ADV,
         "external_events": CATL_EXTERNAL_EVENTS,
         "schedule": "policy-10d",
         "real_outcome": "2个月内±15%震荡,无明确方向,多空拉锯。",
@@ -361,16 +387,24 @@ async def run_scenario(scenario: dict) -> dict:
     schedule = make_schedule(scenario["schedule"], event.event_date)
     n_rounds = schedule.n_rounds
 
+    instrument_universe = _trivial_universe(
+        ticker=event.ticker,
+        name=event.instrument or event.ticker,
+        current_price=scenario["current_price"],
+        adv_value=scenario["adv_value"],
+    )
+
     entity_graph = build_from_template(
         topic=(event.event_text or "")[:200],
         market="ashare",
-        current_price=float(event.current_price or 0),
+        current_price=float(scenario["current_price"]),
     )
 
     result = await run_simulation(
         event, personas, n_rounds=n_rounds,
         round_schedule=schedule,
         entity_graph=entity_graph,
+        instrument_universe=instrument_universe,
         external_events=scenario["external_events"],
     )
 
