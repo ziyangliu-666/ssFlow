@@ -47,41 +47,33 @@
 
         <!-- Price block (hidden in error state — see .err-panel) -->
         <div v-if="phase !== 'error'" class="price-block">
-          <!-- Ticker switcher (multi-instrument mode) -->
-          <div v-if="availableTickers.length > 1" class="ticker-bar">
-            <button
-              v-for="t in availableTickers"
-              :key="t.ticker"
-              type="button"
-              class="ticker-chip"
-              :class="{ active: activeTicker === t.ticker, primary: t.primary }"
-              @click="activeTicker = t.ticker"
-            >{{ t.name }}</button>
-            <button
-              type="button"
-              class="ticker-chip overlay-chip"
-              :class="{ active: activeTicker === '__all__' }"
-              @click="activeTicker = '__all__'"
-            >全部叠加</button>
-          </div>
-
-          <div class="price-row">
-            <div>
-              <div class="k">现价</div>
-              <div class="price-now mono" :class="cumulativeClass">{{ formatPrice(displayPrice) }}</div>
-            </div>
-            <div>
-              <div class="k">较开盘</div>
-              <div class="price-delta mono" :class="cumulativeClass">{{ formatPct(displayDeltaPct) }}</div>
-            </div>
-            <div style="margin-left: auto; text-align: right;">
-              <div class="k">开盘</div>
-              <div class="mono" style="font-size: 13px;">{{ formatPrice(displayInitialPrice) }}</div>
+          <!-- Per-ticker price grid — all instruments are peers. The
+               event_subject gets a subtle orange accent but no size
+               privilege. There is no "the price" in multi-instrument
+               mode; every ticker stands on its own. -->
+          <div v-if="tickerRows.length" class="ticker-grid">
+            <div
+              v-for="row in tickerRows"
+              :key="row.ticker"
+              class="ticker-row"
+              :class="{ primary: row.isPrimary }"
+            >
+              <div class="tr-meta">
+                <span class="tr-name">{{ row.name }}</span>
+                <span class="tr-ticker mono">{{ row.ticker }}</span>
+              </div>
+              <div class="tr-vals">
+                <span class="tr-price mono">{{ formatPrice(row.currentPrice) }}</span>
+                <span class="tr-pct mono" :class="row.pctClass">{{ formatPct(row.pct) }}</span>
+              </div>
             </div>
           </div>
 
           <div class="chart-wrap">
-            <PriceChart :prices="chartPrices" />
+            <PriceChart
+              :prices="chartPrices"
+              :primary-ticker="primaryTicker"
+            />
           </div>
 
           <!-- rounds as chart x-axis -->
@@ -167,9 +159,9 @@
           <div class="db-body">
             <div class="db-title">
               推演完成 · <span class="mono">{{ totalRounds }}</span> 轮
-              · <span class="mono" :class="cumulativeClass">{{ formatPct(cumulativePct) }}</span>
+              · <span class="mono">{{ elapsedDisplay }}</span>
             </div>
-            <div class="db-sub">{{ eventSummary }}</div>
+            <div class="db-sub">{{ eventSummary }} · {{ tickerRows.length }} 标的各自涨跌见左侧</div>
           </div>
           <button
             type="button"
@@ -227,51 +219,119 @@ const tickInterval = ref(null)
 // Multi-instrument price trajectories: {ticker: [prices]}
 const multiPriceTrajectories = ref(null)
 
-// Active ticker for the switcher
-const activeTicker = ref('__all__')
-
-// Build list of available tickers from instrument universe
-const availableTickers = computed(() => {
+// The ticker we mark with the brand accent (event_subject). Derived from
+// session.instrumentUniverse when available; otherwise left blank and the
+// chart falls back to "first series = primary".
+const primaryTicker = computed(() => {
   const iu = session.instrumentUniverse
-  if (!iu) return []
-  // New flat format: iu.instruments; legacy: [iu.primary, ...iu.related]
-  const all = (iu.instruments || [iu.primary, ...(iu.related || [])]).filter(Boolean)
-  return all.map(inst => ({
-    ticker: inst.ticker,
-    name: inst.name,
-    primary: inst.relationship === 'event_subject' || inst.relationship === 'primary',
-  }))
+  if (!iu || !iu.instruments) return ''
+  const subject = iu.instruments.find(
+    inst => inst.relationship === 'event_subject' || inst.relationship === 'primary'
+  )
+  return subject ? subject.ticker : (iu.instruments[0]?.ticker || '')
 })
 
-// Display price for the selected ticker
-const displayPrice = computed(() => {
-  if (activeTicker.value === '__all__' || !multiPriceTrajectories.value) return currentPrice.value
-  const traj = multiPriceTrajectories.value[activeTicker.value]
-  return traj && traj.length ? traj[traj.length - 1] : currentPrice.value
+// Build a map of ticker → instrument metadata for name lookup.
+const instrumentMeta = computed(() => {
+  const iu = session.instrumentUniverse
+  if (!iu || !iu.instruments) return {}
+  const m = {}
+  for (const inst of iu.instruments) {
+    m[inst.ticker] = inst
+  }
+  return m
 })
 
-const displayInitialPrice = computed(() => {
-  if (activeTicker.value === '__all__' || !multiPriceTrajectories.value) return initialPrice.value
-  const traj = multiPriceTrajectories.value[activeTicker.value]
-  return traj && traj.length ? traj[0] : initialPrice.value
-})
+// Per-ticker display rows — one per instrument, in document order with
+// primary first. Each row stands on its own: there is no "the price"
+// scalar anymore.
+const tickerRows = computed(() => {
+  const mpt = multiPriceTrajectories.value
+  const meta = instrumentMeta.value
+  const rows = []
 
-const displayDeltaPct = computed(() => {
-  const init = displayInitialPrice.value
-  const curr = displayPrice.value
-  if (!init || !curr) return 0
-  return curr / init - 1
-})
-
-// Use multi-instrument data if available, fall back to single-instrument
-const chartPrices = computed(() => {
-  if (multiPriceTrajectories.value && Object.keys(multiPriceTrajectories.value).length > 1) {
-    if (activeTicker.value === '__all__') {
-      return multiPriceTrajectories.value
+  // If we have live multi-ticker trajectories, use them.
+  if (mpt && Object.keys(mpt).length > 0) {
+    const tickers = Object.keys(mpt)
+    // Primary first if present
+    tickers.sort((a, b) => {
+      if (a === primaryTicker.value) return -1
+      if (b === primaryTicker.value) return 1
+      return 0
+    })
+    for (const ticker of tickers) {
+      const traj = mpt[ticker] || []
+      if (!traj.length) continue
+      const initial = traj[0]
+      const latest = traj[traj.length - 1]
+      const pct = initial > 0 ? latest / initial - 1 : 0
+      rows.push({
+        ticker,
+        name: meta[ticker]?.name || ticker,
+        currentPrice: latest,
+        pct,
+        pctClass: pct > 0 ? 'good' : pct < 0 ? 'bad' : '',
+        isPrimary: ticker === primaryTicker.value,
+      })
     }
-    // Single ticker view — return just that ticker's data as an array
-    const traj = multiPriceTrajectories.value[activeTicker.value]
-    return traj || priceTrajectory.value
+    return rows
+  }
+
+  // No live data yet — seed from the universe's opening prices so the
+  // grid is populated immediately at mount time instead of appearing
+  // after the first price_updated.
+  const iu = session.instrumentUniverse
+  if (iu && iu.instruments) {
+    for (const inst of iu.instruments) {
+      if (!inst || !inst.current_price) continue
+      rows.push({
+        ticker: inst.ticker,
+        name: inst.name || inst.ticker,
+        currentPrice: inst.current_price,
+        pct: 0,
+        pctClass: '',
+        isPrimary: inst.ticker === primaryTicker.value,
+      })
+    }
+    rows.sort((a, b) => (a.isPrimary ? -1 : b.isPrimary ? 1 : 0))
+    return rows
+  }
+
+  // Absolute fallback: single-instrument trajectory (used by
+  // legacy tests / direct curl smoke tests without a universe).
+  if (priceTrajectory.value.length) {
+    const traj = priceTrajectory.value
+    const init = traj[0] || initialPrice.value
+    const latest = traj[traj.length - 1] || currentPrice.value
+    const pct = init > 0 ? latest / init - 1 : 0
+    rows.push({
+      ticker: session.eventProposal?.ticker || 'primary',
+      name: session.eventProposal?.instrument || session.eventProposal?.ticker || '推演',
+      currentPrice: latest,
+      pct,
+      pctClass: pct > 0 ? 'good' : pct < 0 ? 'bad' : '',
+      isPrimary: true,
+    })
+  }
+  return rows
+})
+
+// Chart input: always the multi-series dict when we have one, else the
+// single scalar trajectory. The chart itself handles both shapes.
+const chartPrices = computed(() => {
+  const mpt = multiPriceTrajectories.value
+  if (mpt && Object.keys(mpt).length > 0) return mpt
+  // Seed from universe openings so the chart has at least one data
+  // point at mount time even before any price_updated fires.
+  const iu = session.instrumentUniverse
+  if (iu && iu.instruments && iu.instruments.length) {
+    const seed = {}
+    for (const inst of iu.instruments) {
+      if (inst && inst.current_price > 0) {
+        seed[inst.ticker] = [inst.current_price]
+      }
+    }
+    if (Object.keys(seed).length) return seed
   }
   return priceTrajectory.value
 })
@@ -384,6 +444,38 @@ function handleEvent (type, payload) {
 }
 
 function _processEvent (type, payload) {
+  // Before storing terminal events, augment them with a per-ticker
+  // breakdown computed from the trajectories we've been building.
+  // TimelineEvent reads this instead of the scalar initial/final_price.
+  if (type === 'simulation_complete' || type === 'simulation_done') {
+    const mpt = multiPriceTrajectories.value
+    if (mpt && Object.keys(mpt).length > 0) {
+      const byTicker = []
+      const meta = instrumentMeta.value
+      const pk = primaryTicker.value
+      for (const [ticker, traj] of Object.entries(mpt)) {
+        if (!traj || !traj.length) continue
+        const first = traj[0]
+        const last = traj[traj.length - 1]
+        const pct = first > 0 ? last / first - 1 : 0
+        byTicker.push({
+          ticker,
+          name: meta[ticker]?.name || ticker,
+          initial: first,
+          final: last,
+          pct,
+          isPrimary: ticker === pk,
+        })
+      }
+      // Primary first, rest sorted by |pct| descending.
+      byTicker.sort((a, b) => {
+        if (a.isPrimary) return -1
+        if (b.isPrimary) return 1
+        return Math.abs(b.pct) - Math.abs(a.pct)
+      })
+      payload.final_prices_by_ticker = byTicker
+    }
+  }
   pushEvent(type, payload)
   switch (type) {
     case 'simulation_start':
@@ -650,34 +742,73 @@ onBeforeUnmount(() => {
 
 /* Price block */
 .price-block { margin-bottom: 28px; }
-.price-row {
+
+/* Per-ticker peer grid — every instrument is an equal citizen. The
+   event_subject gets a subtle orange accent (left border + bold name)
+   but the same card height/font sizes as everyone else. No scalar
+   "THE price" headline. */
+.ticker-grid {
   display: flex;
-  align-items: baseline;
-  gap: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--ss-line);
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--ss-line);
   margin-bottom: 14px;
 }
-.k {
-  font-size: 10px;
-  color: var(--ss-fg-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 4px;
+.ticker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 10px 10px;
+  border-bottom: 1px dashed var(--ss-line);
+  border-left: 2px solid transparent;
+  transition: background 0.1s;
 }
-.price-now {
-  font-size: 32px;
+.ticker-row:last-child { border-bottom: 1px solid var(--ss-line); }
+.ticker-row.primary {
+  border-left-color: var(--ss-accent);
+  background: var(--ss-accent-soft);
+}
+.ticker-row.primary .tr-name {
+  font-weight: 600;
+  color: var(--ss-fg);
+}
+.tr-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tr-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 12px;
+  color: var(--ss-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-ticker {
+  font-size: 9px;
+  color: var(--ss-fg-faint);
+  letter-spacing: 0.03em;
+}
+.tr-vals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.tr-price {
+  font-size: 14px;
   font-weight: 500;
   color: var(--ss-fg);
 }
-.price-now.good { color: var(--ss-good); }
-.price-now.bad  { color: var(--ss-bad); }
-.price-delta {
-  font-size: 14px;
-  font-weight: 500;
+.tr-pct {
+  font-size: 11px;
+  color: var(--ss-fg-muted);
 }
-.price-delta.good { color: var(--ss-good); }
-.price-delta.bad  { color: var(--ss-bad); }
+.tr-pct.good { color: var(--ss-good); }
+.tr-pct.bad  { color: var(--ss-bad); }
 
 .chart-wrap { margin-bottom: 10px; }
 
@@ -842,35 +973,6 @@ onBeforeUnmount(() => {
   border-color: var(--ss-fg);
 }
 .spacer { flex: 1; }
-
-/* Ticker switcher bar */
-.ticker-bar {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-.ticker-chip {
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--ss-line);
-  background: #fff;
-  color: var(--ss-fg-muted);
-  cursor: pointer;
-  font-family: inherit;
-}
-.ticker-chip:hover { border-color: var(--ss-fg-muted); }
-.ticker-chip.active {
-  background: var(--ss-fg);
-  color: #fff;
-  border-color: var(--ss-fg);
-}
-.ticker-chip.primary { font-weight: 600; }
-.overlay-chip.active {
-  background: var(--ss-accent);
-  border-color: var(--ss-accent);
-}
 
 .auto-chip {
   margin-left: auto;

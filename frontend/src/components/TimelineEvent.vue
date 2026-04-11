@@ -96,13 +96,32 @@
         第 {{ (payload.round_idx ?? 0) + 1 }} 轮结束 · {{ payload.publications_count }} 篇发布 · {{ payload.orders_count }} 笔订单
       </div>
 
-      <!-- simulation_complete / simulation_done -->
+      <!-- simulation_complete / simulation_done — per-ticker distribution
+           if the Run/Replay view attached one, else a neutral time-only line -->
       <div v-else-if="type === 'simulation_complete' || type === 'simulation_done'" class="t-text">
         <strong>推演结束。</strong>
-        <div class="meta-line mono">
-          {{ formatPrice(payload.initial_price) }} → {{ formatPrice(payload.final_price) }}
-          ({{ payload.cumulative_delta_pct !== undefined ? (payload.cumulative_delta_pct * 100).toFixed(2) : '?' }}%)
-          · {{ payload.elapsed_seconds ? payload.elapsed_seconds.toFixed(1) + 's' : '' }}
+        <span class="sim-done-meta mono">
+          <span v-if="payload.elapsed_seconds">{{ payload.elapsed_seconds.toFixed(1) }}s</span>
+        </span>
+        <div
+          v-if="Array.isArray(payload.final_prices_by_ticker) && payload.final_prices_by_ticker.length"
+          class="per-ticker-dist"
+        >
+          <div
+            v-for="row in payload.final_prices_by_ticker"
+            :key="'fpt-' + row.ticker"
+            class="fpt-row"
+            :class="{ primary: row.isPrimary }"
+          >
+            <span class="fpt-name">{{ row.name }}</span>
+            <span class="fpt-ticker mono">{{ row.ticker }}</span>
+            <span
+              class="fpt-pct mono"
+              :class="row.pct > 0 ? 'good' : row.pct < 0 ? 'bad' : ''"
+            >
+              {{ (row.pct >= 0 ? '+' : '') + (row.pct * 100).toFixed(2) + '%' }}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -475,6 +494,54 @@ function priceDeltaClass (v) {
   font-size: 10px;
   color: var(--ss-fg-faint);
 }
+
+/* Simulation-complete per-ticker distribution */
+.sim-done-meta {
+  font-size: 10px;
+  color: var(--ss-fg-faint);
+  margin-left: 6px;
+}
+.per-ticker-dist {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  background: var(--ss-bg-soft, #f7f7f7);
+  border-radius: 6px;
+  border-left: 2px solid var(--ss-line-strong);
+}
+.fpt-row {
+  display: grid;
+  grid-template-columns: 1fr auto 68px;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.fpt-row.primary {
+  font-weight: 600;
+}
+.fpt-row.primary .fpt-name {
+  color: var(--ss-accent);
+}
+.fpt-name {
+  font-family: 'Noto Serif SC', serif;
+  color: var(--ss-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fpt-ticker {
+  font-size: 9px;
+  color: var(--ss-fg-faint);
+}
+.fpt-pct {
+  text-align: right;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+}
+.fpt-pct.good { color: var(--ss-good); }
+.fpt-pct.bad  { color: var(--ss-bad); }
 .ctype {
   display: inline-block;
   padding: 1px 6px;

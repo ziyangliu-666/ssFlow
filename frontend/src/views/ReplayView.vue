@@ -19,31 +19,31 @@
           </div>
         </div>
 
-        <!-- Price block -->
+        <!-- Price block — per-ticker peer grid, no scalar "the price" -->
         <div class="price-block" v-if="totalRounds">
-          <div class="price-row">
-            <div>
-              <div class="k">现价</div>
-              <div class="price-now mono" :class="cumulativeClass">
-                {{ formatPrice(currentPrice) }}
+          <div v-if="tickerRows.length" class="ticker-grid">
+            <div
+              v-for="row in tickerRows"
+              :key="row.ticker"
+              class="ticker-row"
+              :class="{ primary: row.isPrimary }"
+            >
+              <div class="tr-meta">
+                <span class="tr-name">{{ row.name }}</span>
+                <span class="tr-ticker mono">{{ row.ticker }}</span>
               </div>
-            </div>
-            <div>
-              <div class="k">较开盘</div>
-              <div class="price-delta mono" :class="cumulativeClass">
-                {{ formatPct(cumulativePct) }}
-              </div>
-            </div>
-            <div style="margin-left: auto; text-align: right;">
-              <div class="k">开盘</div>
-              <div class="mono" style="font-size: 13px;">
-                {{ formatPrice(initialPrice) }}
+              <div class="tr-vals">
+                <span class="tr-price mono">{{ formatPrice(row.currentPrice) }}</span>
+                <span class="tr-pct mono" :class="row.pctClass">{{ formatPct(row.pct) }}</span>
               </div>
             </div>
           </div>
 
           <div class="chart-wrap">
-            <PriceChart :prices="fullTrajectory" />
+            <PriceChart
+              :prices="chartPrices"
+              :primary-ticker="primaryTicker"
+            />
           </div>
 
           <!-- round scrub bar: click any R pill to jump, or use play -->
@@ -207,6 +207,14 @@ const priceTrajectory = ref([])
 // scrubs. The progressive priceTrajectory above is no longer used by
 // the chart in replay (it would rescale every tick and look wrong).
 const fullTrajectory = ref([])
+// Live multi-instrument trajectories — grow as we replay events. The
+// ticker grid + chart both read from here so every instrument is a
+// peer, not a side note on "the primary price".
+const multiPriceTrajectories = ref(null)
+// Full multi-instrument trajectories built once at load time from
+// allEvents, independent of playback cursor. Keeps the chart x-axis
+// stable across scrubs.
+const fullMultiTrajectories = ref(null)
 // Metadata extracted from the loaded timeline's simulation_start event,
 // used as a fallback for the meta line when there's no live
 // session.eventProposal (e.g. direct-link visits, refreshes).
@@ -251,6 +259,120 @@ const cumulativeClass = computed(() => {
   return ''
 })
 
+// Primary ticker (for chart accent color). In replay we can't rely on
+// session.instrumentUniverse for direct-link visits, so extract the
+// event_subject from the first price_updated event's tickers or fall
+// back to the first ticker we see.
+const primaryTicker = computed(() => {
+  const iu = session.instrumentUniverse
+  if (iu && iu.instruments) {
+    const subj = iu.instruments.find(
+      (i) => i.relationship === 'event_subject' || i.relationship === 'primary'
+    )
+    if (subj) return subj.ticker
+  }
+  // Fallback: first key in the full multi trajectories dict (order
+  // preserved from the backend, where event_subject is typically emitted
+  // first by the distillation / engine).
+  const fmt = fullMultiTrajectories.value
+  if (fmt && Object.keys(fmt).length) return Object.keys(fmt)[0]
+  return ''
+})
+
+const instrumentMeta = computed(() => {
+  const iu = session.instrumentUniverse
+  const m = {}
+  if (iu && iu.instruments) {
+    for (const inst of iu.instruments) {
+      m[inst.ticker] = inst
+    }
+  }
+  return m
+})
+
+// Per-ticker display rows — one per instrument. Uses the live (growing)
+// multiPriceTrajectories so the grid updates as playback advances.
+const tickerRows = computed(() => {
+  const mpt = multiPriceTrajectories.value
+  const meta = instrumentMeta.value
+  const rows = []
+
+  if (mpt && Object.keys(mpt).length > 0) {
+    const tickers = Object.keys(mpt)
+    tickers.sort((a, b) => {
+      if (a === primaryTicker.value) return -1
+      if (b === primaryTicker.value) return 1
+      return 0
+    })
+    for (const ticker of tickers) {
+      const traj = mpt[ticker] || []
+      if (!traj.length) continue
+      const init = traj[0]
+      const latest = traj[traj.length - 1]
+      const pct = init > 0 ? latest / init - 1 : 0
+      rows.push({
+        ticker,
+        name: meta[ticker]?.name || ticker,
+        currentPrice: latest,
+        pct,
+        pctClass: pct > 0 ? 'good' : pct < 0 ? 'bad' : '',
+        isPrimary: ticker === primaryTicker.value,
+      })
+    }
+    return rows
+  }
+
+  // Before the first price_updated: seed from fullMultiTrajectories[0]
+  // so the grid shows opening prices immediately at load time.
+  const fmt = fullMultiTrajectories.value
+  if (fmt && Object.keys(fmt).length > 0) {
+    const tickers = Object.keys(fmt)
+    tickers.sort((a, b) => {
+      if (a === primaryTicker.value) return -1
+      if (b === primaryTicker.value) return 1
+      return 0
+    })
+    for (const ticker of tickers) {
+      const traj = fmt[ticker] || []
+      if (!traj.length) continue
+      rows.push({
+        ticker,
+        name: meta[ticker]?.name || ticker,
+        currentPrice: traj[0],
+        pct: 0,
+        pctClass: '',
+        isPrimary: ticker === primaryTicker.value,
+      })
+    }
+    return rows
+  }
+
+  // Absolute fallback: legacy scalar trajectory
+  if (fullTrajectory.value.length) {
+    const init = fullTrajectory.value[0]
+    const latest = currentPrice.value || init
+    const pct = init > 0 ? latest / init - 1 : 0
+    rows.push({
+      ticker: simMeta.value?.ticker || 'primary',
+      name: simMeta.value?.instrument || '推演',
+      currentPrice: latest,
+      pct,
+      pctClass: pct > 0 ? 'good' : pct < 0 ? 'bad' : '',
+      isPrimary: true,
+    })
+  }
+  return rows
+})
+
+// Chart data. Prefer the full (stable) multi-instrument dict when
+// available so the x-axis doesn't jitter as playback advances. Falls
+// back to the flat fullTrajectory for legacy single-instrument replays.
+const chartPrices = computed(() => {
+  const fmt = fullMultiTrajectories.value
+  if (fmt && Object.keys(fmt).length > 0) return fmt
+  return fullTrajectory.value
+})
+
 const eventSummary = computed(() => {
   // Prefer the live session state from the just-extracted event; if
   // empty (direct-link visit, page refresh), fall back to whatever
@@ -291,6 +413,37 @@ function applyEvent (e) {
   const payload = { ...e }
   payload._type = type
   payload._key = events.value.length + ':' + type + ':' + Math.random().toString(36).slice(2, 6)
+  // Attach per-ticker breakdown to terminal events so TimelineEvent
+  // can render a per-instrument distribution instead of the scalar
+  // "X → Y" line. Computed from the growing live trajectories.
+  if (type === 'simulation_complete' || type === 'simulation_done') {
+    const mpt = multiPriceTrajectories.value
+    if (mpt && Object.keys(mpt).length > 0) {
+      const byTicker = []
+      const meta = instrumentMeta.value
+      const pk = primaryTicker.value
+      for (const [ticker, traj] of Object.entries(mpt)) {
+        if (!traj || !traj.length) continue
+        const first = traj[0]
+        const last = traj[traj.length - 1]
+        const pct = first > 0 ? last / first - 1 : 0
+        byTicker.push({
+          ticker,
+          name: meta[ticker]?.name || ticker,
+          initial: first,
+          final: last,
+          pct,
+          isPrimary: ticker === pk,
+        })
+      }
+      byTicker.sort((a, b) => {
+        if (a.isPrimary) return -1
+        if (b.isPrimary) return 1
+        return Math.abs(b.pct) - Math.abs(a.pct)
+      })
+      payload.final_prices_by_ticker = byTicker
+    }
+  }
   events.value.push(payload)
   nextTick(() => {
     if (feedEl.value) feedEl.value.scrollTop = feedEl.value.scrollHeight
@@ -308,6 +461,14 @@ function applyEvent (e) {
     case 'price_updated':
       currentPrice.value = payload.price_after || currentPrice.value
       priceTrajectory.value.push(payload.price_after || 0)
+      // Multi-instrument: append each ticker's new price to its trajectory.
+      if (payload.prices && typeof payload.prices === 'object') {
+        if (!multiPriceTrajectories.value) multiPriceTrajectories.value = {}
+        for (const [ticker, price] of Object.entries(payload.prices)) {
+          if (!multiPriceTrajectories.value[ticker]) multiPriceTrajectories.value[ticker] = []
+          multiPriceTrajectories.value[ticker].push(price)
+        }
+      }
       break
     case 'class_flow_computed':
       latestFlows.value = {
@@ -341,6 +502,7 @@ function resetPlaybackState () {
   totalRounds.value = 0
   currentRound.value = 0
   priceTrajectory.value = []
+  multiPriceTrajectories.value = null
   latestFlows.value = {}
   phase.value = 'idle'
 }
@@ -374,6 +536,23 @@ function buildFullTrajectory () {
     }
   }
   return traj
+}
+
+// Same idea as buildFullTrajectory but for multi-instrument: build a
+// fixed {ticker: [prices]} dict from the entire event log. The chart
+// uses this as its stable x-axis; the live multiPriceTrajectories
+// (which grow during playback) are what drive the ticker grid.
+function buildFullMultiTrajectories () {
+  const result = {}
+  for (const e of allEvents.value) {
+    if (e.type === 'price_updated' && e.prices && typeof e.prices === 'object') {
+      for (const [ticker, price] of Object.entries(e.prices)) {
+        if (!result[ticker]) result[ticker] = []
+        result[ticker].push(price)
+      }
+    }
+  }
+  return result
 }
 
 // ── Playback control ──────────────────────────────────────────────
@@ -488,6 +667,7 @@ async function load () {
     totalRounds.value = Number(data.n_rounds || 0)
     buildRoundAnchors()
     fullTrajectory.value = buildFullTrajectory()
+    fullMultiTrajectories.value = buildFullMultiTrajectories()
     // Cache simulation_start metadata for the meta line so direct-link
     // visits show the actual ticker/instrument instead of just "推演".
     const startEvt = allEvents.value.find((e) => e && e.type === 'simulation_start')
@@ -572,7 +752,7 @@ onBeforeUnmount(() => {
   .layout { overflow: visible; }
   .live { padding: 20px 16px; max-height: none; }
   .page-h h1 { font-size: 19px; }
-  .price-now { font-size: 26px; }
+  .tr-price { font-size: 13px; }
   .filter-bar, .control-bar { padding: 10px 16px; }
   .timeline { padding: 16px 16px 40px; }
 }
@@ -613,36 +793,70 @@ onBeforeUnmount(() => {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Price block — same styles as the run view */
+/* Price block — same peer-grid pattern as the run view */
 .price-block { margin-bottom: 28px; }
-.price-row {
+.ticker-grid {
   display: flex;
-  align-items: baseline;
-  gap: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--ss-line);
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--ss-line);
   margin-bottom: 14px;
 }
-.k {
-  font-size: 10px;
-  color: var(--ss-fg-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 4px;
+.ticker-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 10px 10px;
+  border-bottom: 1px dashed var(--ss-line);
+  border-left: 2px solid transparent;
+  transition: background 0.1s;
 }
-.price-now {
-  font-size: 32px;
+.ticker-row:last-child { border-bottom: 1px solid var(--ss-line); }
+.ticker-row.primary {
+  border-left-color: var(--ss-accent);
+  background: var(--ss-accent-soft);
+}
+.ticker-row.primary .tr-name {
+  font-weight: 600;
+  color: var(--ss-fg);
+}
+.tr-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tr-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 12px;
+  color: var(--ss-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-ticker {
+  font-size: 9px;
+  color: var(--ss-fg-faint);
+  letter-spacing: 0.03em;
+}
+.tr-vals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.tr-price {
+  font-size: 14px;
   font-weight: 500;
   color: var(--ss-fg);
 }
-.price-now.good { color: var(--ss-good); }
-.price-now.bad  { color: var(--ss-bad); }
-.price-delta {
-  font-size: 14px;
-  font-weight: 500;
+.tr-pct {
+  font-size: 11px;
+  color: var(--ss-fg-muted);
 }
-.price-delta.good { color: var(--ss-good); }
-.price-delta.bad  { color: var(--ss-bad); }
+.tr-pct.good { color: var(--ss-good); }
+.tr-pct.bad  { color: var(--ss-bad); }
 
 .chart-wrap { margin-bottom: 10px; }
 
