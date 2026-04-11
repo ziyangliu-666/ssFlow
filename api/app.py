@@ -944,6 +944,57 @@ def create_app() -> Flask:
         except Exception:
             class_pnl = {}
 
+        # Multi-instrument: walk the persisted events.json to compute a
+        # per-ticker final-vs-opening distribution. The scorecard only
+        # stores the event_subject's scalar, so we use the richer events
+        # file as the source of truth for peer-mode display.
+        per_ticker_finals: list[dict] | None = None
+        events_path = settings.reports_dir / f"{simulation_id}.events.json"
+        if events_path.exists():
+            try:
+                events_blob = json.loads(events_path.read_text(encoding="utf-8"))
+                events_list = events_blob if isinstance(events_blob, list) else events_blob.get("events", [])
+                first_prices: dict[str, float] = {}
+                last_prices: dict[str, float] = {}
+                for e in events_list:
+                    if e.get("type") != "price_updated":
+                        continue
+                    prices = e.get("prices") or {}
+                    if not isinstance(prices, dict):
+                        continue
+                    for t, p in prices.items():
+                        if not isinstance(p, (int, float)):
+                            continue
+                        if t not in first_prices:
+                            first_prices[t] = float(p)
+                        last_prices[t] = float(p)
+                if len(first_prices) >= 1:
+                    per_ticker_finals = []
+                    for t, first in first_prices.items():
+                        last = last_prices.get(t, first)
+                        pct = (last / first - 1.0) if first > 0 else 0.0
+                        per_ticker_finals.append({
+                            "ticker": t,
+                            "initial": first,
+                            "final": last,
+                            "pct": pct,
+                        })
+                    # Event subject (whichever ticker the scorecard row points at)
+                    # keeps its position but gets a flag the frontend can use.
+                    subj = (row.get("event_ticker") or "").strip()
+                    for pt in per_ticker_finals:
+                        pt["is_primary"] = (pt["ticker"] == subj)
+                    # Sort: primary first, then by |pct| desc.
+                    per_ticker_finals.sort(
+                        key=lambda pt: (0 if pt["is_primary"] else 1, -abs(pt["pct"]))
+                    )
+            except Exception as exc:
+                log.warning(
+                    "report: failed to read per-ticker finals from %s: %s",
+                    events_path, exc,
+                )
+                per_ticker_finals = None
+
         # Resolve persona_id → archetype labels. The scorecard only stores
         # persona ids, but the UI wants the archetype (e.g. "散户动量派")
         # for display. Try to rehydrate via the most recently matched
@@ -990,6 +1041,10 @@ def create_app() -> Flask:
             ),
             "price_trajectory": price_trajectory,
             "per_class_pnl": per_class_pnl,
+            # Multi-instrument peer breakdown (null for legacy single-instrument
+            # sims). Frontend uses this to replace the scalar initial/final/
+            # delta scalars with a per-ticker grid when N > 1.
+            "per_ticker_finals": per_ticker_finals,
         }
         meta = {
             "event_ticker": row.get("event_ticker"),

@@ -48,8 +48,59 @@
           <span v-if="meta?.event_date"> · {{ meta.event_date }}</span>
         </div>
 
-        <!-- Summary strip: 4 cells driven by the structured summary JSON -->
-        <div v-if="summary" class="summary">
+        <!-- Multi-instrument summary: per-ticker peer grid. When the
+             sim involved multiple instruments, the scalar initial/final
+             scalars are misleading (they only track event_subject), so
+             we show every instrument's move side by side instead. The
+             total P&L + winning class cells stay the same since they're
+             portfolio-level. -->
+        <div
+          v-if="summary && summary.per_ticker_finals && summary.per_ticker_finals.length"
+          class="summary-multi"
+        >
+          <div class="sm-h">
+            <span class="t">标的涨跌</span>
+            <span class="tag mono">{{ summary.per_ticker_finals.length }} 个标的 · {{ meta?.n_rounds || 0 }} 轮</span>
+          </div>
+          <div class="sm-grid">
+            <div
+              v-for="row in summary.per_ticker_finals"
+              :key="'pt-' + row.ticker"
+              class="sm-row"
+              :class="{ primary: row.is_primary }"
+            >
+              <div class="sm-left">
+                <span class="sm-ticker mono">{{ row.ticker }}</span>
+                <span v-if="row.is_primary" class="sm-badge">事件主体</span>
+              </div>
+              <div class="sm-mid mono">
+                {{ formatPrice(row.initial) }} → {{ formatPrice(row.final) }}
+              </div>
+              <span
+                class="sm-pct mono"
+                :class="row.pct > 0 ? 'good' : row.pct < 0 ? 'bad' : ''"
+              >
+                {{ (row.pct >= 0 ? '+' : '') + (row.pct * 100).toFixed(2) + '%' }}
+              </span>
+            </div>
+          </div>
+          <div class="sm-extras">
+            <span class="sm-extra">
+              <em>总盈亏</em>
+              <span class="mono" :class="netFlowClass">{{ formatMoney(summary.net_flow_total) }}</span>
+            </span>
+            <span class="sm-extra" v-if="summary.winning_class">
+              <em>领先分组</em>
+              <span class="mono">{{ truncate(summary.winning_class.archetype, 16) }}</span>
+              <span class="mono subdued">({{ formatMoney(summary.winning_class.pnl) }})</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Legacy single-instrument summary strip. Falls through when
+             per_ticker_finals isn't populated (pre-peer-mode sims or
+             single-ticker runs). -->
+        <div v-else-if="summary" class="summary">
           <div class="cell">
             <div class="k">收盘价</div>
             <div class="v mono" :class="deltaClass">{{ formatPrice(summary.final_price) }}</div>
@@ -602,6 +653,100 @@ onMounted(() => {
   margin-left: 6px;
   color: var(--ss-fg);
 }
+
+/* Multi-instrument summary — per-ticker peer grid. Used when the sim
+   involved >1 instrument; otherwise .summary (below) takes over. */
+.summary-multi {
+  margin: 28px 0 44px;
+  border-top: 1px solid var(--ss-line-strong);
+  border-bottom: 1px solid var(--ss-line-strong);
+  padding: 20px 0;
+}
+.summary-multi .sm-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.summary-multi .sm-h .t {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ss-fg);
+}
+.summary-multi .sm-h .tag {
+  font-size: 11px;
+  color: var(--ss-fg-faint);
+}
+.summary-multi .sm-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.summary-multi .sm-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, auto) 80px;
+  gap: 16px;
+  align-items: baseline;
+  padding: 10px 0 10px 10px;
+  border-bottom: 1px dashed var(--ss-line);
+  border-left: 2px solid transparent;
+}
+.summary-multi .sm-row:last-child { border-bottom: 0; }
+.summary-multi .sm-row.primary {
+  border-left-color: var(--ss-accent);
+  background: var(--ss-accent-soft);
+}
+.summary-multi .sm-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.summary-multi .sm-ticker {
+  font-size: 13px;
+  color: var(--ss-fg);
+  font-weight: 500;
+}
+.summary-multi .sm-row.primary .sm-ticker { color: var(--ss-accent); font-weight: 600; }
+.summary-multi .sm-badge {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 10px;
+  color: var(--ss-accent);
+}
+.summary-multi .sm-mid {
+  font-size: 12px;
+  color: var(--ss-fg-muted);
+}
+.summary-multi .sm-pct {
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+  color: var(--ss-fg-muted);
+}
+.summary-multi .sm-pct.good { color: var(--ss-good); }
+.summary-multi .sm-pct.bad  { color: var(--ss-bad); }
+.summary-multi .sm-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 28px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ss-line);
+  font-size: 12px;
+}
+.summary-multi .sm-extra em {
+  font-family: 'Inter', sans-serif;
+  font-style: normal;
+  color: var(--ss-fg-muted);
+  margin-right: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.summary-multi .sm-extra .mono.good { color: var(--ss-good); }
+.summary-multi .sm-extra .mono.bad  { color: var(--ss-bad); }
+.summary-multi .sm-extra .mono.subdued { color: var(--ss-fg-faint); }
 
 /* Summary strip — 4 cells above the report body */
 .summary {
