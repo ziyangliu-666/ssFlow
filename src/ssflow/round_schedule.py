@@ -42,6 +42,33 @@ class RoundDef:
             "active_agent_types": list(self.active_agent_types),
         }
 
+    @property
+    def session_kind(self) -> str:
+        """Classify the round into a named trading session for narrative use."""
+        rid = (self.id or "").upper()
+        start = self.calendar_start or ""
+        end = self.calendar_end or ""
+        if "OPEN" in rid or "竞价" in self.label or " 09:15" in start:
+            return "pre_open"
+        if "AM" in rid or "上午" in self.label:
+            return "morning"
+        if "PM" in rid or "下午" in self.label:
+            return "afternoon"
+        # Dayparts beyond T+0 use calendar_start to decide morning/afternoon,
+        # otherwise treated as a whole-day session.
+        if " 09:30" in start and " 15:00" in end:
+            return "whole_day"
+        if " 09:30" in start and " 11:30" in end:
+            return "morning"
+        if " 13:00" in start and " 15:00" in end:
+            return "afternoon"
+        return "whole_day"
+
+    @property
+    def trading_day_index(self) -> int:
+        """Which trading day this round belongs to (0 = T+0, 1 = T+1, ...)."""
+        return max(0, int(self.hours_since_event // 24))
+
 
 @dataclass
 class RoundSchedule:
@@ -65,22 +92,56 @@ class RoundSchedule:
         *,
         cumulative_delta_pct: float | None = None,
         current_price: float | None = None,
+        prev_day_close_delta_pct: float | None = None,
     ) -> str:
         """Time context string for injection into agent prompts.
 
-        Optional ``cumulative_delta_pct`` (in percent, e.g. 5.4 for +5.4%)
-        and ``current_price`` are rendered into the context so agents can
-        anchor decisions on realised price movement since the event.
+        Produces a narrative block that goes beyond the bare timestamp:
+          - Hard session tag (e.g. [盘中·充裕流动性] / [尾盘·流动性收敛])
+          - Session-kind flavour text (T+0 morning / close / cross-day etc.)
+          - Time-to-close remaining inside the current session
+          - T+1 settlement reminder (A-share specific)
+          - Cross-day reset message with yesterday's close and overnight drift
+
+        Optional kwargs:
+          cumulative_delta_pct: % change since the event (e.g. 5.4 for +5.4%)
+          current_price: last traded price in the event currency
+          prev_day_close_delta_pct: % move recorded on the previous trading
+            day; injected when round_idx crosses a day boundary so agents see
+            "昨日收盘 +3.2%" framed as a fresh-start reference point.
         """
         rd = self.get_round(round_idx)
         if rd is None:
             return f"\n# 时间 / Time: 第 {round_idx + 1} 轮"
 
+        session = rd.session_kind
+        day_idx = rd.trading_day_index
+        is_first_round_of_day = round_idx == 0 or (
+            self.rounds[round_idx - 1].trading_day_index != day_idx
+        )
+
+        # ── Session tag (hard signal agents can key off) ──
+        tag_map = {
+            "pre_open":   "[开盘竞价 · 价格发现]",
+            "morning":    "[盘中 · 充裕流动性]",
+            "afternoon":  "[尾盘 · 流动性收敛]",
+            "whole_day":  "[全日 · 常规流动性]",
+        }
+        tag = tag_map.get(session, "[全日 · 常规流动性]")
+
+        # ── Narrative flavour by (session, day_idx) ──
+        # Pulled into a separate method so the logic stays declarative.
+        narrative = _session_narrative(session, day_idx, is_first_round_of_day)
+
         lines = [
-            f"\n# 时间 / Time: {rd.label}",
+            f"\n# 时间 / Time: {rd.label}  {tag}",
             f"  时间段: {rd.calendar_start} ~ {rd.calendar_end}",
-            f"  距事件发生: {rd.hours_since_event:.0f} 小时",
+            f"  距事件发生: {rd.hours_since_event:.0f} 小时  ·  事件后第 {day_idx + 1} 个交易日",
         ]
+        if narrative:
+            lines.append(f"  情境: {narrative}")
+
+        # ── Price anchor ──
         if current_price is not None and cumulative_delta_pct is not None:
             lines.append(
                 f"  当前价格: {current_price:.2f}  "
@@ -90,6 +151,26 @@ class RoundSchedule:
             lines.append(f"  当前价格: {current_price:.2f}")
         elif cumulative_delta_pct is not None:
             lines.append(f"  事件以来累计涨跌: {cumulative_delta_pct:+.2f}%")
+
+        # ── Cross-day reset message ──
+        if is_first_round_of_day and day_idx > 0:
+            if prev_day_close_delta_pct is not None:
+                lines.append(
+                    f"  新交易日开盘: 昨日收盘 {prev_day_close_delta_pct:+.2f}%, "
+                    f"隔夜情绪理应部分衰减 — 重新审视持仓和仓位"
+                )
+            else:
+                lines.append(
+                    "  新交易日开盘: 隔夜情绪理应部分衰减 — "
+                    "重新审视持仓和仓位"
+                )
+
+        # ── T+1 settlement reminder (A-share) ──
+        lines.append(
+            "  交易规则: A 股 T+1 — 今日买入的仓位明日方可卖出, "
+            "请基于你对【下一个交易日】而非【今日收盘】的价格判断做买入决策"
+        )
+
         if round_idx > 0:
             prev = self.rounds[round_idx - 1]
             lines.append(f"  上一轮: {prev.label}")
@@ -115,6 +196,60 @@ class RoundSchedule:
             for r in data.get("rounds", [])
         ]
         return cls(rounds=rounds, event_datetime=data.get("event_datetime", ""))
+
+
+# ── Session narrative helpers ────────────────────────────────────────
+
+
+def _session_narrative(
+    session: str, day_idx: int, is_first_round_of_day: bool
+) -> str:
+    """Pick a short narrative line describing this session's character.
+
+    Designed to give agents behavioural context — not just a timestamp —
+    so they can reason about liquidity, info velocity, and the typical
+    participant mix. Deliberately terse: one sentence per (session, day)
+    pair so it fits inside prompt budgets without crowding out the event.
+    """
+    if day_idx == 0:
+        # Event day: fast, noisy, retail-dominated in the morning
+        if session == "pre_open":
+            return (
+                "事件后首次开盘竞价. 隔夜情绪集中爆发, "
+                "成交稀薄但价格发现极端"
+            )
+        if session == "morning":
+            return (
+                "事件后首个交易时段. 散户情绪最狂热, 机构通常观望等数据, "
+                "流动性充沛但价格发现剧烈"
+            )
+        if session == "afternoon":
+            return (
+                "事件日下午盘. 尾盘流动性收敛, 日内高位获利了结压力抬升, "
+                "机构开始试探性建仓或减仓"
+            )
+        return "事件当日常规交易. 散户驱动, 机构观望"
+    if day_idx == 1:
+        # T+1: institutional entry begins
+        if is_first_round_of_day or session in ("pre_open", "morning"):
+            return (
+                "事件后第二个交易日开盘. 机构完成内部分析, 开始正式进场/调仓, "
+                "散户隔夜情绪部分衰减"
+            )
+        return (
+            "T+1 盘中. 机构流入主导, 散户开始根据昨日浮盈/浮亏决定加仓或止盈"
+        )
+    if day_idx == 2:
+        return (
+            "事件后第三个交易日. 分析师研报集中发布, 机构持仓明显调整, "
+            "短线散户情绪见顶后回落"
+        )
+    if day_idx <= 4:
+        return (
+            f"事件后第 {day_idx + 1} 个交易日. 战略资金进场, 长线机构评估基本面, "
+            "融资盘/融券观察警戒"
+        )
+    return f"事件后第 {day_idx + 1} 个交易日. 行情已进入长期消化阶段"
 
 
 # ── Presets ──────────────────────────────────────────────────────────

@@ -58,6 +58,36 @@ from .persona import Persona
 log = logging.getLogger(__name__)
 
 
+def set_round_context(
+    agent: "SocialAgent",
+    *,
+    time_ctx: str = "",
+    conviction_ctx: str = "",
+    pub_effects_ctx: str = "",
+) -> None:
+    """Stash per-round context on an agent for the patched action loop to pick
+    up. The patched ``perform_action_by_llm`` prepends these strings to the
+    user instruction so they reach the LLM on every step — unlike profile
+    mutations, which CAMEL bakes into the system message exactly once at agent
+    init time and thereafter ignores.
+    """
+    ctx = getattr(agent, "_ssflow_round_context", None) or {}
+    if time_ctx:
+        ctx["time_ctx"] = time_ctx
+    if conviction_ctx:
+        ctx["conviction_ctx"] = conviction_ctx
+    if pub_effects_ctx:
+        ctx["pub_effects_ctx"] = pub_effects_ctx
+    agent._ssflow_round_context = ctx
+
+
+def clear_round_context(agent: "SocialAgent") -> None:
+    """Reset per-round context on an agent — call between rounds when you
+    want to drop stale narratives before the next round populates new ones."""
+    if hasattr(agent, "_ssflow_round_context"):
+        agent._ssflow_round_context = {}
+
+
 def update_conviction_context(
     agent: "SocialAgent",
     persona_id: str,
@@ -67,20 +97,19 @@ def update_conviction_context(
     current_price: float = 0.0,
     initial_price: float = 0.0,
 ) -> None:
-    """Inject price-anchored market context into the agent's profile.
+    """Inject price-anchored market context as per-round user-instruction text.
 
-    Instead of emphasizing "what you did last round" (which creates
-    momentum echo), we emphasize "where is the price relative to
-    the event" — framing the decision in risk/reward terms. This
-    naturally produces mean-reverting behavior: at higher prices the
-    upside narrows, at lower prices the downside is priced in.
+    Instead of emphasising "what you did last round" (which creates momentum
+    echo), this frames decisions in risk/reward terms: "where is the price
+    relative to the event". Writes into ``agent._ssflow_round_context`` so the
+    patched action loop picks it up on the next step — the old profile-mutation
+    path was broken because CAMEL snapshots the system message at init time.
     """
     if persona_id not in last_actions:
         return
     la = last_actions[persona_id]
     cum_pct = cumulative_delta_pct * 100
 
-    # Price-anchored framing: focus on where we are, not what we did
     if initial_price > 0 and current_price > 0:
         if cum_pct > 3.0:
             price_comment = (
@@ -103,22 +132,14 @@ def update_conviction_context(
         str(la.get("side", "")), str(la.get("side", ""))
     )
     conviction_text = (
-        f"\n# 市场状态 / Market State (R{la['round_idx'] + 1})\n"
+        f"# 市场状态 / Market State (R{la['round_idx'] + 1})\n"
         f"  事件前价格: {initial_price:.2f}\n"
         f"  当前价格: {current_price:.2f} (事件后 {cum_pct:+.1f}%)\n"
         f"{price_comment}"
         f"  你上一轮的方向: {side_zh}\n"
-        f"  请基于当前价位独立判断本轮方向. 不同价位意味着不同的风险收益比.\n"
+        f"  请基于当前价位独立判断本轮方向. 不同价位意味着不同的风险收益比."
     )
-    profile = agent.user_info.profile
-    existing = profile.get("other_info", {}).get("user_profile", "")
-    marker = "# 市场状态"
-    # Also clean old-format marker if present
-    old_marker = "# 上一轮决策"
-    for m in (marker, old_marker):
-        if m in existing:
-            existing = existing[:existing.index(m)]
-    profile["other_info"]["user_profile"] = existing + conviction_text
+    set_round_context(agent, conviction_ctx=conviction_text)
 
 
 def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> None:
@@ -141,8 +162,25 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
 
     async def patched_perform_action_by_llm():
         env_prompt = await original_env.to_text_prompt()
+        # Per-round context is set by oasis_engine via set_round_context() and
+        # prepended to the user instruction. We cannot rely on user_info.profile
+        # updates propagating: OASIS/CAMEL bakes the system message from profile
+        # only at agent init time, so subsequent profile mutations never reach
+        # the LLM. Injecting into the user instruction is a round-scoped, always-
+        # fresh alternative that avoids rewriting CAMEL internals.
+        round_ctx = getattr(agent, "_ssflow_round_context", None) or {}
+        time_ctx = round_ctx.get("time_ctx", "")
+        conviction_ctx = round_ctx.get("conviction_ctx", "")
+        pub_effects_ctx = round_ctx.get("pub_effects_ctx", "")
+        extra_header = ""
+        if time_ctx or conviction_ctx or pub_effects_ctx:
+            extra_header = (
+                f"{time_ctx}\n{conviction_ctx}\n{pub_effects_ctx}\n"
+            ).strip("\n") + "\n\n"
+
         if is_trader:
             instruction = (
+                f"{extra_header}"
                 f"你需要做两件事:\n"
                 f"1. **首先必须**调用交易工具提交你的交易决策 (submit_trading_decision)\n"
                 f"2. 然后做一个社交动作（发帖/转发/点赞/评论中选一个）\n\n"
@@ -150,6 +188,7 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
             )
         else:
             instruction = (
+                f"{extra_header}"
                 f"Please perform social media actions after observing the "
                 f"platform environments. Notice that don't limit your "
                 f"actions for example to just like the posts. "
