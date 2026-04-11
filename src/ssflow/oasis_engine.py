@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import sqlite3
 import time
@@ -93,6 +94,7 @@ from .oasis_lm import build_default_lm
 from .oasis_persona_adapter import (
     MARKET_AGENT_ID_NAME,
     build_agent_graph,
+    set_round_context,
     update_conviction_context,
 )
 from .oasis_trading_tool import OrderCollector, PendingOrder
@@ -626,10 +628,17 @@ async def run_simulation(
         for inst in instrument_universe.instruments:
             if inst.holdings_by_persona:
                 holdings_by_persona_map[inst.ticker] = inst.holdings_by_persona
+    # Single-instrument mode: spawn holdings under the real event ticker so
+    # all bookkeeping (initial holdings, orders, P&L) shares one key.
+    _primary_ticker = (
+        event.ticker if event.ticker and instrument_universe is None
+        else "_default"
+    )
     for persona in personas:
         if persona.sandbox is not None:
             agent_pops[persona.id] = spawn_agents(
                 persona, current_price=initial_price, rng=spawn_rng,
+                primary_ticker=_primary_ticker,
                 multi_prices=multi_prices_for_spawn,
                 holdings_by_persona=holdings_by_persona_map or None,
             )
@@ -1104,34 +1113,42 @@ async def run_simulation(
                     )
 
             # 1.95. Inject time context from round schedule into agent prompts.
+            #        Uses set_round_context() → user-instruction injection path
+            #        because OASIS/CAMEL snapshots the system message from
+            #        profile at agent init time and ignores later mutations.
             if round_schedule is not None:
                 cum_pct = cumulative_delta_pct * 100  # ratio → percentage
+                # Find yesterday's closing % move if we're crossing a day.
+                _prev_day_close_pct: float | None = None
+                _current_day = round_schedule.rounds[round_idx].trading_day_index if round_idx < len(round_schedule.rounds) else 0
+                if _current_day > 0 and round_idx > 0:
+                    # Walk back through prior rounds to find the last one on the
+                    # previous trading day and read its cumulative delta.
+                    for _back in range(round_idx - 1, -1, -1):
+                        if round_schedule.rounds[_back].trading_day_index == _current_day - 1:
+                            if _back < len(rounds):
+                                prev_rec = rounds[_back]
+                                if initial_price > 0:
+                                    _prev_day_close_pct = (prev_rec.price_after / initial_price - 1.0) * 100
+                            break
                 time_ctx = round_schedule.prompt_context(
                     round_idx,
                     cumulative_delta_pct=cum_pct,
                     current_price=current_price,
+                    prev_day_close_delta_pct=_prev_day_close_pct,
                 )
                 for persona in personas:
                     if persona.id not in persona_id_to_oasis_id:
                         continue
                     oasis_id = persona_id_to_oasis_id[persona.id]
                     oasis_agent = agent_graph.get_agent(oasis_id)
-                    profile = oasis_agent.user_info.profile
-                    other = profile.get("other_info", {})
-                    up = other.get("user_profile", "")
-                    time_marker = "\n# 时间 / Time:"
-                    if time_marker in up:
-                        up = up[:up.index(time_marker)]
-                    up += time_ctx
-                    other["user_profile"] = up
-                    profile["other_info"] = other
+                    set_round_context(oasis_agent, time_ctx=time_ctx)
 
             # 1.96. Inject publication effect context into agent prompts so
             #        agents are aware of market-wide sentiment shifts from
             #        publications (e.g., exchange inquiry → bearish; national
             #        team buying → confidence boost).
             if not round_pub_effects.is_neutral:
-                _pub_effect_marker = "\n# 市场效应 / Market Effects:"
                 _effect_ctx = _build_publication_effect_context(round_pub_effects)
                 for persona in personas:
                     ptype = persona.agent_type or "retail"
@@ -1143,14 +1160,7 @@ async def run_simulation(
                         continue
                     oasis_id = persona_id_to_oasis_id[persona.id]
                     oasis_agent = agent_graph.get_agent(oasis_id)
-                    profile = oasis_agent.user_info.profile
-                    other = profile.get("other_info", {})
-                    up = other.get("user_profile", "")
-                    if _pub_effect_marker in up:
-                        up = up[:up.index(_pub_effect_marker)]
-                    up += _effect_ctx
-                    other["user_profile"] = up
-                    profile["other_info"] = other
+                    set_round_context(oasis_agent, pub_effects_ctx=_effect_ctx)
 
             # 1.97. Inject market stress context into policy/regulator prompts.
             #        When stress is elevated/crisis, policy makers see a briefing
@@ -1506,18 +1516,20 @@ async def run_simulation(
                     instrument=order.instrument or "",
                 )
                 # Resolve which instrument this order targets.
-                # In multi-instrument mode, agent must specify — no default.
-                if order.instrument:
+                # Single-instrument mode: collapse any LLM-supplied ticker to
+                # the event's primary ticker so initial holdings and traded
+                # holdings share one bookkeeping key.
+                if instrument_universe is None:
+                    order_ticker = _primary_ticker
+                elif order.instrument:
                     order_ticker = order.instrument
-                elif instrument_universe is not None:
+                else:
                     # Agent omitted instrument in multi-instrument mode → hold
                     log.warning(
                         "  R%d %s omitted instrument in multi-instrument mode, treating as hold",
                         round_idx, order.persona_id,
                     )
                     continue
-                else:
-                    order_ticker = "_default"
                 order_price = (
                     current_prices.get(order_ticker, current_price)
                     if current_prices else current_price
@@ -1612,6 +1624,7 @@ async def run_simulation(
                     distribution=hold_dist,
                     current_price=current_price,
                     rng=sample_rng,
+                    instrument=_primary_ticker if instrument_universe is None else "_default",
                     rationale="(no tool call this round, held)",
                     round_idx=round_idx,
                     limit_board=limit_board,

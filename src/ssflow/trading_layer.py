@@ -91,11 +91,17 @@ class TraderInstance:
         return {_DEFAULT_TICKER: current_price}
 
     def holdings_value(self, current_price: float | dict[str, float]) -> float:
-        prices = self._resolve_prices(current_price)
-        return sum(
-            self.holdings.get(t, 0.0) * p
-            for t, p in prices.items()
-        )
+        # Iterate over holdings keys — NOT prices — so positions under
+        # tickers the caller didn't supply are still accounted for.
+        # Scalar price: apply uniformly to every holdings entry (single-
+        # instrument mode, or emergency fallback when the caller has
+        # only a global reference price).
+        if isinstance(current_price, dict):
+            return sum(
+                shares * current_price.get(ticker, 0.0)
+                for ticker, shares in self.holdings.items()
+            )
+        return sum(shares * current_price for shares in self.holdings.values())
 
     def nav(self, current_price: float | dict[str, float]) -> float:
         return self.cash + self.holdings_value(current_price)

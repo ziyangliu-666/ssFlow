@@ -106,6 +106,60 @@ class TestAgent:
         # holdings_value at price 100 = 200, max = 500, headroom = 300
         assert agent.buy_headroom(100.0) == 300
 
+    def test_holdings_value_covers_all_tickers_with_scalar_price(self):
+        """Regression: holdings under a ticker key not named `_default` must
+        still count toward NAV when a scalar price is supplied.
+
+        Prior bug: `_resolve_prices(float)` produced `{"_default": price}`
+        and `holdings_value` iterated over that dict, silently dropping any
+        holdings booked under a real ticker such as `"300750"`. In single-
+        instrument mode the engine routed buys to the event ticker while
+        initial holdings lived under `_default`, so ~70% of every trading
+        fund's position vanished from compute_class_pnl.
+        """
+        agent = Agent(
+            persona_id="x", capital=1000, cash=200,
+            holdings={"_default": 2, "300750": 3}, max_holdings_value=900,
+        )
+        # All 5 shares should be marked at the scalar price
+        assert agent.holdings_value(100.0) == 500
+        assert agent.nav(100.0) == 700
+        assert agent.pnl(100.0) == -300  # cash+holdings=700 < capital=1000
+
+    def test_holdings_value_uses_per_ticker_prices_when_dict_given(self):
+        agent = Agent(
+            persona_id="x", capital=1000, cash=200,
+            holdings={"AAA": 4, "BBB": 6}, max_holdings_value=900,
+        )
+        assert agent.holdings_value({"AAA": 10.0, "BBB": 50.0}) == 340
+        # A missing ticker defaults to 0 — caller is telling us they have
+        # no opinion on that price, so we don't make one up.
+        assert agent.holdings_value({"AAA": 10.0}) == 40
+
+    def test_pnl_positive_in_monotonic_rally_for_multi_ticker_holdings(self):
+        """End-to-end: an agent that accumulates shares during a rally (via
+        apply_action on a real ticker) must show a positive P&L even though
+        its initial holdings are booked under `_default`. This is the exact
+        CATL scenario where QFII showed -¥2.9億 on a rising stock."""
+        from ssflow.trading_layer import apply_action
+
+        # Start: 5 shares @ 100 under _default, 500 cash. nav = 1000 = capital
+        agent = Agent(
+            persona_id="qfii", capital=1000, cash=500,
+            holdings={"_default": 5}, max_holdings_value=800,
+        )
+        assert agent.pnl(100.0) == 0
+
+        # Accumulate more shares under the real ticker as the rally runs
+        apply_action(
+            agent, {"side": "buy", "pool": "cash", "fraction": 0.5},
+            current_price=110.0, instrument="300750", round_idx=1,
+        )
+        # Now holds: _default=5, 300750=2.2727  (500*0.5/110)
+        # Mark at final price 120: shares*120 = (5+2.2727)*120 = 872.73
+        # Plus cash 250 → nav 1122.73 → pnl = +122.73
+        assert agent.pnl(120.0) == pytest.approx(122.73, abs=0.1)
+
 
 # ─────────────────────── spawn_agents ───────────────────────
 
