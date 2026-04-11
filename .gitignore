@@ -30,3 +30,13 @@ log/
 # Tool working dirs (browser test artifacts, etc.)
 .playwright-mcp/
 .gstack/
+tmp/
+
+# Stray dev screenshots at repo root — /browse + manual captures keep
+# producing these. docs/ and frontend/ screenshots stay tracked; loose
+# PNGs in the project root are always dev junk.
+/*.png
+
+# Extra local venv + ad-hoc analysis artifacts
+/.venv312/
+/analysis/backtest_monthly_v2_full.json
