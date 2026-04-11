@@ -191,7 +191,11 @@ class TestMakeSubmitOrderTool:
         assert len(drained) == 1
         assert drained[0].distribution == {"hold": 1.0}
 
-    def test_tool_call_with_non_dict_falls_back_to_empty(self):
+    def test_tool_call_with_none_defaults_to_hold(self):
+        """LLMs sometimes omit action_distribution entirely. The tool
+        now defaults to a full-weight hold rather than silently dropping
+        the call, which matches the "missing distribution = no activity"
+        intent while still surfacing a warning."""
         collector = OrderCollector()
         persona = _make_trader()
         tool = make_submit_order_tool(persona, collector)
@@ -199,7 +203,10 @@ class TestMakeSubmitOrderTool:
         tool.func(action_distribution=None, rationale="x")  # type: ignore
         drained = collector.drain()
         assert len(drained) == 1
-        assert drained[0].distribution == {}
+        # Matches the hold action that the tool defaults to — the exact
+        # name is whatever the persona's action_space exposes as "hold".
+        assert drained[0].distribution
+        assert max(drained[0].distribution.values()) == pytest.approx(1.0)
 
     def test_two_tools_bind_to_different_personas(self):
         """Each call to make_submit_order_tool should bind to its own

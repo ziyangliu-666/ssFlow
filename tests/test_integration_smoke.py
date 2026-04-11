@@ -43,7 +43,8 @@ import pytest
 
 from ssflow.event_severity import resolve_event_severity
 from ssflow.instrument import Instrument, InstrumentUniverse
-from ssflow.limit_board import LimitBoard, BoardType, BoardState
+from ssflow.limit_board import LimitBoard, BoardType, BoardState, gap_open
+from ssflow.market_dynamics import MAX_DELTA_PCT_PER_ROUND
 from ssflow.persona import MarketShare, Persona, SandboxConfig
 from ssflow.round_context import clear_round_context, set_round_context
 from ssflow.round_schedule import make_schedule
@@ -476,6 +477,212 @@ class TestLimitBoardIntegration:
             f"T+1 ledger must zero out same-round sells, got "
             f"{sell_flow.net_flow}"
         )
+
+
+# ─────────────────────── Consecutive limit-up regime ───────────────────────
+
+
+class TestConsecutiveLimitUp:
+    """Policy-tailwind regime: strong positive sentiment drives two
+    consecutive trading days into LIMIT_UP. Covers TODO P0-E2: verify
+    the board survives a cross-day reset with yesterday's close at the
+    upper limit and keeps seal_strength populated on both days."""
+
+    def test_two_day_limit_up_sequence(self):
+        """Day 0: main-board stock opens flat, intraday hits +10% limit
+        under overwhelming buy pressure. Day 1: pre_open gap from
+        yesterday's limit close, driven by lingering positive sentiment,
+        should gap toward the new day's upper limit (calculated off
+        the new prev_close, not the original pre-event price)."""
+        prev_close_d0 = 10.0
+        adv = 1e9
+
+        # ── Day 0: drift into limit-up with heavy buy queue ──
+        board_d0 = LimitBoard(
+            prev_close=prev_close_d0, board_type=BoardType.NORMAL,
+        )
+        # Kyle-style delta > +10% gets clamped to +10%
+        clamped = board_d0.clamp_delta(0.15)
+        assert clamped == pytest.approx(0.10, abs=1e-6)
+        board_d0.update(
+            clamped, buy_volume=3 * adv, sell_volume=0.2 * adv,
+        )
+        assert board_d0.at_limit_up
+        day0_close = board_d0.current_price
+        assert day0_close == pytest.approx(prev_close_d0 * 1.10, rel=1e-6)
+        assert board_d0.seal_strength(adv) > 0, (
+            "limit-up with unmet buy demand must publish a positive "
+            "seal strength so the engine can expose it to agents"
+        )
+
+        # ── Day 1: new board seeded from yesterday's limit close ──
+        board_d1 = LimitBoard(
+            prev_close=day0_close, board_type=BoardType.NORMAL,
+        )
+        # Upper limit on day 1 is day0_close * 1.10, not the original
+        # prev_close_d0 * 1.10. This is the A-share rolling-limit rule.
+        expected_upper_d1 = round(day0_close * 1.10, 2)
+        assert board_d1.upper_limit == pytest.approx(
+            expected_upper_d1, abs=0.01
+        )
+
+        # Pre-open gap under still-positive sentiment. The gap_open helper
+        # clamps into the new day's limit band, so even with sentiment=+1
+        # the open price cannot exceed today's upper limit.
+        day1_open = gap_open(
+            prev_close=day0_close,
+            overnight_sentiment=1.0,
+            board_type=BoardType.NORMAL,
+            volatility=0.20,  # policy-tailwind vol
+        )
+        assert day1_open <= board_d1.upper_limit + 1e-6
+
+        # Apply the open tick + further buying pressure; day 1 should
+        # reach limit-up again. Drive the board there via clamp_delta.
+        open_delta = (day1_open / day0_close) - 1.0
+        _ = board_d1.clamp_delta(open_delta)
+        board_d1.update(
+            open_delta, buy_volume=2 * adv, sell_volume=0.1 * adv,
+        )
+        # Intraday: continued buying pushes to the upper limit
+        remaining = (board_d1.upper_limit / board_d1.current_price) - 1.0
+        if remaining > 0:
+            clamped_push = board_d1.clamp_delta(remaining + 0.05)
+            board_d1.update(
+                clamped_push,
+                buy_volume=5 * adv,
+                sell_volume=0.1 * adv,
+            )
+
+        assert board_d1.at_limit_up, (
+            f"day 1 with positive sentiment + buy pressure should close "
+            f"at limit-up, got state={board_d1.state}"
+        )
+        day1_close = board_d1.current_price
+        # Cumulative two-day return ≈ +21% (1.10 * 1.10 - 1)
+        cum_return = (day1_close / prev_close_d0) - 1.0
+        assert cum_return == pytest.approx(0.21, abs=0.005)
+        # Seal strength exposed on day 1 too
+        assert board_d1.seal_strength(adv) > 0
+
+
+# ─────────────────────── Universe spillover regime ───────────────────────
+
+
+def _make_kline_for_spillover(
+    base_price: float, beta: float, n_bars: int = 30
+) -> list[dict]:
+    """Build synthetic K-line data where closes follow a common driver
+    scaled by `beta`. This yields a correlation close to 1 with the
+    source and a derived beta very close to the requested value."""
+    import math as _m
+
+    # Shared driver: mild sine-wave daily returns
+    driver = [0.02 * _m.sin(i * 0.7) for i in range(n_bars)]
+    closes = [base_price]
+    for i in range(1, n_bars):
+        closes.append(closes[-1] * (1 + beta * driver[i]))
+
+    bars = []
+    for i, c in enumerate(closes):
+        bars.append({
+            "date": f"2026-03-{(i % 30) + 1:02d}",
+            "open": c * 0.998,
+            "high": c * 1.006,
+            "low": c * 0.994,
+            "close": c,
+            "volume": 5_000_000,
+        })
+    return bars
+
+
+class TestUniverseSpillover:
+    """TODO P0-E3: when the event_subject absorbs a large positive delta,
+    universe.compute_spillover must push correlated non-subject tickers
+    in the same direction, and flip the sign for opposing-relationship
+    entries. Also exercises compact_kline_summary on the universe so
+    the prompt path is smoke-tested end-to-end."""
+
+    def _build_universe(self) -> InstrumentUniverse:
+        subject = Instrument(
+            ticker="300750", name="宁德时代", market="ashare",
+            relationship="event_subject",
+            current_price=218.50, adv_value=8e9,
+            kline_30d=_make_kline_for_spillover(218.50, beta=1.0),
+        )
+        etf = Instrument(
+            ticker="159813", name="电池ETF", market="ashare",
+            relationship="sector_etf",
+            current_price=2.40, adv_value=3e8,
+            kline_30d=_make_kline_for_spillover(2.40, beta=0.9),
+        )
+        peer = Instrument(
+            ticker="002709", name="天赐材料", market="ashare",
+            relationship="peer",
+            current_price=45.30, adv_value=2e9,
+            kline_30d=_make_kline_for_spillover(45.30, beta=0.8),
+        )
+        opposing = Instrument(
+            ticker="600519", name="某对立标的", market="ashare",
+            relationship="opposing",
+            current_price=1800.0, adv_value=5e9,
+            kline_30d=_make_kline_for_spillover(1800.0, beta=1.0),
+        )
+        return InstrumentUniverse(
+            instruments=[subject, etf, peer, opposing],
+            topic="CATL Q1 earnings",
+        )
+
+    def test_spillover_pushes_correlated_instruments_same_direction(self):
+        u = self._build_universe()
+        source = {"300750": 0.05}
+        spill = u.compute_spillover(source)
+
+        assert "159813" in spill
+        assert "002709" in spill
+        assert "600519" in spill
+        assert "300750" not in spill  # source ticker skipped
+
+        # Positive relationships push same direction
+        assert spill["159813"] > 0, (
+            f"sector_etf under +5% subject move should move up, "
+            f"got {spill['159813']}"
+        )
+        assert spill["002709"] > 0, (
+            f"peer under +5% subject move should move up, "
+            f"got {spill['002709']}"
+        )
+
+        # Opposing relationship flips the sign
+        assert spill["600519"] < 0, (
+            f"opposing instrument should move against subject, "
+            f"got {spill['600519']}"
+        )
+
+        # Bounded by per-round max
+        for ticker, delta in spill.items():
+            assert abs(delta) <= MAX_DELTA_PCT_PER_ROUND + 1e-9, (
+                f"{ticker} spillover {delta} exceeds per-round cap"
+            )
+
+    def test_universe_prompt_summary_wires_kline_for_all_instruments(self):
+        """Regression for P0-D: compact_kline_summary must render for
+        every instrument, and the event_subject must also get the
+        5-day OHLCV table — otherwise agents never see the tape."""
+        u = self._build_universe()
+        text = u.prompt_summary()
+
+        # Every instrument listed
+        for tk in ("300750", "159813", "002709", "600519"):
+            assert tk in text, f"{tk} missing from prompt_summary"
+
+        # K-line statistics block rendered for non-subject instruments
+        assert "波动率" in text
+        assert "20日均线" in text
+        assert "近5日走势" in text
+
+        # Only the event_subject gets the 5-day OHLCV table
+        assert "最近5日日线" in text
 
 
 # ─────────────────────── End-to-end regime smoke ───────────────────────
