@@ -608,9 +608,142 @@ async def _fetch_sina_kline_bars(
         return []
 
 
+async def fetch_kline_historical(
+    ticker: str,
+    as_of_date: str,
+    months_forward: int = 6,
+    months_back: int = 1,
+    market: str = "ashare",
+) -> dict[str, Any]:
+    """Fetch daily K-line slices around a historical event date.
+
+    Wraps `_fetch_sina_kline_bars` (or yfinance for non-A-share) with
+    enough `datalen` headroom to reach back to `as_of_date` from today,
+    then slices the result into:
+
+    - ``anchor_bar``: the last bar on or before ``as_of_date`` — the
+      price snapshot we would have observed at event time.
+    - ``forward_bars``: every bar strictly after the anchor through
+      ``as_of_date + months_forward``. This is the "real" forward
+      trajectory we compare sim output against.
+    - ``backward_bars``: bars from ``as_of_date - months_back`` up to
+      and including the anchor, useful for rendering a "recent tape"
+      context block in backtest prompts.
+    - ``all_bars``: the full fetched buffer (debug / fallback).
+
+    The Sina endpoint only accepts trailing ``datalen`` requests, so
+    events more than ~500 trading days old will return an empty anchor.
+
+    Args:
+        ticker: plain A-share code (e.g. "600519") or exchange-suffixed
+            code for yfinance fallback.
+        as_of_date: ``YYYY-MM-DD`` string marking the event's trading date.
+        months_forward: size of the forward comparison window.
+        months_back: size of the backward context window.
+        market: ``"ashare"`` / ``"a-share"`` routes to Sina; everything
+            else falls back to yfinance.
+
+    Returns:
+        Dict with keys ``anchor_bar``, ``anchor_date``, ``forward_bars``,
+        ``backward_bars``, ``all_bars``. Empty structure on fetch failure.
+    """
+    from datetime import date, datetime, timedelta
+
+    empty: dict[str, Any] = {
+        "anchor_bar": None,
+        "anchor_date": None,
+        "forward_bars": [],
+        "backward_bars": [],
+        "all_bars": [],
+    }
+
+    try:
+        asof = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    except ValueError:
+        log.warning("fetch_kline_historical: bad as_of_date %r", as_of_date)
+        return empty
+
+    today = date.today()
+    days_since_asof = max(0, (today - asof).days)
+    # Approx 5 trading days per 7 calendar days + back-window + headroom
+    datalen = int(days_since_asof * 5 / 7) + months_back * 22 + 30
+
+    if market in ("ashare", "a-share", "cn-equity", "sse", "szse"):
+        bars = await _fetch_sina_kline_bars(ticker, lookback_days=datalen)
+    else:
+        # yfinance fallback for non-A-share
+        try:
+            import yfinance as yf
+            start = (asof - timedelta(days=months_back * 31)).strftime("%Y-%m-%d")
+            end = (asof + timedelta(days=months_forward * 31 + 5)).strftime("%Y-%m-%d")
+            hist = yf.Ticker(ticker).history(
+                start=start, end=end, interval="1d", auto_adjust=False
+            )
+            if hist is None or hist.empty:
+                return empty
+            bars = []
+            for dt, row in hist.iterrows():
+                bars.append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "open": float(row.get("Open", 0)),
+                    "high": float(row.get("High", 0)),
+                    "low": float(row.get("Low", 0)),
+                    "close": float(row.get("Close", 0)),
+                    "volume": int(row.get("Volume", 0)),
+                })
+        except Exception as exc:
+            log.warning(
+                "fetch_kline_historical yfinance failed for %s: %s", ticker, exc
+            )
+            return empty
+
+    if not bars:
+        return empty
+
+    bars.sort(key=lambda b: str(b.get("date", "")))
+    asof_str = asof.strftime("%Y-%m-%d")
+
+    anchor: dict[str, Any] | None = None
+    for bar in bars:
+        if str(bar.get("date", "")) <= asof_str:
+            anchor = bar
+        else:
+            break
+
+    if anchor is None:
+        # Event is older than our trailing buffer reach
+        return {**empty, "all_bars": bars}
+
+    anchor_date = str(anchor["date"])
+    forward_cutoff = (
+        asof + timedelta(days=months_forward * 31)
+    ).strftime("%Y-%m-%d")
+    backward_cutoff = (
+        asof - timedelta(days=months_back * 31)
+    ).strftime("%Y-%m-%d")
+
+    forward_bars = [
+        b for b in bars
+        if anchor_date < str(b.get("date", "")) <= forward_cutoff
+    ]
+    backward_bars = [
+        b for b in bars
+        if backward_cutoff <= str(b.get("date", "")) <= anchor_date
+    ]
+
+    return {
+        "anchor_bar": anchor,
+        "anchor_date": anchor_date,
+        "forward_bars": forward_bars,
+        "backward_bars": backward_bars,
+        "all_bars": bars,
+    }
+
+
 __all__ = [
     "MarketQuote",
     "fetch_kline_30d",
+    "fetch_kline_historical",
     "fetch_market_quote",
     "fetch_market_quotes",
     "fetch_ashare",

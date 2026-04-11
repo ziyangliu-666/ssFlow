@@ -120,23 +120,50 @@ class RoundSchedule:
             self.rounds[round_idx - 1].trading_day_index != day_idx
         )
 
+        # Detect monthly cadence: any inter-round gap in this schedule
+        # >= 15 days means we are running a month-scale scenario. When
+        # that is true we relabel the day-scale chrome into month-scale
+        # language so agents don't think they are debating an intraday
+        # print when the schedule actually spans half a year.
+        is_monthly = self._is_monthly_cadence()
+        if is_monthly:
+            month_idx = self._month_index(round_idx)
+
         # ── Session tag (hard signal agents can key off) ──
-        tag_map = {
-            "pre_open":   "[开盘竞价 · 价格发现]",
-            "morning":    "[盘中 · 充裕流动性]",
-            "afternoon":  "[尾盘 · 流动性收敛]",
-            "whole_day":  "[全日 · 常规流动性]",
-        }
-        tag = tag_map.get(session, "[全日 · 常规流动性]")
+        if is_monthly:
+            tag = "[月度 · 中长期定价]"
+        else:
+            tag_map = {
+                "pre_open":   "[开盘竞价 · 价格发现]",
+                "morning":    "[盘中 · 充裕流动性]",
+                "afternoon":  "[尾盘 · 流动性收敛]",
+                "whole_day":  "[全日 · 常规流动性]",
+            }
+            tag = tag_map.get(session, "[全日 · 常规流动性]")
 
         # ── Narrative flavour by (session, day_idx) ──
         # Pulled into a separate method so the logic stays declarative.
-        narrative = _session_narrative(session, day_idx, is_first_round_of_day)
+        if is_monthly:
+            narrative = _MONTHLY_NARRATIVES[
+                min(len(_MONTHLY_NARRATIVES) - 1, month_idx)
+            ]
+        else:
+            narrative = _session_narrative(session, day_idx, is_first_round_of_day)
 
+        if is_monthly:
+            elapsed_line = (
+                f"  距事件发生: {rd.hours_since_event / 24:.0f} 天  ·  "
+                f"事件后第 {month_idx + 1} 个月"
+            )
+        else:
+            elapsed_line = (
+                f"  距事件发生: {rd.hours_since_event:.0f} 小时  ·  "
+                f"事件后第 {day_idx + 1} 个交易日"
+            )
         lines = [
             f"\n# 时间 / Time: {rd.label}  {tag}",
             f"  时间段: {rd.calendar_start} ~ {rd.calendar_end}",
-            f"  距事件发生: {rd.hours_since_event:.0f} 小时  ·  事件后第 {day_idx + 1} 个交易日",
+            elapsed_line,
         ]
         if narrative:
             lines.append(f"  情境: {narrative}")
@@ -153,7 +180,7 @@ class RoundSchedule:
             lines.append(f"  事件以来累计涨跌: {cumulative_delta_pct:+.2f}%")
 
         # ── Cross-day reset message ──
-        if is_first_round_of_day and day_idx > 0:
+        if is_first_round_of_day and day_idx > 0 and not is_monthly:
             if prev_day_close_delta_pct is not None:
                 lines.append(
                     f"  新交易日开盘: 昨日收盘 {prev_day_close_delta_pct:+.2f}%, "
@@ -164,12 +191,21 @@ class RoundSchedule:
                     "  新交易日开盘: 隔夜情绪理应部分衰减 — "
                     "重新审视持仓和仓位"
                 )
+        elif is_monthly and round_idx > 0:
+            lines.append(
+                "  月度重估: 距上月月线已有约 30 个交易日, "
+                "上月末的叙事是否仍然成立? 基本面/估值是否已经验证? "
+                "请主动考虑减仓/加仓/翻转 — 不要仅因上月方向而默认延续"
+            )
 
         # ── T+1 settlement reminder (A-share) ──
-        lines.append(
-            "  交易规则: A 股 T+1 — 今日买入的仓位明日方可卖出, "
-            "请基于你对【下一个交易日】而非【今日收盘】的价格判断做买入决策"
-        )
+        # On monthly cadence this is trivially satisfied, so skip the
+        # line to save prompt budget for the monthly-specific context.
+        if not is_monthly:
+            lines.append(
+                "  交易规则: A 股 T+1 — 今日买入的仓位明日方可卖出, "
+                "请基于你对【下一个交易日】而非【今日收盘】的价格判断做买入决策"
+            )
 
         if round_idx > 0:
             prev = self.rounds[round_idx - 1]
@@ -179,6 +215,30 @@ class RoundSchedule:
             lines.append(f"  下一轮: {nxt.label}")
 
         return "\n".join(lines)
+
+    def _is_monthly_cadence(self) -> bool:
+        """True if this schedule steps in month-scale jumps (≥15 days)."""
+        if len(self.rounds) < 2:
+            return False
+        for i in range(1, len(self.rounds)):
+            gap = self.rounds[i].hours_since_event - self.rounds[i - 1].hours_since_event
+            if gap >= 15 * 24:
+                return True
+        return False
+
+    def _month_index(self, round_idx: int) -> int:
+        """Zero-based month offset of `round_idx` within a monthly schedule.
+
+        Computed from `hours_since_event` so callers can use non-uniform
+        monthly spacing. Falls back to the raw round index for schedules
+        that don't actually step monthly.
+        """
+        if not 0 <= round_idx < len(self.rounds):
+            return 0
+        hours = self.rounds[round_idx].hours_since_event
+        if hours < 15 * 24:
+            return 0
+        return int(round(hours / (30 * 24)))
 
     def to_serializable(self) -> dict[str, Any]:
         return {
@@ -201,6 +261,22 @@ class RoundSchedule:
 # ── Session narrative helpers ────────────────────────────────────────
 
 
+_MONTHLY_NARRATIVES: list[str] = [
+    "事件当月: 一级消化期. 财报/政策冲击集中定价, 机构调研集中, "
+    "分析师模型快速更新, 散户情绪从爆发到初步消化, 波动率显著抬升",
+    "事件后第二个月: 二级消化期. 趋势确认或证伪, 分析师评级调整潮, "
+    "板块联动开始显现, 融资/融券余额明显变动, 估值锚点重新讨论",
+    "事件后第三个月: 中期博弈期. 部分机构兑现/加仓, 新的宏观或行业月度数据验证叙事, "
+    "短线动量开始衰减, 长线逻辑是否成立成为焦点",
+    "事件后第四个月: 季度末调仓期. 长线资金决定是否重仓, 短期动量基本衰减, "
+    "基金季报持仓披露, 风险溢价重新校准",
+    "事件后第五个月: 催化酝酿期. 新一季财报预期升温, 新催化剂开始酝酿, "
+    "原事件本身的影响基本 priced in, 叙事切换到下一季的新变量",
+    "事件后第六个月: 半年业绩验证期. 事件的长期影响正式兑现到业绩, "
+    "市场开始用数据而非叙事定价. 错判的方向在此刻被强制修正",
+]
+
+
 def _session_narrative(
     session: str, day_idx: int, is_first_round_of_day: bool
 ) -> str:
@@ -210,7 +286,15 @@ def _session_narrative(
     so they can reason about liquidity, info velocity, and the typical
     participant mix. Deliberately terse: one sentence per (session, day)
     pair so it fits inside prompt budgets without crowding out the event.
+
+    For multi-month schedules (day_idx ≥ 15) we branch into a dedicated
+    month-scale narrative bank — the daily templates are tuned for
+    intraday/T+N cadences and degenerate into "长期消化" repetition
+    once the schedule moves past the first week.
     """
+    if day_idx >= 15:
+        month_idx = min(len(_MONTHLY_NARRATIVES) - 1, day_idx // 30)
+        return _MONTHLY_NARRATIVES[max(0, month_idx)]
     if day_idx == 0:
         # Event day: fast, noisy, retail-dominated in the morning
         if session == "pre_open":
@@ -349,6 +433,35 @@ _PRESETS: dict[str, list[dict[str, Any]]] = {
              else ["institutional", "strategic"]
          )}
         for d in range(1, 10)
+    ],
+
+    # ── Monthly-6m — 6 rounds, one per month, 6-month horizon ──
+    #
+    # For long-horizon backtesting where each round represents a whole
+    # trading month. `hours_since_event = 720 * N` means `day_idx` lands
+    # at multiples of 30, which triggers the _MONTHLY_NARRATIVES branch
+    # inside _session_narrative and gives agents month-scale context
+    # instead of intraday session tags.
+    "monthly-6m": [
+        {"id": "M0",  "label": "事件当月 (M+0)", "hours": 0.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["retail", "kol", "media", "news_wire",
+                    "analyst", "institutional"]},
+        {"id": "M1",  "label": "事件后一个月 (M+1)", "hours": 720.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["institutional", "analyst", "retail"]},
+        {"id": "M2",  "label": "事件后两个月 (M+2)", "hours": 1440.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["institutional", "strategic", "analyst"]},
+        {"id": "M3",  "label": "事件后三个月 (M+3)", "hours": 2160.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["institutional", "strategic", "analyst"]},
+        {"id": "M4",  "label": "事件后四个月 (M+4)", "hours": 2880.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["strategic", "institutional"]},
+        {"id": "M5",  "label": "事件后五个月 (M+5)", "hours": 3600.0,
+         "start": "09:30", "end": "15:00",
+         "active": ["strategic", "institutional"]},
     ],
 
     # ── Extended — 10 trading days (alias for policy-10d) ──
