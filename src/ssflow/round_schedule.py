@@ -192,10 +192,18 @@ class RoundSchedule:
                     "重新审视持仓和仓位"
                 )
         elif is_monthly and round_idx > 0:
+            # Open-ended reassessment — no imperative. Backtest v2
+            # (§3.2) showed that the prior "请主动考虑翻转" phrasing
+            # systematically destroyed conviction in strong-bull events
+            # (宁德时代 924 real +34% → sim -12%) because agents
+            # read it as a standing instruction to reverse. This
+            # version lets the agent decide based on new information.
             lines.append(
-                "  月度重估: 距上月月线已有约 30 个交易日, "
-                "上月末的叙事是否仍然成立? 基本面/估值是否已经验证? "
-                "请主动考虑减仓/加仓/翻转 — 不要仅因上月方向而默认延续"
+                "  月度重估: 距上月已有约 30 个交易日, "
+                "评估原始事件的 narrative 是否仍在验证, "
+                "新的月度数据/研报/宏观事件是否带来新的 catalyst. "
+                "若叙事仍成立且无反证, 保持方向; "
+                "若已充分 priced in 或出现反证, 相应调整"
             )
 
         # ── T+1 settlement reminder (A-share) ──

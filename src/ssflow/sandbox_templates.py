@@ -158,6 +158,7 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
             "state_mutations": {"capacity_utilization": 0.60},
         },
         # ── force_action: hard trading constraints (the teeth) ──
+        # Downside teeth (v1 + prior)
         {
             "entity_slot": "retail_class",
             "condition": "margin_utilization > 0.72",
@@ -172,6 +173,27 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
             "description": "累计跌超5% → 机构合规风控减仓20%",
             "effect_type": "force_action",
             "forced_side": "sell",
+            "forced_quantity_pct": 0.20,
+        },
+        # Upside teeth (v2, backtest_monthly_v1.md §3.5).
+        # Without these, strong policy-driven rallies fizzle because the
+        # sim has no structural mechanism pushing marginal capital INTO
+        # the trade. Real 924-style events see institutions chasing the
+        # breakout + retail FOMO as momentum compounds.
+        {
+            "entity_slot": "institutional_class",
+            "condition": "price_change_pct > 20.0",
+            "description": "累计涨超20% → 机构动量跟随买入15%",
+            "effect_type": "force_action",
+            "forced_side": "buy",
+            "forced_quantity_pct": 0.15,
+        },
+        {
+            "entity_slot": "retail_class",
+            "condition": "price_change_pct > 15.0",
+            "description": "累计涨超15% → 散户FOMO追涨加仓20%",
+            "effect_type": "force_action",
+            "forced_side": "buy",
             "forced_quantity_pct": 0.20,
         },
     ],

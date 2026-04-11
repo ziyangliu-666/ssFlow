@@ -728,6 +728,39 @@ async def run_simulation(
     # Single-instrument adaptive ADV
     adaptive_adv = AdaptiveADV(baseline=event.adv_value)
 
+    # ── Cadence-aware caps ──
+    # Schedules that step in month-scale jumps need relaxed Kyle caps +
+    # knee + resistance, because the daily-calibrated values assume each
+    # round is one trading day. The round_schedule exposes this directly
+    # via `_is_monthly_cadence()`. For daily schedules the defaults are
+    # preserved and this is a no-op. Backtest v2 (§3.3) showed the day
+    # cap clipping a +70% real monthly move to +3.68% sim on 东方财富 924.
+    from .market_dynamics import CADENCE_CAPS, caps_for_cadence
+    _is_monthly_cadence = bool(
+        round_schedule and hasattr(round_schedule, "_is_monthly_cadence")
+        and round_schedule._is_monthly_cadence()
+    )
+    if _is_monthly_cadence:
+        _cadence_label = "monthly"
+        _max_delta_pct, _monthly_knee = caps_for_cadence("monthly")
+        # Monthly schedules need a shallower resistance curve (0.8 vs 3.0)
+        # so that M+1's +20% cum_abs_delta doesn't already collapse the
+        # knee to near-zero on M+2.
+        _resistance_scale = 0.8
+        # Override the calibration library's daily knee with the monthly
+        # default — calibration was measured on daily backtests and the
+        # knee is cadence-dependent, not event-type-dependent.
+        _calibrated_knee = _monthly_knee
+        log.info(
+            "Cadence: monthly — Kyle cap %.2f, base_knee %.2f, "
+            "resistance_scale %.2f (overriding daily defaults)",
+            _max_delta_pct, _calibrated_knee, _resistance_scale,
+        )
+    else:
+        _cadence_label = "daily"
+        _max_delta_pct, _ = caps_for_cadence("daily")
+        _resistance_scale = 3.0
+
     # ── Limit board + publication effects (A-share realism) ──
     from .limit_board import LimitBoard, T1Ledger, infer_board_type
     from .publication_effects import EffectTracker, compute_publication_effect, aggregate_round_effects
@@ -1102,6 +1135,7 @@ async def run_simulation(
                         cumulative_delta_pct=cumulative_delta_pct,
                         current_price=current_price,
                         initial_price=initial_price,
+                        event_type=event.event_type or "",
                     )
 
             # 1.94. Terminal-risk context. When the severity resolver flagged
@@ -1783,6 +1817,7 @@ async def run_simulation(
                 dynamic_knee = compute_dynamic_knee(
                     n_active, n_total, cumulative_abs, round_idx,
                     base_knee=_calibrated_knee,
+                    resistance_scale=_resistance_scale,
                 )
                 # Clamp sentiment shift to [-0.5, 0.5]
                 clamped_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
@@ -1793,15 +1828,30 @@ async def run_simulation(
                     net_flow_value=net_flow_total,
                     adv_value=effective_adv,
                     lambda_market=lambda_used,
+                    max_delta_pct=_max_delta_pct,
                     flow_knee=dynamic_knee,
                     sentiment_modifier=clamped_sentiment,
                 )
-                # Apply A-share limit-board clamping (涨跌停板)
-                delta_pct = limit_board.clamp_delta(raw_delta)
+                # Apply A-share limit-board clamping (涨跌停板). The limit
+                # board models *daily* 10% limits — on monthly cadence the
+                # cap has no physical meaning (a real month can freely
+                # move >30%) so we skip it and let the Kyle cap govern.
+                if _is_monthly_cadence:
+                    delta_pct = raw_delta
+                else:
+                    delta_pct = limit_board.clamp_delta(raw_delta)
                 # Compute buy/sell volumes for limit-board state tracking
                 buy_vol = sum(cf.net_flow for cf in class_flows if cf.net_flow > 0)
                 sell_vol = abs(sum(cf.net_flow for cf in class_flows if cf.net_flow < 0))
-                limit_board.update(delta_pct, buy_volume=buy_vol, sell_volume=sell_vol)
+                # Monthly cadence: skip limit_board state tracking; the
+                # one-word-up / seal_strength / limit_up machinery models
+                # intraday queue dynamics that have no meaning at a
+                # month-scale granularity. Leaving the board in NORMAL
+                # keeps downstream code paths happy.
+                if not _is_monthly_cadence:
+                    limit_board.update(
+                        delta_pct, buy_volume=buy_vol, sell_volume=sell_vol,
+                    )
                 if limit_board.at_limit:
                     seal = limit_board.seal_strength(effective_adv)
                     log.info(

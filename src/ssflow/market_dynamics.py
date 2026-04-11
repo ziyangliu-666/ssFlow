@@ -55,12 +55,39 @@ MAX_DELTA_PCT_PER_ROUND: float = 0.10
 FLOW_KNEE: float = 0.08
 
 
+# ── Cadence-aware caps ──
+# The daily-calibrated 10% cap + 8% knee are appropriate when each round
+# represents one trading day. Monthly backtests (backtest_monthly.py) saw
+# real policy events move +70% in a single month — the daily cap clipped
+# the sim's M+1 move to +3-4% on a +70% real event. These per-cadence
+# overrides preserve the daily defaults for the common case while letting
+# longer-horizon schedules express realistic month-scale impact.
+#
+# CADENCE_CAPS[cadence] = (max_delta_pct, base_knee)
+CADENCE_CAPS: dict[str, tuple[float, float]] = {
+    "daily": (0.10, 0.08),   # A-share 涨跌停 + standard knee (default)
+    "weekly": (0.20, 0.15),  # relaxed but still bounded
+    "monthly": (0.40, 0.30), # policy-level events can move >30% in a month
+}
+
+
+def caps_for_cadence(cadence: str) -> tuple[float, float]:
+    """Return (max_delta_pct, base_knee) for a schedule cadence label.
+
+    Unknown labels fall through to the daily defaults so existing callers
+    that don't pass a cadence are unaffected.
+    """
+    return CADENCE_CAPS.get((cadence or "daily").lower(), CADENCE_CAPS["daily"])
+
+
 def compute_dynamic_knee(
     n_active_classes: int,
     total_classes: int,
     cumulative_abs_delta: float,
     round_idx: int,
     base_knee: float = FLOW_KNEE,
+    *,
+    resistance_scale: float = 3.0,
 ) -> float:
     """Compute a round-specific flow knee that adapts to market state.
 
@@ -68,11 +95,17 @@ def compute_dynamic_knee(
     maximum delta.  Large cumulative price moves → more resistance from
     thinning marginal flow → lower effective knee.
 
+    The ``resistance_scale`` parameter is the slope of the cumulative-move
+    resistance curve. 3.0 is calibrated for daily cadence where +5%
+    cumulative is already a notable move. For monthly cadence, callers
+    should pass a smaller value (e.g. 0.8) so that +20% cumulative over
+    the first month doesn't starve the knee on M+1.
+
     Returns an adjusted knee value in [0.002, base_knee].
     """
     participation_frac = n_active_classes / max(total_classes, 1)
     scaled = base_knee * participation_frac
-    resistance = 1.0 / (1.0 + 3.0 * cumulative_abs_delta)
+    resistance = 1.0 / (1.0 + resistance_scale * cumulative_abs_delta)
     adjusted = scaled * resistance
     return max(0.002, min(base_knee, adjusted))
 

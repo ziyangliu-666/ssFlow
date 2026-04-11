@@ -65,6 +65,35 @@ log = logging.getLogger(__name__)
 from .round_context import clear_round_context, set_round_context
 
 
+# Event types whose bearish trajectory is typically **permanent** (basic
+# fundamentals have changed), so the usual "price fell → expect bounce"
+# mean-reversion anchor does not apply. Backtest v2 (analysis/backtest_monthly_v1.md
+# §3.1) exposed that the symmetric anchor was pulling 药明康德 back from
+# -17% to +4% on an event whose real outcome was -46.5%.
+_BEAR_PERMANENT_EVENT_TYPES: frozenset[str] = frozenset({
+    "regulatory",         # BIOSECURE-style bans, CSRC 立案, 强制退市
+    "lawsuit",            # fraud litigation, class actions
+    "shareholder_action", # controlling-shareholder mass offloading
+    "geopolitical",       # sanctions, export controls
+})
+
+# Analogously, events whose bullish move is typically sustained by a
+# durable structural change (policy re-rating, supply re-pricing) should
+# not get "price rose → expect pullback" caution at every round.
+_BULL_PERMANENT_EVENT_TYPES: frozenset[str] = frozenset({
+    "policy",             # 924-style monetary + fiscal combos, MPC cuts
+    "supply_disruption",  # commodity super-cycles
+    "demand_shock",       # structural demand step-ups
+})
+
+# Threshold above which the mean-reversion caution kicks in. The v2
+# backtest showed ±3% was far too tight — a single round's rally easily
+# crossed it and started injecting "回调风险" on every subsequent round
+# of a legitimate uptrend. ±15% is still inside the first-month band of
+# most real events but rules out routine noise.
+_REVERSION_THRESHOLD_PCT: float = 15.0
+
+
 def update_conviction_context(
     agent: "SocialAgent",
     persona_id: str,
@@ -73,6 +102,7 @@ def update_conviction_context(
     *,
     current_price: float = 0.0,
     initial_price: float = 0.0,
+    event_type: str = "",
 ) -> None:
     """Inject price-anchored market context as per-round user-instruction text.
 
@@ -81,23 +111,48 @@ def update_conviction_context(
     relative to the event". Writes into ``agent._ssflow_round_context`` so the
     patched action loop picks it up on the next step — the old profile-mutation
     path was broken because CAMEL snapshots the system message at init time.
+
+    Event-type conditioning: mean-reversion anchoring is suppressed for
+    permanent-directional events. Regulatory bans / sanctions / fraud
+    lawsuits produce secular bear trajectories; policy super-cycles
+    produce secular bulls. Injecting "price too low → bounce likely" on
+    a secular bear silently kills v1's reach on 药明康德-class events.
     """
     if persona_id not in last_actions:
         return
     la = last_actions[persona_id]
     cum_pct = cumulative_delta_pct * 100
+    etype = (event_type or "").lower()
+    is_bear_permanent = etype in _BEAR_PERMANENT_EVENT_TYPES
+    is_bull_permanent = etype in _BULL_PERMANENT_EVENT_TYPES
 
     if initial_price > 0 and current_price > 0:
-        if cum_pct > 3.0:
-            price_comment = (
-                f"  当前价格已较事件前上涨 {cum_pct:+.1f}%. "
-                f"价格越高, 继续上涨的空间可能越小, 回调的风险越大.\n"
-            )
-        elif cum_pct < -3.0:
-            price_comment = (
-                f"  当前价格已较事件前下跌 {cum_pct:+.1f}%. "
-                f"价格越低, 继续下跌的空间可能越小, 反弹的可能性越大.\n"
-            )
+        if cum_pct > _REVERSION_THRESHOLD_PCT:
+            if is_bull_permanent:
+                price_comment = (
+                    f"  当前价格已较事件前上涨 {cum_pct:+.1f}%. "
+                    f"这是政策/供给结构性事件驱动的长期 re-rating, "
+                    f"不应机械假设短期均值回归 — "
+                    f"关注基本面是否仍在验证原始逻辑.\n"
+                )
+            else:
+                price_comment = (
+                    f"  当前价格已较事件前上涨 {cum_pct:+.1f}%. "
+                    f"价格越高, 继续上涨的空间可能越小, 回调的风险越大.\n"
+                )
+        elif cum_pct < -_REVERSION_THRESHOLD_PCT:
+            if is_bear_permanent:
+                price_comment = (
+                    f"  当前价格已较事件前下跌 {cum_pct:+.1f}%. "
+                    f"这是监管/制裁/基本面级事件, 下跌反映永久性风险重定价, "
+                    f"不应机械假设短期均值回归 — "
+                    f"关注风险是否出清.\n"
+                )
+            else:
+                price_comment = (
+                    f"  当前价格已较事件前下跌 {cum_pct:+.1f}%. "
+                    f"价格越低, 继续下跌的空间可能越小, 反弹的可能性越大.\n"
+                )
         else:
             price_comment = (
                 f"  当前价格较事件前变动 {cum_pct:+.1f}%, 仍在合理波动范围内.\n"
