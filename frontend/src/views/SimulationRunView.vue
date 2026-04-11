@@ -344,16 +344,19 @@ const autoProceed = ref(true)
 const pausedAtRound = ref(false)      // true when waiting for user click
 const eventBuffer = ref([])           // buffered events while paused
 
+// Primary-content filters (想法/交易/价格/轮次) are on by default so the
+// user sees what they care about; everything else is engine-detail noise
+// and defaults off. Users who want to see the mechanics can flip chips on.
 const filterTypes = ref([
   { label: '想法', value: 'persona_thought', on: true },
   { label: '交易', value: 'trade_submitted', on: true },
-  { label: '流向', value: 'class_flow_computed', on: false },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },
+  { label: '流向', value: 'class_flow_computed', on: false },
+  { label: '阈值', value: 'threshold_fired', on: false },
+  { label: '强制', value: 'force_action_override', on: false },
+  { label: '规则', value: 'policy_fired', on: false },
   { label: '资源', value: 'resource_flow_executed', on: false },
-  { label: '阈值', value: 'threshold_fired', on: true },
-  { label: '强制', value: 'force_action_override', on: true },
-  { label: '规则', value: 'policy_fired', on: true },
 ])
 
 const visibleEvents = computed(() => {

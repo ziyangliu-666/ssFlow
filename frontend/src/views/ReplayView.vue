@@ -232,9 +232,9 @@ const errorMsg = ref('')
 const filterTypes = ref([
   { label: '想法', value: 'persona_thought', on: true },
   { label: '交易', value: 'trade_submitted', on: true },
-  { label: '流向', value: 'class_flow_computed', on: false },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },
+  { label: '流向', value: 'class_flow_computed', on: false },
 ])
 
 const visibleEvents = computed(() => {

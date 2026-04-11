@@ -379,6 +379,48 @@ function priceDeltaClass (v) {
   border-color: var(--ss-line-strong);
   font-weight: 600;
 }
+
+/* Round-start events are section headers, not regular rows. They get a
+   horizontal rule across the full feed width so visually the reader
+   sees "new round starts here" at a glance. */
+.t-ev.round {
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--ss-line-strong);
+}
+.t-ev.round :deep(.body-h) {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ss-fg);
+}
+.t-ev.round :deep(.t-type) {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+}
+.t-ev.round :deep(.t-text) {
+  font-size: 12px;
+  color: var(--ss-fg);
+}
+/* First round in the feed shouldn't have a rule above it (nothing to
+   separate from). */
+.t-ev.round:first-child,
+.t-ev.sim-start + .t-ev.round {
+  margin-top: 6px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Engine breadcrumb events (flow / entity / force / threshold) are
+   secondary signals — downweight them visually so they don't compete
+   with persona thoughts and trades even when their filter chip is on. */
+.t-ev.flow,
+.t-ev.entity {
+  opacity: 0.7;
+}
+.t-ev.flow :deep(.t-text),
+.t-ev.entity :deep(.t-text) {
+  font-size: 11px;
+}
 .t-ev.sim-start .marker, .t-ev.sim-end .marker {
   background: #fff;
   border-color: var(--ss-accent);
