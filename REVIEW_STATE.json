@@ -1,10 +1,10 @@
 {
-  "round": 4,
-  "threadId": "019d7841-b7f5-7362-ae68-f28398f5cf6c",
-  "status": "completed",
+  "round": 5,
+  "threadId": "019d7a42-f649-7933-9893-b919c4b3435f",
+  "status": "in_progress",
   "difficulty": "medium",
-  "last_score": 6.9,
-  "last_verdict": "serious prototype — single-name A-share stress rehearsal tool",
+  "last_score": 7.1,
+  "last_verdict": "serious prototype — single-name loop works, bearish/extreme regimes still untrustworthy",
   "pending_experiments": [],
-  "timestamp": "2026-04-11T04:00:00+08:00"
+  "timestamp": "2026-04-11T09:55:00+08:00"
 }

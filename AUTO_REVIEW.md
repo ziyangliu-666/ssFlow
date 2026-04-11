@@ -230,3 +230,89 @@ ssFlow is a single-name A-share market event rehearsal engine that simulates mul
 - **Completed** — 4/4 rounds exhausted
 - Score progression: 4/10 → 5.5/10 → 6.4/10 → **6.9/10**
 
+---
+
+## Round 5 (2026-04-11 ~09:55 UTC+8) — Re-opened loop after live-run bug hunt
+
+### Assessment (Summary)
+- **Score: 7.1/10** (up from 6.9 stated at R4, though GPT retroactively haircuts R4 to ~6.2-6.4 because R1-R4 scored a partially broken system)
+- **Verdict**: "Round 5 finally makes ssFlow's core single-name loop behave like the system you thought you already had in Round 4, but it is still not trustworthy in the bearish and extreme A-share regimes where a rehearsal engine is most valuable."
+
+### Dimension Scores
+| Dimension | R4 | R5 | Delta |
+|---|---:|---:|---|
+| Price realism | 7.1 | 7.3 | +0.2 |
+| Agent behavior | 6.8 | 7.0 | +0.2 |
+| Information cascade | 6.5 | 6.9 | +0.4 |
+| Regulatory/policy | 6.4 | 6.2 | **-0.2** |
+| Usefulness | 7.2 | 7.6 | +0.4 |
+| **Overall** | **6.9** | **7.1** | **+0.2** |
+
+### Changes This Round
+| Commit | Fix |
+|---|---|
+| a227629 | P&L double-booking: `holdings_value(float)` silently dropped holdings under any ticker key != `_default`; active funds showed -¥26億 in +12% rally. Fixed by iterating `self.holdings.items()` + collapsing order routing to event ticker in single-instrument mode. |
+| cbc77e9 | Session narrative + A-share T+1 rule injected per round. Discovered `update_conviction_context` and time-context were silently broken for 4 rounds because OASIS/CAMEL bakes system prompt once at `SocialAgent.__init__`. Moved to `set_round_context()` → user-instruction prepend path. |
+| 4b3a6d3 | 30-day K-line stats + 5-day OHLCV table in `Instrument.prompt_summary()`. `run_one.py` now goes through `distill()` by default. |
+| 55fe7ae | Integration crash: `round_schedule.prompt_context` signature mismatch from earlier stash-conflict merge. Every live run was crashing at R0 with TypeError before LLM call. |
+
+### Critical Findings GPT Surfaced During Review
+GPT read the repo directly and caught three disclosure errors I made:
+
+1. **Silent prompt-state leak still on `main`**: `set_round_context()` only merges keys, and `clear_round_context()` exists but is never called. Result: `conviction_ctx` and `pub_effects_ctx` leak into subsequent rounds even when they should be reset. `oasis_persona_adapter.py:61`, `oasis_engine.py:1134`.
+2. **"Multi-instrument spillover is inert" is wrong**: The engine does route orders by ticker and applies spillover at `oasis_engine.py:1648`. The actual problem is poor universe selection (CATL run picked 茅台 + 美的 as "peers") and weak end-to-end validation, not missing plumbing.
+3. **"Short-selling not implemented" is too loose**: The trading layer supports `pool=margin` shorts via `apply_action`, but `submit_trading_decision` in `oasis_trading_tool.py:179` hardcodes every `sell` to `holdings_in_target`, so short-seller personas cannot actually open shorts in the path that matters. The bottleneck is the tool layer, not the execution layer.
+
+### Credit Allocation (GPT)
+- P&L correctness fix: +0.04
+- Prompt injection actually reaching LLM: +0.09
+- K-line data reaching LLM: +0.05
+- Distillation live by default: +0.02
+
+> "That understates the real capability delta. Ex post, R4 was overrated; Round 5 is less a clean +0.2 feature gain than a large reality correction."
+
+### Meta Confidence (GPT)
+> "Yes, the silent bugs materially erode confidence in the prior 6.9. I would retroactively haircut the true Round 4 baseline to about **6.2-6.4**, not 6.9. Dead prompt injection, broken conviction delivery, a live-run startup crash, and broken P&L accounting are not minor defects; they mean prior rounds were partially grading a design document, not a faithfully running engine."
+>
+> - **Stated score path:** 6.9 → 7.1
+> - **True runtime path:** roughly **6.3 → 7.1**
+
+### Top 5 Blockers To 8/10 (GPT)
+1. End-to-end live regression harness with prompt-trace assertions, P&L conservation checks, and scenario-outcome gates.
+2. Freeform shorting path that can actually express `pool=margin` + borrow/constraint logic.
+3. Extreme-scenario open calibration for `regulatory` and `delisting_risk`, validated on live one-word limit-down scenarios.
+4. Universe quality + spillover validation.
+5. Stateful participant balance sheets.
+
+### Priority Of "NOT Fixed" Items (revised by GPT)
+1. Extreme-scenario live validation harness
+2. Short-selling (fix tool layer hardcode)
+3. Multi-instrument spillover / universe validation
+4. Participant balance sheets
+
+> "The first two are first-order sign errors. If delisting risk rallies and short funds cannot short, the engine fails on regime direction."
+
+### Use-Case Certification (GPT)
+**Trustworthy**:
+- Single-name earnings, guidance, IR, analyst upgrade/downgrade, company-specific catalysts in liquid large/mid caps
+- Upward crowding / limit-up trap rehearsal (T+1 + board mechanics)
+- Liquidity-trap exercises ("everyone bullish, fills are bad")
+
+**Borderline**:
+- Small-cap theme mania on the way up
+- Single-name policy beneficiary names
+- Non-limit-board downside moves not depending on real shorting
+
+**NOT trustworthy**:
+- Delisting risk, fraud, regulatory death spirals, one-word limit-down stress
+- Broad policy rally / ETF-led / basket-led contagion regimes
+- Any scenario where short sellers should be the marginal price setter
+- Any multi-name conclusion where peer set correctness matters
+
+### Actions Taken
+- Implementing R5 fixes: context leak, short-selling tool layer, severity_map for regulatory events, live smoke test
+
+### Status
+- Continuing to round 6 (loop re-opened, not yet at stop condition since verdict not "ready"/"almost")
+
+
