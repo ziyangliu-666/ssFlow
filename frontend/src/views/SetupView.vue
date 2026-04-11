@@ -20,117 +20,27 @@
           </div>
         </div>
 
-        <!-- INSTRUMENT UNIVERSE (if distilled) -->
-        <section v-if="instrumentUniverse" class="universe-section">
-          <div class="section-h">
-            <span class="t">标的宇宙</span>
-            <span class="tag">{{ universeInstruments.length }} 个标的</span>
-          </div>
-          <div class="universe-grid">
-            <div
-              v-for="inst in universeInstruments"
-              :key="inst.ticker"
-              class="inst-card"
-              :class="{ 'event-subject': inst.relationship === 'event_subject' || inst.relationship === 'primary', expanded: expandedTicker === inst.ticker }"
-              @click="expandedTicker = expandedTicker === inst.ticker ? null : inst.ticker"
-            >
-              <div class="inst-h">
-                <span class="inst-name">{{ inst.name }}</span>
-                <span class="inst-ticker mono">{{ inst.ticker }}</span>
-              </div>
-              <div class="inst-meta">
-                <span class="inst-rel">{{ relLabel(inst.relationship) }}</span>
-                <span class="inst-price mono">{{ inst.price_currency || '¥' }}{{ inst.current_price?.toFixed(2) || '—' }}</span>
-              </div>
-              <div v-if="inst.kline_30d && inst.kline_30d.length" class="inst-kline">
-                <svg :viewBox="`0 0 ${expandedTicker === inst.ticker ? 300 : 120} ${expandedTicker === inst.ticker ? 80 : 30}`" preserveAspectRatio="none" class="mini-chart" :class="{ 'expanded-chart': expandedTicker === inst.ticker }">
-                  <polyline
-                    :points="miniKline(inst.kline_30d, expandedTicker === inst.ticker)"
-                    fill="none"
-                    :stroke="inst.relationship === 'primary' ? 'var(--ss-accent)' : 'var(--ss-fg-muted)'"
-                    stroke-width="1.2"
-                    vector-effect="non-scaling-stroke"
-                  />
-                </svg>
-              </div>
-              <!-- Expanded details -->
-              <div v-if="expandedTicker === inst.ticker" class="inst-detail">
-                <div class="detail-row">
-                  <span>日均成交额</span>
-                  <span class="mono">{{ inst.adv_value ? (inst.adv_value / 1e8).toFixed(1) + ' 亿' : '—' }}</span>
-                </div>
-                <div v-if="inst.kline_30d && inst.kline_30d.length" class="detail-row">
-                  <span>30日高/低</span>
-                  <span class="mono">{{ klineRange(inst.kline_30d) }}</span>
-                </div>
-                <div v-for="(fv, fk) in (inst.financials || {})" :key="fk" class="detail-row">
-                  <span>{{ fk }}</span>
-                  <span class="mono">{{ fv }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ENTITY GRAPH (if generated) -->
-        <section v-if="entityGraph && entityGraph.entities" class="entity-section">
-          <div class="section-h">
-            <span class="t">实体关系</span>
-            <span class="tag">{{ Object.keys(entityGraph.entities).length }} 个实体</span>
-          </div>
-          <div class="entity-grid">
-            <div
-              v-for="(ent, eid) in entityGraph.entities"
-              :key="eid"
-              class="ent-card"
-            >
-              <div class="ent-h">
-                <span class="ent-name">{{ ent.display_name }}</span>
-                <span class="ent-type">{{ entTypeLabel(ent.entity_type) }}</span>
-              </div>
-              <div class="ent-state">
-                <div v-for="(val, key) in ent.state" :key="key" class="state-row">
-                  <span class="var-label">{{ (ent.state_labels && ent.state_labels[key]) || key }}</span>
-                  <span class="var-value mono">{{ typeof val === 'number' ? (val === Math.floor(val) ? val : val.toFixed(2)) : val }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ROUND SCHEDULE (if generated) -->
-        <section v-if="roundSchedule && roundSchedule.rounds" class="schedule-section">
-          <div class="section-h">
-            <span class="t">时间轴</span>
-            <span class="tag">{{ roundSchedule.rounds.length }} 轮</span>
-          </div>
-          <div class="schedule-row">
-            <span
-              v-for="(rd, i) in roundSchedule.rounds"
-              :key="rd.id"
-              class="round-chip mono"
-            >{{ rd.label }}</span>
-          </div>
-        </section>
-
-        <!-- EVENT SUMMARY (compact — full details are in the instrument cards above) -->
+        <!-- 1. EVENT SUMMARY — the thing being confirmed, top of the page -->
         <section v-if="event && event.event_text" class="event-summary">
           <div class="section-h">
             <span class="t">事件</span>
-            <span class="tag">{{ event.event_date || '' }}</span>
+            <span v-if="event.ticker" class="tag mono">{{ event.ticker }}</span>
+            <span v-if="event.market" class="tag">{{ event.market }}</span>
+            <span v-if="event.event_type" class="tag">{{ event.event_type }}</span>
+            <span v-if="event.event_date" class="tag mono">{{ event.event_date }}</span>
           </div>
           <div class="event-text-block">
             <textarea
               v-model="event.event_text"
               class="event-textarea"
-              rows="3"
+              rows="4"
               placeholder="事件描述"
             ></textarea>
           </div>
         </section>
 
+        <!-- 2. PERSONAS — the second primary thing -->
         <div class="cols">
-          <!-- PERSONAS -->
           <section class="persona-col" style="grid-column: 1 / -1;">
             <div class="section-h">
               <span class="t">角色</span>
@@ -165,6 +75,116 @@
             </div>
           </section>
         </div>
+
+        <!-- 3. CONTEXT — collapsible. Instrument universe, entity graph,
+             and round schedule all live behind one toggle so the page
+             lands on the two primary things (event + personas) and the
+             auto-extracted context doesn't visually dominate. -->
+        <section v-if="hasAnyContext" class="context-section">
+          <button
+            type="button"
+            class="context-toggle"
+            @click="contextExpanded = !contextExpanded"
+          >
+            <span class="ct-sign">{{ contextExpanded ? '−' : '+' }}</span>
+            <span class="ct-label">{{ contextExpanded ? '收起上下文' : '展开上下文' }}</span>
+            <span class="ct-summary mono">{{ contextSummary }}</span>
+          </button>
+
+          <div v-if="contextExpanded" class="context-body">
+            <!-- INSTRUMENT UNIVERSE -->
+            <section v-if="instrumentUniverse" class="universe-section">
+              <div class="section-h">
+                <span class="t">标的宇宙</span>
+                <span class="tag">{{ universeInstruments.length }} 个标的</span>
+              </div>
+              <div class="universe-grid">
+                <div
+                  v-for="inst in universeInstruments"
+                  :key="inst.ticker"
+                  class="inst-card"
+                  :class="{ 'event-subject': inst.relationship === 'event_subject' || inst.relationship === 'primary', expanded: expandedTicker === inst.ticker }"
+                  @click="expandedTicker = expandedTicker === inst.ticker ? null : inst.ticker"
+                >
+                  <div class="inst-h">
+                    <span class="inst-name">{{ inst.name }}</span>
+                    <span class="inst-ticker mono">{{ inst.ticker }}</span>
+                  </div>
+                  <div class="inst-meta">
+                    <span class="inst-rel">{{ relLabel(inst.relationship) }}</span>
+                    <span class="inst-price mono">{{ inst.price_currency || '¥' }}{{ inst.current_price?.toFixed(2) || '—' }}</span>
+                  </div>
+                  <div v-if="inst.kline_30d && inst.kline_30d.length" class="inst-kline">
+                    <svg :viewBox="`0 0 ${expandedTicker === inst.ticker ? 300 : 120} ${expandedTicker === inst.ticker ? 80 : 30}`" preserveAspectRatio="none" class="mini-chart" :class="{ 'expanded-chart': expandedTicker === inst.ticker }">
+                      <polyline
+                        :points="miniKline(inst.kline_30d, expandedTicker === inst.ticker)"
+                        fill="none"
+                        :stroke="inst.relationship === 'event_subject' || inst.relationship === 'primary' ? 'var(--ss-accent)' : 'var(--ss-fg-muted)'"
+                        stroke-width="1.2"
+                        vector-effect="non-scaling-stroke"
+                      />
+                    </svg>
+                  </div>
+                  <div v-if="expandedTicker === inst.ticker" class="inst-detail">
+                    <div class="detail-row">
+                      <span>日均成交额</span>
+                      <span class="mono">{{ inst.adv_value ? (inst.adv_value / 1e8).toFixed(1) + ' 亿' : '—' }}</span>
+                    </div>
+                    <div v-if="inst.kline_30d && inst.kline_30d.length" class="detail-row">
+                      <span>30日高/低</span>
+                      <span class="mono">{{ klineRange(inst.kline_30d) }}</span>
+                    </div>
+                    <div v-for="(fv, fk) in (inst.financials || {})" :key="fk" class="detail-row">
+                      <span>{{ fk }}</span>
+                      <span class="mono">{{ fv }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ROUND SCHEDULE -->
+            <section v-if="roundSchedule && roundSchedule.rounds" class="schedule-section">
+              <div class="section-h">
+                <span class="t">时间轴</span>
+                <span class="tag">{{ roundSchedule.rounds.length }} 轮</span>
+              </div>
+              <div class="schedule-row">
+                <span
+                  v-for="(rd, i) in roundSchedule.rounds"
+                  :key="rd.id"
+                  class="round-chip mono"
+                >{{ rd.label }}</span>
+              </div>
+            </section>
+
+            <!-- ENTITY GRAPH -->
+            <section v-if="entityGraph && entityGraph.entities" class="entity-section">
+              <div class="section-h">
+                <span class="t">实体关系</span>
+                <span class="tag">{{ Object.keys(entityGraph.entities).length }} 个实体</span>
+              </div>
+              <div class="entity-grid">
+                <div
+                  v-for="(ent, eid) in entityGraph.entities"
+                  :key="eid"
+                  class="ent-card"
+                >
+                  <div class="ent-h">
+                    <span class="ent-name">{{ ent.display_name }}</span>
+                    <span class="ent-type">{{ entTypeLabel(ent.entity_type) }}</span>
+                  </div>
+                  <div class="ent-state">
+                    <div v-for="(val, key) in ent.state" :key="key" class="state-row">
+                      <span class="var-label">{{ (ent.state_labels && ent.state_labels[key]) || key }}</span>
+                      <span class="var-value mono">{{ typeof val === 'number' ? (val === Math.floor(val) ? val : val.toFixed(2)) : val }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
       </div>
     </main>
 
@@ -212,6 +232,7 @@ const loading = ref(false)
 const status = ref('')
 const activeFilter = ref('all')
 const expandedTicker = ref(null)
+const contextExpanded = ref(false)
 
 // Entity sandbox + multi-instrument data from session
 const instrumentUniverse = computed(() => session.instrumentUniverse || null)
@@ -224,6 +245,23 @@ const universeInstruments = computed(() => {
   // New flat format: u.instruments; legacy: [u.primary, ...u.related]
   const all = u.instruments || [u.primary, ...(u.related || [])]
   return all.filter(Boolean)
+})
+
+const hasAnyContext = computed(() =>
+  universeInstruments.value.length > 0
+  || (entityGraph.value && entityGraph.value.entities && Object.keys(entityGraph.value.entities).length > 0)
+  || (roundSchedule.value && roundSchedule.value.rounds && roundSchedule.value.rounds.length > 0)
+)
+
+const contextSummary = computed(() => {
+  const parts = []
+  const nu = universeInstruments.value.length
+  if (nu) parts.push(`${nu} 标的`)
+  const ne = entityGraph.value?.entities ? Object.keys(entityGraph.value.entities).length : 0
+  if (ne) parts.push(`${ne} 实体`)
+  const nr = roundSchedule.value?.rounds?.length || 0
+  if (nr) parts.push(`${nr} 轮`)
+  return parts.join(' · ')
 })
 
 // If we have a round schedule, use its round count as default
@@ -557,6 +595,51 @@ async function onStart () {
   font-size: 12px;
   border: 1px dashed var(--ss-line);
   border-radius: 8px;
+}
+
+/* Context toggle — one button that expands all three secondary
+   sections (universe, entity graph, schedule). Default collapsed so
+   Setup lands on the event + personas, not on a pile of auto-extracted
+   metadata. */
+.context-section {
+  margin-top: 32px;
+  margin-bottom: 24px;
+}
+.context-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px dashed var(--ss-line-strong);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.context-toggle:hover {
+  border-color: var(--ss-fg-muted);
+}
+.ct-sign {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  color: var(--ss-fg-muted);
+  width: 14px;
+  text-align: center;
+}
+.ct-label {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ss-fg);
+}
+.ct-summary {
+  font-size: 11px;
+  color: var(--ss-fg-faint);
+}
+.context-body {
+  margin-top: 18px;
+  padding: 18px 0 4px;
+  border-top: 1px dashed var(--ss-line);
 }
 
 /* Instrument Universe */
