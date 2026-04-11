@@ -58,37 +58,11 @@ from .persona import Persona
 log = logging.getLogger(__name__)
 
 
-def set_round_context(
-    agent: "SocialAgent",
-    *,
-    time_ctx: str = "",
-    conviction_ctx: str = "",
-    pub_effects_ctx: str = "",
-    terminal_risk_ctx: str = "",
-) -> None:
-    """Stash per-round context on an agent for the patched action loop to pick
-    up. The patched ``perform_action_by_llm`` prepends these strings to the
-    user instruction so they reach the LLM on every step — unlike profile
-    mutations, which CAMEL bakes into the system message exactly once at agent
-    init time and thereafter ignores.
-    """
-    ctx = getattr(agent, "_ssflow_round_context", None) or {}
-    if time_ctx:
-        ctx["time_ctx"] = time_ctx
-    if conviction_ctx:
-        ctx["conviction_ctx"] = conviction_ctx
-    if pub_effects_ctx:
-        ctx["pub_effects_ctx"] = pub_effects_ctx
-    if terminal_risk_ctx:
-        ctx["terminal_risk_ctx"] = terminal_risk_ctx
-    agent._ssflow_round_context = ctx
-
-
-def clear_round_context(agent: "SocialAgent") -> None:
-    """Reset per-round context on an agent — call between rounds when you
-    want to drop stale narratives before the next round populates new ones."""
-    if hasattr(agent, "_ssflow_round_context"):
-        agent._ssflow_round_context = {}
+# set_round_context / clear_round_context live in round_context.py as
+# dependency-free helpers so lightweight callers (test suites, external
+# tools) can import them without pulling in camel / oasis at module load
+# time. Re-exported here for back-compat with existing imports.
+from .round_context import clear_round_context, set_round_context
 
 
 def update_conviction_context(

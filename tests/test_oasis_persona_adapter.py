@@ -222,7 +222,7 @@ class TestRoundContextStash:
     """
 
     def test_set_and_clear_round_context(self):
-        from ssflow.oasis_persona_adapter import clear_round_context, set_round_context
+        from ssflow.round_context import clear_round_context, set_round_context
 
         class FakeAgent:
             pass
@@ -251,7 +251,7 @@ class TestRoundContextStash:
         )
 
     def test_clear_is_safe_when_nothing_set(self):
-        from ssflow.oasis_persona_adapter import clear_round_context
+        from ssflow.round_context import clear_round_context
 
         class FakeAgent:
             pass

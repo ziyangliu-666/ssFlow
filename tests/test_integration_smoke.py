@@ -44,8 +44,8 @@ import pytest
 from ssflow.event_severity import resolve_event_severity
 from ssflow.instrument import Instrument, InstrumentUniverse
 from ssflow.limit_board import LimitBoard, BoardType, BoardState
-from ssflow.oasis_persona_adapter import clear_round_context, set_round_context
 from ssflow.persona import MarketShare, Persona, SandboxConfig
+from ssflow.round_context import clear_round_context, set_round_context
 from ssflow.round_schedule import make_schedule
 from ssflow.trading_layer import (
     T1Ledger,

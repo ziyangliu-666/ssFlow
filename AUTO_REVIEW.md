@@ -316,3 +316,153 @@ GPT read the repo directly and caught three disclosure errors I made:
 - Continuing to round 6 (loop re-opened, not yet at stop condition since verdict not "ready"/"almost")
 
 
+## Round 6 (2026-04-11 ~10:10 UTC+8)
+
+### Assessment (Summary)
+- **Score: 7.4/10** (up from 7.1)
+- Verdict: "Round 6 materially improves bearish single-name rehearsal and fixes two real runtime bugs, but it also introduces an overbroad short-routing rule and still lacks a validation layer strong enough to trust the new behavior."
+
+### Dimension Scores
+| Dimension | R5 | R6 | Delta |
+|---|---:|---:|---|
+| Price realism | 7.3 | 7.6 | +0.3 |
+| Agent behavior | 7.0 | 7.2 | +0.2 |
+| Information cascade | 6.9 | 7.0 | +0.1 |
+| Regulatory/policy | 6.2 | 6.7 | +0.5 |
+| Usefulness | 7.6 | 7.8 | +0.2 |
+| **Overall** | **7.1** | **7.4** | **+0.3** |
+
+### Changes This Round (commit f3ea51a)
+- Context-leak fix: `clear_round_context()` now called every round before per-round writes
+- Short-selling tool layer: `make_freeform_trading_tool` routes sells to `margin` when persona role is `short_seller` (was: hardcoded `holdings_in_target`)
+- Severity map coverage + extreme-keyword sniff for `regulatory` / `delisting_risk`
+- 6 new regression tests
+
+### GPT Findings for R7
+1. Short-routing heuristic overbroad: `leverage_max > 0` captured every long-only fund running margin for buys
+2. Severity logic inline + duplicated between engine and calibration backtest → silent drift risk
+3. Bear/bull keyword conflict let last-applied clamp win
+
+### Status
+- Continuing to round 7
+
+
+## Round 7 (2026-04-11 ~10:25 UTC+8)
+
+### Assessment (Summary)
+- **Score: 7.7/10** (up from 7.4)
+- Verdict: "R7 is real structural progress, not just bug-chasing, but you should not stop the loop yet because the missing integration harness still leaves too much room for silent path drift."
+
+### Dimension Scores
+| Dimension | R6 | R7 | Delta |
+|---|---:|---:|---|
+| Price realism | 7.6 | 7.9 | +0.3 |
+| Agent behavior | 7.2 | 7.4 | +0.2 |
+| Information cascade | 7.0 | 7.0 | 0 |
+| Regulatory/policy | 6.7 | 7.0 | +0.3 |
+| Usefulness | 7.8 | 8.0 | +0.2 |
+| **Overall** | **7.4** | **7.7** | **+0.3** |
+
+### Changes This Round (commit fb8e4ee)
+- Narrowed short-routing heuristic to explicit `_SHORT_CAPABLE_ROLES` whitelist (`short_seller`, `active_long_short`, `long_short`, `hedge_fund_short`)
+- Extracted severity resolution into `src/ssflow/event_severity.py` — single source of truth for overnight sentiment + gap_vol + terminal_risk flag
+- Fixed bear/bull keyword conflict: larger-magnitude clamp wins when both sides match
+- Fixed word-boundary false positive (` st` matching "any stock" in English)
+- Calibration backtest harness now imports same resolver — closes CI-gate drift
+- 22 new severity resolver tests + 2 short-routing regression tests
+- **874 tests passing**
+
+### Meta Convergence (GPT)
+> "This is converging, not pure whack-a-mole. R5 to R6 was mostly bug exposure. R6 to R7 includes an actual architectural cleanup: one shared resolver, one shared CI path, narrower role semantics."
+
+### Stated R7 Priority for R8
+1. End-to-end integration smoke harness (top)
+2. Forced-seller cascade + seal persistence on `terminal_risk`
+3. Short borrow / maintenance constraints
+4. Spillover peer picker
+5. Balance sheets
+
+### Status
+- Continuing to round 8
+
+
+## Round 8 — FINAL (2026-04-11 ~10:50 UTC+8)
+
+### Assessment (Summary)
+- **Score: 8.0/10** (up from 7.7)
+- **Verdict: "ssFlow is now almost ready and sufficient for its scoped use case: a serious single-name A-share stress rehearsal tool, not yet a general market simulator."**
+- **Stop condition met**: score ≥ 6 AND verdict contains both "almost" and "sufficient"
+
+### Dimension Scores
+| Dimension | R7 | R8 | Delta |
+|---|---:|---:|---|
+| Price realism | 7.9 | 8.3 | +0.4 |
+| Agent behavior | 7.4 | 7.7 | +0.3 |
+| Information cascade | 7.0 | 7.0 | 0 |
+| Regulatory/policy | 7.0 | 7.3 | +0.3 |
+| Usefulness | 8.0 | 8.4 | +0.4 |
+| **Overall** | **7.7** | **8.0** | **+0.3** |
+
+### Changes This Round (commit bd9cfd7)
+Two structural additions on top of the R6 severity resolver:
+
+1. **End-to-end integration smoke harness** (`tests/test_integration_smoke.py`): 13 tests in 4 classes that exercise the pure-Python pipeline without OASIS/CAMEL so it runs in under 4s as a CI gate. Classes: `TestPromptTraceInvariants`, `TestPnLConservation`, `TestLimitBoardIntegration`, `TestBearishRegimeSmoke`. Each asserts an invariant that a specific R1-R6 silent bug violated — the harness is now a permanent gate against reintroducing any of them.
+
+2. **Terminal-risk forced-seller cascade**: persistent `_sim_terminal_risk` flag latched when the severity resolver flags terminal bear. Produces (a) `terminal_risk_ctx` injection via `set_round_context` that tells LLM agents not to dip-buy terminal names, (b) mechanical forced-sell order injection in step 3.4 of the round loop that bypasses the LLM entirely for all long-only personas (30% fraction normally, 40% when board is sealed). Short-capable personas untouched.
+
+Additional cleanups:
+- Fixed mislabeled R6 conflict test (`test_bull_wins_when_bear_is_only_weak_substring` + `test_bull_wins_conflict_when_bear_is_weak` now split)
+- Pulled `set_round_context` / `clear_round_context` into dependency-free `src/ssflow/round_context.py` so the smoke harness imports don't drag in camel/oasis
+- **888 tests passing** (up from 874)
+
+### Validation: 000687 *ST 华讯 Delisting Scenario
+
+| Run | Cumulative | Mechanism |
+|---|---:|---|
+| R4 (before severity fix) | **+12.19%** | Severity map didn't cover `regulatory`, LLM agents dip-bought |
+| R5 (retrospective baseline) | — | Broken prompt injection, broken P&L, broken live runs |
+| R6 (severity fix only) | **-3.42%** | Pre-open -10% gap + R2 LIMIT_DOWN, but longs kept bidding back |
+| R7 (+ short routing) | **-3.42%** | Mechanism firing, magnitude still off |
+| **R8 (+ cascade)** | **-15.68%** | R0-R1 one_word_down, R2 LIMIT_DOWN, forced sells at 30-40% every round |
+
+-15.68% vs real ~-20% 3-day *ST collapse = 78% of target magnitude. Direction correct, mechanism persistent, magnitude plausible.
+
+### GPT Final Verdict
+> "ssFlow is now almost ready and sufficient for its scoped use case: a serious single-name A-share stress rehearsal tool, not yet a general market simulator."
+>
+> "For the certified use case, -15.68% vs a real -20% 3-day collapse is close enough. That remaining 4-5% gap matters if you are claiming path calibration or sizing exact losses. It does not matter much if the goal is stress rehearsal, identifying trapped liquidity, separating long losers from short winners, surfacing limit-down persistence and forced exit dynamics. For single-name A-share stress rehearsal, this is now plausibly in-range."
+>
+> "Stop the autonomous review loop here. Move to feature work."
+
+### Meta Trajectory (GPT)
+> "This is converging. R5 start was bug liquidation on a system that had been overrated. R6-R7 moved from defect fixing into architectural hardening. R8 is the first round where I'd say the project has crossed from 'serious prototype with hidden traps' to 'defensible serious tool for a narrow use case.' It is still not a broad market simulator. But it is no longer just papering over cracks."
+
+### Priority for Next (Feature Work, Not Review Loop)
+1. Fix the `active_long_short` / persona action-space semantic mismatch (cheap, live-path inconsistency)
+2. Short borrow / maintenance constraints
+3. Participant balance sheets
+4. Spillover peer picker
+5. Replace mechanical cascade with a learned stop-loss persona model (optional polish)
+
+### Final Score Progression
+
+| Round | Score | Verdict |
+|---|---:|---|
+| R1 (prior loop) | 4.0 | Educational toy |
+| R2 | 5.5 | Early research prototype |
+| R3 | 6.4 | Stronger prototype |
+| R4 | 6.9 (retroactively ~6.3) | Serious prototype |
+| R5 | 7.1 | Single-name loop works, bearish untrustworthy |
+| R6 | 7.4 | Bearish direction correct, magnitude wrong |
+| R7 | 7.7 | Structural cleanup, missing integration gate |
+| **R8** | **8.0** | **Almost ready for scoped use case** |
+
+**Total delta (full loop): +4.0 points over 8 rounds.**
+
+### Status
+- **COMPLETED — 4/4 continuation rounds exhausted, stop condition met**
+- Score progression: 6.9 stated (6.3 true) → 7.1 → 7.4 → 7.7 → **8.0**
+- Verdict: "almost ready and sufficient for single-name A-share stress rehearsal"
+- Next: feature work, not review loop
+
+
