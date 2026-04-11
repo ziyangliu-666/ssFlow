@@ -322,6 +322,75 @@ class TestFreeformShortSellRouting:
         assert len(pending) == 1
         assert pending[0].raw_args["pool"] == "margin"
 
+    def test_leveraged_long_fund_still_defaults_to_holdings(self):
+        """Regression for the R6 overbroad-heuristic bug: retail chasers and
+        long-only mutual funds set leverage_max>0 to enable buying on
+        margin, but they are NOT short sellers. A sell from these personas
+        must still default to closing existing long inventory
+        (holdings_in_target), not a borrow-to-short.
+        """
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+
+        leveraged_long = Persona(
+            id="retail_chaser_with_leverage",
+            archetype="短线追涨",
+            display_name="margin retail",
+            voice_prompt="test",
+            decision_mode="discretionary",
+            role="directional_speculator",  # NOT short_seller
+            market_share=MarketShare(by_volume=0.05),
+            entity_role="trader",
+            sandbox=SandboxConfig(
+                instance_count=5,
+                capital_distribution={"type": "fixed", "value_cny": 100_000},
+                initial_position_distribution={"type": "fixed", "value": 0.5},
+                risk={"max_position_pct": 0.95, "leverage_max": 1.5},
+                action_space=[
+                    {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+                    {"name": "sell", "side": "sell", "pool": "holdings_in_target", "fraction": 0.5},
+                ],
+            ),
+        )
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(leveraged_long, collector)
+        tool.func(side="sell", quantity_pct=0.5, rationale="take profit")
+
+        pending = collector.drain()
+        assert len(pending) == 1
+        assert pending[0].raw_args["pool"] == "holdings_in_target", (
+            "leveraged long-only persona should default to holdings_in_target, "
+            "not margin"
+        )
+
+    def test_active_long_short_defaults_to_margin(self):
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+
+        long_short = Persona(
+            id="pe_long_short",
+            archetype="多空私募",
+            display_name="active long short PE",
+            voice_prompt="test",
+            decision_mode="discretionary",
+            role="active_long_short",
+            market_share=MarketShare(by_volume=0.05),
+            entity_role="trader",
+            sandbox=SandboxConfig(
+                instance_count=3,
+                capital_distribution={"type": "fixed", "value_cny": 500_000},
+                initial_position_distribution={"type": "fixed", "value": 0.0},
+                risk={"max_position_pct": 0.8, "leverage_max": 2.0},
+                action_space=[
+                    {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+                    {"name": "short", "side": "sell", "pool": "margin", "fraction": 0.2},
+                ],
+            ),
+        )
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(long_short, collector)
+        tool.func(side="sell", quantity_pct=0.2, rationale="bear thesis")
+        pending = collector.drain()
+        assert pending[0].raw_args["pool"] == "margin"
+
     def test_short_fund_produces_nonzero_net_flow_starting_flat(self):
         """End-to-end: a short fund with zero initial holdings submitting a
         sell through the freeform tool must produce negative net_flow (cash

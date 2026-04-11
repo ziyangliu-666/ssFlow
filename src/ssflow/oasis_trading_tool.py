@@ -129,23 +129,29 @@ def make_freeform_trading_tool(
     The tool result goes into agent memory, providing cross-round continuity.
     """
     persona_id = persona.id
-    # Short-seller personas (融券做空基金, 宏观对冲空头) default sells to the
-    # margin pool so the trading layer treats them as borrow-and-short orders
-    # rather than closing existing long inventory. Without this the freeform
-    # path hardcodes `pool=holdings_in_target`, so a short fund that starts
-    # with zero inventory produces net_flow=0 and never moves prices — which
-    # means the engine gets regime direction wrong whenever shorts should be
-    # the marginal price setter.
+    # Short-seller personas (融券做空基金, 宏观对冲空头, 主动多空) default
+    # sells to the margin pool so the trading layer treats them as borrow-
+    # and-short orders rather than closing nonexistent long inventory.
+    # Without this the freeform path hardcodes pool=holdings_in_target and
+    # a short fund that starts flat produces net_flow=0 — the engine gets
+    # regime direction wrong whenever shorts should be the marginal price
+    # setter.
+    #
+    # Whitelist by canonical role — NOT by leverage_max. Using leverage_max>0
+    # as a proxy was overbroad: retail_short_term_chaser / retail_passive_
+    # holder / mutual_fund_active_pm all run some margin for buying on
+    # dip, but they are long-only funds and should default sells to their
+    # holdings, not borrow-to-short. Only roles that explicitly advertise
+    # shorting capability qualify for the margin default. An LLM can still
+    # force pool=margin on any persona by passing the kwarg explicitly.
     persona_role = (getattr(persona, "role", "") or "").lower()
-    leverage_max = 0.0
-    if persona.sandbox is not None:
-        try:
-            leverage_max = float(persona.sandbox.risk.get("leverage_max", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            leverage_max = 0.0
-    is_short_persona = persona_role in (
-        "short_seller", "long_short", "hedge_fund_short",
-    ) or leverage_max > 0.0
+    _SHORT_CAPABLE_ROLES = {
+        "short_seller",
+        "active_long_short",
+        "long_short",
+        "hedge_fund_short",
+    }
+    is_short_persona = persona_role in _SHORT_CAPABLE_ROLES
 
     # Build example hints from action_space if it exists (guidance, not constraint)
     hints = ""

@@ -50,6 +50,7 @@ from oasis.social_platform.typing import ActionType, DefaultPlatformType
 
 from .config import settings
 from .event import Event
+from .event_severity import resolve_event_severity
 from .event_bus import (
     EVENT_AGENT_ACTION,
     EVENT_CLASS_FLOW_COMPUTED,
@@ -818,82 +819,20 @@ async def run_simulation(
                     )
 
             if _is_new_trading_day:
-                # Estimate overnight sentiment for the gap-open model.
+                # Estimate overnight sentiment for the gap-open model using
+                # the single-source-of-truth resolver in event_severity.py.
+                # Pulled out of the engine in Round 6 so the rules can be
+                # tested directly without spinning up an OASIS round loop.
                 if round_idx == 0:
-                    # First round: estimate from event type severity.
-                    # Keys align with VALID_EVENT_TYPES in event.py plus the
-                    # legacy pseudo-types used by the calibration library.
-                    _severity_map = {
-                        # Strongly bearish
-                        "delisting_risk": -0.9,
-                        "regulatory": -0.6,        # CSRC inquiry, *ST warning, 立案
-                        "lawsuit": -0.5,
-                        "geopolitical": -0.7,
-                        "demand_shock": -0.6,
-                        # Mildly bearish
-                        "shareholder_action": -0.3,
-                        "management_change": -0.2,
-                        "exchange_event": -0.3,    # trading halts, inquiries
-                        # Neutral / context-dependent
-                        "earnings": 0.0,
-                        "macro": 0.0,
-                        "m_a": 0.0,
-                        "ipo": 0.0,
-                        "other": 0.0,
-                        # Mildly bullish
-                        "dividend": 0.2,
-                        "protocol_upgrade": 0.3,
-                        # Strongly bullish
-                        "policy": 0.6,
-                        "supply_shock": 0.5,
-                        "supply_disruption": 0.5,
-                        "mania": 0.8,
-                        "inventory_release": -0.3,  # usually bearish for price
-                        "halving": 0.7,
-                        "opec_meeting": 0.0,
-                        "weather": 0.0,
-                    }
-                    _overnight_sent = _severity_map.get(
-                        event.event_type or "", 0.0
+                    _sev = resolve_event_severity(
+                        event_type=event.event_type or "",
+                        event_text=event.event_text or "",
+                        day1_open=getattr(event, "day1_open", None),
+                        current_price=event.current_price,
                     )
-                    # Keyword sniff for extreme scenarios that the event_type
-                    # label alone can't capture: regulatory can cover either
-                    # "CSRC informal inquiry" or "forced delisting filing", and
-                    # the gap-open severity must differ. When the event text
-                    # mentions explicit terminal-risk keywords, push the
-                    # sentiment closer to the delisting_risk floor.
-                    _text = (event.event_text or "").lower()
-                    _extreme_bear_keywords = (
-                        "退市", "强制退市", "立案", "造假", "停牌", "st ",
-                        " st", "*st", "破产", "重整", "终止上市",
-                        "delisting", "fraud", "suspension", "bankruptcy",
-                    )
-                    if any(kw in _text for kw in _extreme_bear_keywords):
-                        _overnight_sent = min(_overnight_sent, -0.85)
-                    _extreme_bull_keywords = (
-                        "一字涨停", "连板", "涨停板", "核准注册", "国家队",
-                        "全面降准", "迎来爆发", "龙头",
-                    )
-                    if any(kw in _text for kw in _extreme_bull_keywords):
-                        _overnight_sent = max(_overnight_sent, 0.75)
-
-                    # If the calibration event provides an actual day-1 open, use
-                    # the implied gap direction instead of the heuristic map.
-                    _day1_open = getattr(event, "day1_open", None)
-                    if (
-                        _day1_open is not None
-                        and event.current_price
-                        and event.current_price > 0
-                    ):
-                        _overnight_sent = max(
-                            -1.0,
-                            min(
-                                1.0,
-                                (_day1_open - event.current_price)
-                                / event.current_price
-                                * 10.0,  # scale small gap to [-1, 1]
-                            ),
-                        )
+                    _overnight_sent = _sev.overnight_sentiment
+                    _gap_vol = _sev.gap_vol
+                    _terminal_risk = _sev.terminal_risk
                 else:
                     # Later days: momentum from previous day's cumulative move.
                     _cum_delta = (
@@ -902,36 +841,9 @@ async def run_simulation(
                         else 0.0
                     )
                     _overnight_sent = max(-1.0, min(1.0, _cum_delta * 3.0))
-
-                # Gap volatility is event-type-dependent: extreme events
-                # (delisting, geopolitical) can gap to the limit on day 1,
-                # while moderate events (earnings) produce small gaps.
-                # On later days, scale by absolute sentiment magnitude.
-                _vol_by_type = {
-                    "delisting_risk": 0.25,
-                    "regulatory": 0.15,
-                    "lawsuit": 0.12,
-                    "geopolitical": 0.15,
-                    "supply_shock": 0.10,
-                    "supply_disruption": 0.10,
-                    "mania": 0.12,
-                    "policy": 0.10,
-                    "earnings": 0.05,
-                    "shareholder_action": 0.08,
-                    "exchange_event": 0.10,
-                    "demand_shock": 0.12,
-                    "management_change": 0.06,
-                }
-                if round_idx == 0:
-                    _gap_vol = _vol_by_type.get(event.event_type or "", 0.05)
-                    # Extreme keyword matches also bump gap volatility so
-                    # the open can reach the board limit.
-                    if abs(_overnight_sent) >= 0.8:
-                        _gap_vol = max(_gap_vol, 0.20)
-                else:
-                    # Later days: scale by momentum strength
                     _abs_sent = abs(_overnight_sent)
                     _gap_vol = 0.05 + 0.10 * max(0.0, _abs_sent - 0.3)
+                    _terminal_risk = False
                 _open_price = _gap_open(
                     prev_close=limit_board.prev_close,
                     overnight_sentiment=_overnight_sent,

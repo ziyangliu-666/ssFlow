@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from ssflow.event_severity import resolve_event_severity
 from ssflow.calibration_library import (
     CALIBRATION_EVENTS,
     CalibrationEvent,
@@ -317,32 +318,26 @@ def run_mechanical_simulation(
         if day_idx > 0:
             t1_ledger.advance_day()
 
-        # Pre-open auction: estimate overnight sentiment
+        # Pre-open auction: resolve overnight sentiment + gap_vol through
+        # the shared event_severity resolver so the mechanical backtest
+        # stays in lock-step with the live engine. Prior to Round 6 the
+        # backtest carried its own copy of the severity/vol maps, which
+        # silently drifted as the live engine updated its rules.
         if day_idx == 0:
-            # Use event type severity for first day
-            _severity_map = {
-                "delisting_risk": -0.9, "geopolitical": -0.7,
-                "supply_shock": 0.5, "mania": 0.8, "policy": 0.6,
-                "earnings": 0.0,
-            }
-            overnight_sent = _severity_map.get(event.event_type, 0.0)
-            # If actual open is available, use implied direction
-            if event.day1_open and event.prev_close > 0:
-                overnight_sent = max(-1.0, min(1.0,
-                    (event.day1_open - event.prev_close) / event.prev_close * 10.0
-                ))
+            _sev = resolve_event_severity(
+                event_type=event.event_type,
+                event_text=getattr(event, "description", "") or getattr(event, "event_text", "") or "",
+                day1_open=event.day1_open,
+                current_price=event.prev_close,
+            )
+            overnight_sent = _sev.overnight_sentiment
+            _gap_vol = _sev.gap_vol
         else:
             # Later days: momentum from cumulative move
             cum_delta = (current_price / event.prev_close - 1.0)
             overnight_sent = max(-1.0, min(1.0, cum_delta * 3.0))
-
-        # Event-severity-adjusted gap volatility: extreme events gap harder
-        _vol_map = {
-            "delisting_risk": 0.25, "geopolitical": 0.15,
-            "supply_shock": 0.10, "mania": 0.12, "policy": 0.10,
-            "earnings": 0.05, "macro": 0.08,
-        }
-        _gap_vol = _vol_map.get(event.event_type, 0.05)
+            _abs_sent = abs(overnight_sent)
+            _gap_vol = 0.05 + 0.10 * max(0.0, _abs_sent - 0.3)
         open_price = gap_open(
             prev_close=prev_close,
             overnight_sentiment=overnight_sent,
