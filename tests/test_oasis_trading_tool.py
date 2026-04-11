@@ -254,3 +254,109 @@ class TestApplyDistributionToAgentPop:
         assert "mostly bullish" in flow.rationale
         # Mostly buy → expect positive net flow
         assert flow.net_flow > 0
+
+
+class TestFreeformShortSellRouting:
+    """Regression for Round 5 fix: short-seller personas must route sells to
+    the margin pool so they can open borrow-to-short positions, not attempt to
+    sell nonexistent inventory. The engine was hardcoding pool=holdings_in_target
+    for every sell, which silently reduced short-seller net_flow to zero because
+    the funds start with empty holdings — breaking every bearish scenario where
+    shorts should be the marginal price setter.
+    """
+
+    def _make_short_fund(self) -> Persona:
+        return Persona(
+            id="test_short_fund",
+            archetype="事件驱动做空",
+            display_name="test short fund",
+            voice_prompt="test",
+            decision_mode="discretionary",
+            role="short_seller",
+            market_share=MarketShare(by_volume=0.05),
+            entity_role="trader",
+            sandbox=SandboxConfig(
+                instance_count=5,
+                capital_distribution={"type": "fixed", "value_cny": 1_000_000},
+                initial_position_distribution={"type": "fixed", "value": 0.0},
+                risk={"max_position_pct": 0.15, "leverage_max": 2.0},
+                action_space=[
+                    {"name": "hold", "side": "none", "pool": "none", "fraction": 0.0},
+                    {"name": "short_20pct", "side": "sell", "pool": "margin", "fraction": 0.20},
+                ],
+            ),
+        )
+
+    def test_short_fund_sell_defaults_to_margin(self):
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(self._make_short_fund(), collector)
+        tool.func(side="sell", quantity_pct=0.3, rationale="delisting risk")
+
+        pending = collector.drain()
+        assert len(pending) == 1
+        assert pending[0].raw_args["pool"] == "margin"
+        assert pending[0].raw_args["side"] == "sell"
+
+    def test_long_fund_sell_defaults_to_holdings_in_target(self):
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(_make_trader("long_fund"), collector)
+        tool.func(side="sell", quantity_pct=0.3, rationale="taking profit")
+
+        pending = collector.drain()
+        assert len(pending) == 1
+        assert pending[0].raw_args["pool"] == "holdings_in_target"
+
+    def test_explicit_pool_override_wins(self):
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(_make_trader("long_fund"), collector)
+        # Long fund explicitly uses margin override for an intentional short
+        tool.func(side="sell", quantity_pct=0.1, pool="margin", rationale="short")
+
+        pending = collector.drain()
+        assert len(pending) == 1
+        assert pending[0].raw_args["pool"] == "margin"
+
+    def test_short_fund_produces_nonzero_net_flow_starting_flat(self):
+        """End-to-end: a short fund with zero initial holdings submitting a
+        sell through the freeform tool must produce negative net_flow (cash
+        in from the short sale). Previously this was silently zero because
+        the tool routed to holdings_in_target and there was nothing to sell."""
+        import random
+        from ssflow.oasis_trading_tool import OrderCollector, make_freeform_trading_tool
+        from ssflow.trading_layer import apply_distribution_to_agent_pop, spawn_agents
+
+        persona = self._make_short_fund()
+        collector = OrderCollector()
+        tool = make_freeform_trading_tool(persona, collector)
+
+        tool.func(side="sell", quantity_pct=0.5, rationale="bear")
+        order = collector.drain()[0]
+
+        agents = spawn_agents(persona, current_price=10.0, rng=random.Random(1))
+        # Every agent starts flat
+        assert all(sum(a.holdings.values()) == 0 for a in agents)
+        assert all(a.cash > 0 for a in agents)
+
+        flow = apply_distribution_to_agent_pop(
+            persona=persona,
+            agents=agents,
+            distribution={"__freeform__": 1.0},
+            current_price=10.0,
+            rng=random.Random(2),
+            raw_distribution=order.raw_args,
+            round_idx=0,
+        )
+        # Short sale: negative net_flow (cash increase from shorting)
+        assert flow.net_flow < 0, (
+            f"short fund should produce negative net_flow, got {flow.net_flow}"
+        )
+        # At least one agent now holds a negative position
+        assert any(
+            any(shares < 0 for shares in a.holdings.values()) for a in agents
+        ), "expected at least one agent to hold a short after the sale"

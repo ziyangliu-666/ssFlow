@@ -207,3 +207,55 @@ class TestResolveFollows:
         a.follows = ["nonexistent"]
         result = _resolve_follows(a, id_map, personas)
         assert result == set()
+
+
+# ─────────────────────── Per-round context stash ───────────────────────
+
+
+class TestRoundContextStash:
+    """Regression for the Round 5 context-leak bug: set_round_context only
+    merges keys, so conviction_ctx / pub_effects_ctx from round N-1 survive
+    into round N unless the engine calls clear_round_context first. The
+    per-round context wiring in oasis_engine now resets every agent before
+    writing new context for the round, and clear_round_context must actually
+    wipe the dict.
+    """
+
+    def test_set_and_clear_round_context(self):
+        from ssflow.oasis_persona_adapter import clear_round_context, set_round_context
+
+        class FakeAgent:
+            pass
+
+        agent = FakeAgent()
+        set_round_context(
+            agent, time_ctx="R0 time", conviction_ctx="R0 conviction",
+            pub_effects_ctx="R0 effect",
+        )
+        ctx = agent._ssflow_round_context
+        assert ctx["time_ctx"] == "R0 time"
+        assert ctx["conviction_ctx"] == "R0 conviction"
+        assert ctx["pub_effects_ctx"] == "R0 effect"
+
+        clear_round_context(agent)
+        # After clearing, a fresh set_round_context call for round 2 with only
+        # time_ctx MUST NOT resurrect the old conviction/pub_effects strings.
+        set_round_context(agent, time_ctx="R1 time")
+        ctx2 = agent._ssflow_round_context
+        assert ctx2.get("time_ctx") == "R1 time"
+        assert not ctx2.get("conviction_ctx"), (
+            "conviction_ctx from R0 leaked into R1"
+        )
+        assert not ctx2.get("pub_effects_ctx"), (
+            "pub_effects_ctx from R0 leaked into R1"
+        )
+
+    def test_clear_is_safe_when_nothing_set(self):
+        from ssflow.oasis_persona_adapter import clear_round_context
+
+        class FakeAgent:
+            pass
+
+        agent = FakeAgent()
+        # No prior context — must not raise
+        clear_round_context(agent)

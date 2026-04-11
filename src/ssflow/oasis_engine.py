@@ -94,6 +94,7 @@ from .oasis_lm import build_default_lm
 from .oasis_persona_adapter import (
     MARKET_AGENT_ID_NAME,
     build_agent_graph,
+    clear_round_context,
     set_round_context,
     update_conviction_context,
 )
@@ -820,17 +821,62 @@ async def run_simulation(
                 # Estimate overnight sentiment for the gap-open model.
                 if round_idx == 0:
                     # First round: estimate from event type severity.
+                    # Keys align with VALID_EVENT_TYPES in event.py plus the
+                    # legacy pseudo-types used by the calibration library.
                     _severity_map = {
+                        # Strongly bearish
                         "delisting_risk": -0.9,
+                        "regulatory": -0.6,        # CSRC inquiry, *ST warning, 立案
+                        "lawsuit": -0.5,
                         "geopolitical": -0.7,
-                        "supply_shock": 0.5,
-                        "mania": 0.8,
+                        "demand_shock": -0.6,
+                        # Mildly bearish
+                        "shareholder_action": -0.3,
+                        "management_change": -0.2,
+                        "exchange_event": -0.3,    # trading halts, inquiries
+                        # Neutral / context-dependent
+                        "earnings": 0.0,
+                        "macro": 0.0,
+                        "m_a": 0.0,
+                        "ipo": 0.0,
+                        "other": 0.0,
+                        # Mildly bullish
+                        "dividend": 0.2,
+                        "protocol_upgrade": 0.3,
+                        # Strongly bullish
                         "policy": 0.6,
-                        "earnings": 0.0,  # direction depends on context
+                        "supply_shock": 0.5,
+                        "supply_disruption": 0.5,
+                        "mania": 0.8,
+                        "inventory_release": -0.3,  # usually bearish for price
+                        "halving": 0.7,
+                        "opec_meeting": 0.0,
+                        "weather": 0.0,
                     }
                     _overnight_sent = _severity_map.get(
                         event.event_type or "", 0.0
                     )
+                    # Keyword sniff for extreme scenarios that the event_type
+                    # label alone can't capture: regulatory can cover either
+                    # "CSRC informal inquiry" or "forced delisting filing", and
+                    # the gap-open severity must differ. When the event text
+                    # mentions explicit terminal-risk keywords, push the
+                    # sentiment closer to the delisting_risk floor.
+                    _text = (event.event_text or "").lower()
+                    _extreme_bear_keywords = (
+                        "退市", "强制退市", "立案", "造假", "停牌", "st ",
+                        " st", "*st", "破产", "重整", "终止上市",
+                        "delisting", "fraud", "suspension", "bankruptcy",
+                    )
+                    if any(kw in _text for kw in _extreme_bear_keywords):
+                        _overnight_sent = min(_overnight_sent, -0.85)
+                    _extreme_bull_keywords = (
+                        "一字涨停", "连板", "涨停板", "核准注册", "国家队",
+                        "全面降准", "迎来爆发", "龙头",
+                    )
+                    if any(kw in _text for kw in _extreme_bull_keywords):
+                        _overnight_sent = max(_overnight_sent, 0.75)
+
                     # If the calibration event provides an actual day-1 open, use
                     # the implied gap direction instead of the heuristic map.
                     _day1_open = getattr(event, "day1_open", None)
@@ -863,14 +909,25 @@ async def run_simulation(
                 # On later days, scale by absolute sentiment magnitude.
                 _vol_by_type = {
                     "delisting_risk": 0.25,
+                    "regulatory": 0.15,
+                    "lawsuit": 0.12,
                     "geopolitical": 0.15,
                     "supply_shock": 0.10,
+                    "supply_disruption": 0.10,
                     "mania": 0.12,
                     "policy": 0.10,
                     "earnings": 0.05,
+                    "shareholder_action": 0.08,
+                    "exchange_event": 0.10,
+                    "demand_shock": 0.12,
+                    "management_change": 0.06,
                 }
                 if round_idx == 0:
                     _gap_vol = _vol_by_type.get(event.event_type or "", 0.05)
+                    # Extreme keyword matches also bump gap volatility so
+                    # the open can reach the board limit.
+                    if abs(_overnight_sent) >= 0.8:
+                        _gap_vol = max(_gap_vol, 0.20)
                 else:
                     # Later days: scale by momentum strength
                     _abs_sent = abs(_overnight_sent)
@@ -1097,6 +1154,19 @@ async def run_simulation(
             sim_graph.inject_state_into_prompts(
                 agent_graph, persona_id_to_oasis_id, round_idx,
             )
+
+            # 1.85. Clear all per-round context stashes from the previous round
+            #        BEFORE we start writing this round's context. Otherwise
+            #        conviction_ctx / pub_effects_ctx leak from round N-1 into
+            #        round N even when the current round has nothing to say
+            #        about them. set_round_context() only merges keys — it
+            #        cannot overwrite with empty, so we reset first.
+            for persona in personas:
+                if persona.id not in persona_id_to_oasis_id:
+                    continue
+                oasis_id = persona_id_to_oasis_id[persona.id]
+                oasis_agent = agent_graph.get_agent(oasis_id)
+                clear_round_context(oasis_agent)
 
             # 1.9. Inject price-anchored market context so agents judge
             #      risk/reward at the current price level, not just repeat

@@ -129,6 +129,23 @@ def make_freeform_trading_tool(
     The tool result goes into agent memory, providing cross-round continuity.
     """
     persona_id = persona.id
+    # Short-seller personas (融券做空基金, 宏观对冲空头) default sells to the
+    # margin pool so the trading layer treats them as borrow-and-short orders
+    # rather than closing existing long inventory. Without this the freeform
+    # path hardcodes `pool=holdings_in_target`, so a short fund that starts
+    # with zero inventory produces net_flow=0 and never moves prices — which
+    # means the engine gets regime direction wrong whenever shorts should be
+    # the marginal price setter.
+    persona_role = (getattr(persona, "role", "") or "").lower()
+    leverage_max = 0.0
+    if persona.sandbox is not None:
+        try:
+            leverage_max = float(persona.sandbox.risk.get("leverage_max", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            leverage_max = 0.0
+    is_short_persona = persona_role in (
+        "short_seller", "long_short", "hedge_fund_short",
+    ) or leverage_max > 0.0
 
     # Build example hints from action_space if it exists (guidance, not constraint)
     hints = ""
@@ -140,7 +157,7 @@ def make_freeform_trading_tool(
                 examples.append("hold")
             else:
                 frac = a.get("fraction", 0)
-                pool_label = "cash" if a.get("pool") == "cash" else "holdings"
+                pool_label = a.get("pool") or ("cash" if side == "buy" else "holdings")
                 examples.append(f"{side} {frac:.0%} of {pool_label}")
         hints = f"\nExample decisions for reference: {', '.join(examples)}\n"
 
@@ -149,6 +166,7 @@ def make_freeform_trading_tool(
         quantity_pct: float = 0.0,
         rationale: str = "",
         instrument: str = "",
+        pool: str = "",
     ) -> str:
         """Submit a trading decision for this persona class this round.
 
@@ -160,6 +178,14 @@ def make_freeform_trading_tool(
           - rationale: 50-150 char explanation referencing your 处境 and feed
           - instrument: which ticker to trade (e.g. "300750"). If omitted,
             trades the primary instrument.
+          - pool: "cash" (default for buy), "holdings_in_target" (default for
+            sell long inventory), or "margin" (borrow to short — only valid
+            on the sell side, requires margin access).
+
+        Short-seller personas (融券做空基金, 宏观空头对冲): omit `pool`
+        and the engine will automatically route your sell to the margin
+        borrow path so you can open a naked short against a bearish event
+        even when you start with zero inventory.
 
         Your decision applies to the ENTIRE class of participants you represent.
         You can call this tool multiple times per round to trade different instruments.
@@ -175,6 +201,19 @@ def make_freeform_trading_tool(
             qty = 0.0
 
         inst = str(instrument).strip() if instrument else None
+        pool_raw = str(pool).strip().lower() if pool else ""
+
+        # Resolve pool from: explicit kwarg → persona role default → side default
+        if pool_raw in ("cash", "holdings_in_target", "holdings", "margin"):
+            resolved_pool = (
+                "holdings_in_target" if pool_raw == "holdings" else pool_raw
+            )
+        elif side_clean == "buy":
+            resolved_pool = "cash"
+        elif side_clean == "sell":
+            resolved_pool = "margin" if is_short_persona else "holdings_in_target"
+        else:
+            resolved_pool = "none"
 
         # Store as a special __freeform__ distribution
         collector.add(
@@ -184,7 +223,7 @@ def make_freeform_trading_tool(
             raw_args={
                 "side": side_clean,
                 "quantity_pct": qty,
-                "pool": "cash" if side_clean == "buy" else "holdings_in_target",
+                "pool": resolved_pool,
             },
             instrument=inst,
         )
@@ -192,10 +231,16 @@ def make_freeform_trading_tool(
         inst_label = inst or "primary"
         if side_clean == "hold":
             return f"Decision submitted for {persona_id}: HOLD {inst_label}. Rationale: {str(rationale)[:120]}"
+        pool_label = {
+            "cash": "cash",
+            "holdings_in_target": "holdings",
+            "margin": "margin (borrow-to-short)",
+            "none": "none",
+        }.get(resolved_pool, resolved_pool)
         return (
             f"Decision submitted for {persona_id}: {side_clean.upper()} "
-            f"{qty:.0%} of {'cash' if side_clean == 'buy' else 'holdings'} "
-            f"in {inst_label}. Rationale: {str(rationale)[:120]}"
+            f"{qty:.0%} of {pool_label} in {inst_label}. "
+            f"Rationale: {str(rationale)[:120]}"
         )
 
     if hints:
