@@ -208,6 +208,64 @@ class OasisSimResult:
 # ─────────────────────── Helpers ───────────────────────
 
 
+def _activity_level(
+    agent_type: str,
+    hours_since_event: float | None,
+) -> float:
+    """Per-persona probability of participating in a round (0-1).
+
+    Replaces the old binary active_agent_types hard-filter with smooth
+    time-varying curves per agent type, inspired by MiroFish's
+    activity_level system.
+
+    Each agent type has a characteristic activity curve that models
+    real market behavior:
+      - Retail reacts immediately, fades within days
+      - Media/KOL are fast but brief
+      - Analysts need time to publish research
+      - Institutions move deliberately, peaking T+1 to T+3
+      - Strategic capital (industrials, government) moves last
+    """
+    if hours_since_event is None:
+        # No schedule info — everyone participates equally
+        return 0.7
+
+    # Normalize to trading days (roughly 6.5 hours/day for A-share)
+    t = hours_since_event / 24.0  # fractional days
+
+    curves: dict[str, list[tuple[float, float]]] = {
+        #           (day, activity_level) — linearly interpolated
+        "retail":       [(0, 0.90), (1, 0.70), (2, 0.50), (4, 0.25), (7, 0.10)],
+        "kol":          [(0, 0.80), (0.5, 0.60), (1, 0.40), (3, 0.15), (7, 0.05)],
+        "media":        [(0, 0.85), (0.5, 0.50), (1, 0.25), (3, 0.10), (7, 0.05)],
+        "news_wire":    [(0, 0.90), (0.5, 0.40), (1, 0.15), (3, 0.05), (7, 0.02)],
+        "analyst":      [(0, 0.10), (0.5, 0.30), (1, 0.70), (2, 0.80), (4, 0.40), (7, 0.20)],
+        "institutional":[(0, 0.10), (0.5, 0.20), (1, 0.55), (2, 0.80), (3, 0.75), (5, 0.50), (7, 0.30)],
+        "quant":        [(0, 0.50), (0.5, 0.60), (1, 0.50), (2, 0.40), (4, 0.30), (7, 0.20)],
+        "strategic":    [(0, 0.05), (1, 0.10), (2, 0.25), (3, 0.50), (5, 0.60), (7, 0.40)],
+        "regulator":    [(0, 0.02), (1, 0.05), (2, 0.10), (4, 0.20), (7, 0.10)],
+        "policy":       [(0, 0.02), (1, 0.05), (3, 0.15), (5, 0.20), (7, 0.10)],
+        "company_ir":   [(0, 0.30), (1, 0.50), (2, 0.30), (4, 0.10), (7, 0.05)],
+    }
+
+    pts = curves.get(agent_type, [(0, 0.50), (7, 0.30)])
+
+    # Clamp t to curve range
+    if t <= pts[0][0]:
+        return pts[0][1]
+    if t >= pts[-1][0]:
+        return pts[-1][1]
+
+    # Linear interpolation
+    for i in range(len(pts) - 1):
+        t0, v0 = pts[i]
+        t1, v1 = pts[i + 1]
+        if t0 <= t <= t1:
+            frac = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+            return v0 + (v1 - v0) * frac
+    return 0.30  # fallback
+
+
 def _participation_rate(
     persona: Persona,
     round_idx: int,
@@ -217,25 +275,25 @@ def _participation_rate(
 ) -> float:
     """Fraction of agents that actually trade this round.
 
-    Three factors combine:
-      1. Activity schedule — non-active types get reduced (background noise)
-      2. Urgency decay — later rounds have naturally declining participation
-      3. Momentum exhaustion — large cumulative moves thin marginal flow
+    Two factors combine:
+      1. Urgency decay — later rounds have naturally declining participation
+      2. Momentum exhaustion — large cumulative moves thin marginal flow
 
     All coefficients are now driven by ``ParticipationParams`` so each
     simulation can have different decay / exhaustion characteristics
     calibrated to event severity.
+
+    Note: the old active_types binary filter has been replaced by
+    _activity_level() which controls whether the persona's LLM is
+    called at all. This function now only handles the within-population
+    sampling rate for personas that ARE active.
     """
     from .simulation_params import ParticipationParams
 
     p = params or ParticipationParams()
-    base = 1.0
-    ptype = persona.agent_type or "retail"
-    if active_types is not None and ptype not in active_types:
-        base = p.inactive_base
     urgency = 1.0 / (1.0 + p.urgency_decay * round_idx)
     exhaustion = 1.0 / (1.0 + p.exhaustion_coeff * abs(cumulative_delta_pct))
-    return max(p.min_participation, base * urgency * exhaustion)
+    return max(p.min_participation, urgency * exhaustion)
 
 
 def _currency_symbol(currency: str) -> str:
@@ -1064,20 +1122,32 @@ async def run_simulation(
                         _overnight_sent,
                     )
 
-            # Pre-compute inactive trader IDs for this round
+            # Probabilistic participation — replaces the old binary
+            # active_agent_types hard-filter. Each trader persona rolls
+            # against its _activity_level curve; losers skip the LLM call
+            # and emit a synthetic hold instead.
+            _round_hours = None
+            if round_schedule is not None:
+                _rd_info = round_schedule.get_round(round_idx)
+                if _rd_info:
+                    _round_hours = _rd_info.hours_since_event
             inactive_trader_ids: set[str] = set()
-            if active_types is not None:
-                inactive_trader_ids = {
-                    p.id for p in personas
-                    if p.sandbox is not None
-                    and (p.agent_type or "retail") not in active_types
-                }
-                if inactive_trader_ids:
-                    log.info(
-                        "  R%d temporal filter: %d/%d trader classes inactive",
-                        round_idx, len(inactive_trader_ids),
-                        sum(1 for p in personas if p.sandbox is not None),
-                    )
+            for p in personas:
+                if p.sandbox is None:
+                    continue  # non-trader personas handled separately
+                ptype = p.agent_type or "retail"
+                level = _activity_level(ptype, _round_hours)
+                if sample_rng.random() >= level:
+                    inactive_trader_ids.add(p.id)
+            if inactive_trader_ids:
+                n_traders = sum(1 for p in personas if p.sandbox is not None)
+                log.info(
+                    "  R%d activity roll: %d/%d traders active (%.0f%% skipped)",
+                    round_idx,
+                    n_traders - len(inactive_trader_ids),
+                    n_traders,
+                    len(inactive_trader_ids) / max(n_traders, 1) * 100,
+                )
 
             # Cumulative price move for participation/knee calculations
             cumulative_delta_pct = (
@@ -1842,7 +1912,7 @@ async def run_simulation(
                 )
                 # Compute participation rate (urgency decay + momentum exhaustion)
                 p_rate = _participation_rate(
-                    persona, round_idx, cumulative_delta_pct, active_types,
+                    persona, round_idx, cumulative_delta_pct, None,
                     params=_sim_params.participation,
                 )
                 # Apply publication effect: participation modifier
