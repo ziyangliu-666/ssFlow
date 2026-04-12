@@ -2,7 +2,7 @@
   <div class="replay">
     <WorkflowRail />
 
-    <main class="layout">
+    <main class="layout" aria-label="推演回放">
       <!-- LEFT: live state panel, same layout as the run view -->
       <section class="live">
         <div class="page-h">
@@ -99,12 +99,13 @@
       </section>
 
       <!-- RIGHT: timeline with playback controls -->
-      <section class="timeline-wrap">
+      <section class="timeline-wrap" aria-label="时间线与播放控制">
         <div class="control-bar">
           <button
             type="button"
             class="ctl"
             :title="isPlaying ? '暂停' : '播放'"
+            :aria-label="isPlaying ? '暂停回放' : '开始回放'"
             @click="togglePlay"
           >
             <span v-if="!isPlaying">▶</span>
@@ -114,12 +115,14 @@
             type="button"
             class="ctl"
             title="回到开头"
+            aria-label="回到开头"
             @click="seekToStart"
           >⏮</button>
           <button
             type="button"
             class="ctl"
             title="跳到结尾"
+            aria-label="跳到结尾"
             @click="seekToEnd"
           >⏭</button>
           <div class="sep" />
@@ -789,7 +792,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .replay {
-  height: 100vh;
+  height: 100svh;
   display: flex;
   align-items: stretch;
   overflow: hidden;
@@ -810,7 +813,7 @@ onBeforeUnmount(() => {
   }
 }
 @media (max-width: 860px) {
-  .replay { height: auto; min-height: 100vh; flex-direction: column; overflow: visible; }
+  .replay { height: auto; min-height: 100svh; flex-direction: column; overflow: visible; }
   .layout { overflow: visible; }
   .live { padding: 20px 16px; max-height: none; }
   .page-h h1 { font-size: 19px; }
@@ -947,6 +950,9 @@ onBeforeUnmount(() => {
 @keyframes scrub-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scrub-bar.live { animation: none; }
 }
 .scrub-labels {
   display: flex;
@@ -1107,7 +1113,8 @@ onBeforeUnmount(() => {
 }
 .control-bar .spd {
   font-size: 11px;
-  padding: 4px 10px;
+  padding: 6px 12px;
+  min-height: 32px;
   border-radius: 999px;
   border: 1px solid var(--ss-line);
   background: #fff;
@@ -1124,7 +1131,8 @@ onBeforeUnmount(() => {
 .control-bar .spacer { flex: 1; }
 .view-report-btn {
   font-size: 11px;
-  padding: 6px 12px;
+  padding: 8px 14px;
+  min-height: 36px;
   border: 1px solid var(--ss-fg);
   background: #fff;
   color: var(--ss-fg);
@@ -1155,7 +1163,8 @@ onBeforeUnmount(() => {
 }
 .filter-chip {
   font-size: 11px;
-  padding: 4px 10px;
+  padding: 6px 12px;
+  min-height: 32px;
   border-radius: 999px;
   border: 1px solid var(--ss-line);
   background: #fff;
@@ -1205,6 +1214,9 @@ onBeforeUnmount(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .timeline-empty .dot { animation: none; }
+}
 
 .timeline-error {
   padding: 24px 4px;
@@ -1225,6 +1237,7 @@ onBeforeUnmount(() => {
 }
 .timeline-error .te-btn {
   padding: 8px 14px;
+  min-height: 44px;
   background: var(--ss-fg);
   color: #fff;
   border: 0;
