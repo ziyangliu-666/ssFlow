@@ -329,12 +329,20 @@ def create_app() -> Flask:
             urls=urls,
         )
 
+        # Early sim_params preview from whatever we know at extract time.
+        # Refined later at /simulate-stream/init with real ADV + float cap.
+        _early_sp = generate_sim_params(
+            event_type=proposal_dict.get("event_type", ""),
+            severity_signed=float(proposal_dict.get("severity_signed", 0) or 0),
+        )
+
         return jsonify(
             {
                 "session_id": session_id,
                 "event_proposal": proposal_dict,
                 "personas_proposed": personas_proposed,
                 "base_personas_path": base_pack_path,
+                "sim_params": _early_sp.to_dict(),
                 "ingested_docs": [
                     {
                         "source": d.source,

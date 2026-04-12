@@ -13,6 +13,7 @@ export async function runExtract ({ prompt, urls }) {
   session.personasProposed = r.data.personas_proposed
   session.basePersonasPath = r.data.base_personas_path
   session.ingestedDocs = r.data.ingested_docs || []
+  if (r.data.sim_params) session.simParams = r.data.sim_params
   return r.data
 }
 

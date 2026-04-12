@@ -183,6 +183,37 @@
                 </div>
               </div>
             </section>
+
+            <!-- SIMULATION PARAMS -->
+            <section v-if="simParams" class="sim-params-section" data-testid="sim-params">
+              <div class="section-h">
+                <span class="t">推演校准参数</span>
+                <span class="tag">{{ simParams.generation_source || 'defaults' }}</span>
+              </div>
+              <div class="params-grid">
+                <div class="param-group" v-if="simParams.market">
+                  <div class="param-group-label">市场冲击</div>
+                  <div class="param-row" v-for="(v, k) in flatParams(simParams.market)" :key="k">
+                    <span class="param-key">{{ k }}</span>
+                    <span class="param-val mono">{{ formatParamVal(v) }}</span>
+                  </div>
+                </div>
+                <div class="param-group" v-if="simParams.participation">
+                  <div class="param-group-label">参与率衰减</div>
+                  <div class="param-row" v-for="(v, k) in flatParams(simParams.participation)" :key="k">
+                    <span class="param-key">{{ k }}</span>
+                    <span class="param-val mono">{{ formatParamVal(v) }}</span>
+                  </div>
+                </div>
+                <div class="param-group" v-if="simParams.decision">
+                  <div class="param-group-label">决策参数</div>
+                  <div class="param-row" v-for="(v, k) in flatParams(simParams.decision, ['style_tilt'])" :key="k">
+                    <span class="param-key">{{ k }}</span>
+                    <span class="param-val mono">{{ formatParamVal(v) }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
       </div>
@@ -247,10 +278,13 @@ const universeInstruments = computed(() => {
   return all.filter(Boolean)
 })
 
+const simParams = computed(() => session.simParams || null)
+
 const hasAnyContext = computed(() =>
   universeInstruments.value.length > 0
   || (entityGraph.value && entityGraph.value.entities && Object.keys(entityGraph.value.entities).length > 0)
   || (roundSchedule.value && roundSchedule.value.rounds && roundSchedule.value.rounds.length > 0)
+  || !!simParams.value
 )
 
 const contextSummary = computed(() => {
@@ -261,6 +295,7 @@ const contextSummary = computed(() => {
   if (ne) parts.push(`${ne} 实体`)
   const nr = roundSchedule.value?.rounds?.length || 0
   if (nr) parts.push(`${nr} 轮`)
+  if (simParams.value) parts.push('校准参数')
   return parts.join(' · ')
 })
 
@@ -284,6 +319,21 @@ const ENT_TYPE_LABELS = {
   trader_class: '交易者', government: '政府', other: '市场环境', custom: '自定义',
 }
 function entTypeLabel (t) { return ENT_TYPE_LABELS[t] || t }
+
+function flatParams (obj, skip = []) {
+  if (!obj) return {}
+  const out = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (skip.includes(k)) continue
+    if (typeof v !== 'object' || v === null) out[k] = v
+  }
+  return out
+}
+
+function formatParamVal (v) {
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(4)
+  return String(v)
+}
 
 function miniKline (bars, expanded = false) {
   if (!bars.length) return ''
@@ -419,6 +469,7 @@ async function onStart () {
     // Remember the stream id so the rail's Simulate step can navigate
     // back to it during the active run.
     session.activeStreamId = r.stream_id
+    if (r.sim_params) session.simParams = r.sim_params
     router.push({ name: 'Run', params: { streamId: r.stream_id } })
   } catch (err) {
     console.error(err)
@@ -643,7 +694,7 @@ async function onStart () {
 }
 
 /* Instrument Universe */
-.universe-section, .entity-section, .schedule-section {
+.universe-section, .entity-section, .schedule-section, .sim-params-section {
   margin-bottom: 24px;
 }
 .universe-grid {
@@ -763,6 +814,41 @@ async function onStart () {
   font-size: 11px;
   color: var(--ss-fg-muted);
   background: #fff;
+}
+
+/* Simulation params */
+.sim-params-section { margin-top: 12px; }
+.params-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.param-group {
+  background: var(--ss-bg-soft);
+  border: 1px solid var(--ss-line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.param-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ss-fg-muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.04em;
+}
+.param-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.param-key {
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+}
+.param-val {
+  font-size: 11px;
+  color: var(--ss-fg);
 }
 
 /* Bottom bar */
