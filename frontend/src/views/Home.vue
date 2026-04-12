@@ -405,7 +405,7 @@ async function onStart () {
 
 <style scoped>
 .home {
-  min-height: 100vh;
+  min-height: 100svh;
   display: flex;
   align-items: stretch;
 }
@@ -648,6 +648,7 @@ h1 .period { color: var(--ss-fg-muted); }
   align-items: center;
   gap: 8px;
   padding: 9px 14px 9px 16px;
+  min-height: 44px;
   background: var(--ss-fg);
   color: #fff;
   border: 0;
@@ -750,7 +751,8 @@ h1 .period { color: var(--ss-fg-muted); }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 10px 10px;
+  min-height: 44px;
   border: 0;
   background: none;
   border-radius: 6px;
