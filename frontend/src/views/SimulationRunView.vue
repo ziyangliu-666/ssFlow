@@ -2,7 +2,7 @@
   <div class="run">
     <WorkflowRail />
 
-    <main class="layout">
+    <main class="layout" aria-label="推演实况">
       <!-- LEFT: live state panel (no card stack) -->
       <section class="live">
         <div class="page-h">
@@ -127,7 +127,7 @@
       </section>
 
       <!-- RIGHT: timeline -->
-      <section class="timeline-wrap">
+      <section class="timeline-wrap" aria-label="事件时间线">
         <div class="filter-bar">
           <span class="lbl">显示</span>
           <button
@@ -704,7 +704,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .run {
-  height: 100vh;
+  height: 100svh;
   display: flex;
   align-items: stretch;
   overflow: hidden;
@@ -725,7 +725,7 @@ onBeforeUnmount(() => {
   }
 }
 @media (max-width: 860px) {
-  .run { height: auto; min-height: 100vh; flex-direction: column; overflow: visible; }
+  .run { height: auto; min-height: 100svh; flex-direction: column; overflow: visible; }
   .layout { overflow: visible; }
   .live { padding: 20px 16px; max-height: none; }
   .page-h h1 { font-size: 19px; }
@@ -903,6 +903,9 @@ onBeforeUnmount(() => {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .rnd-bar.live { animation: none; }
+}
 .rnd-labels {
   display: flex;
   gap: 4px;
@@ -1030,7 +1033,8 @@ onBeforeUnmount(() => {
 }
 .filter-chip {
   font-size: 11px;
-  padding: 4px 10px;
+  padding: 6px 12px;
+  min-height: 32px;
   border-radius: 999px;
   border: 1px solid var(--ss-line);
   background: #fff;
@@ -1073,7 +1077,8 @@ onBeforeUnmount(() => {
   color: #fff;
   border: 0;
   border-radius: 6px;
-  padding: 6px 14px;
+  padding: 8px 14px;
+  min-height: 36px;
   font: 500 12px 'Inter', sans-serif;
   cursor: pointer;
 }
@@ -1117,6 +1122,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 9px 16px;
+  min-height: 44px;
   background: var(--ss-fg);
   color: #fff;
   border: 0;
@@ -1162,6 +1168,9 @@ onBeforeUnmount(() => {
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timeline-empty .dot { animation: none; }
 }
 
 /* enter/leave transitions */
