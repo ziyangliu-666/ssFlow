@@ -184,12 +184,12 @@ class RoundSchedule:
             if prev_day_close_delta_pct is not None:
                 lines.append(
                     f"  新交易日开盘: 昨日收盘 {prev_day_close_delta_pct:+.2f}%, "
-                    f"隔夜情绪理应部分衰减 — 重新审视持仓和仓位"
+                    f"隔夜情绪理应部分衰减 — 根据最新价格变化重新评估持仓方向, 不默认延续昨日立场"
                 )
             else:
                 lines.append(
                     "  新交易日开盘: 隔夜情绪理应部分衰减 — "
-                    "重新审视持仓和仓位"
+                    "根据最新价格变化重新评估持仓方向, 不默认延续昨日立场"
                 )
         elif is_monthly and round_idx > 0:
             # Open-ended reassessment — no imperative. Backtest v2
@@ -199,11 +199,11 @@ class RoundSchedule:
             # read it as a standing instruction to reverse. This
             # version lets the agent decide based on new information.
             lines.append(
-                "  月度重估: 距上月已有约 30 个交易日, "
-                "评估原始事件的 narrative 是否仍在验证, "
-                "新的月度数据/研报/宏观事件是否带来新的 catalyst. "
-                "若叙事仍成立且无反证, 保持方向; "
-                "若已充分 priced in 或出现反证, 相应调整"
+                "  月度重估: 距上月已有约 30 个交易日. "
+                "重新独立评估: (1) 原始事件的 narrative 是否已被市场充分消化, "
+                "(2) 新的月度数据/研报/宏观事件是否改变了方向判断, "
+                "(3) 当前持仓盈亏是否触达你的止盈/止损阈值. "
+                "不要默认延续上轮立场 — 每轮都是独立决策."
             )
 
         # ── T+1 settlement reminder (A-share) ──

@@ -196,8 +196,8 @@ ASHARE_EQUITY_TEMPLATE: dict[str, Any] = {
         # institutions start chasing at the first +5-10% breakout day.
         {
             "entity_slot": "institutional_class",
-            "condition": "price_change_pct > 8.0",
-            "description": "累计涨超8% → 机构动量跟随买入15%",
+            "condition": "price_change_pct > 12.0",
+            "description": "累计涨超12% → 机构动量跟随买入15%",
             "effect_type": "force_action",
             "forced_side": "buy",
             "forced_quantity_pct": 0.15,

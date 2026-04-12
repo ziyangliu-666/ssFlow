@@ -21,11 +21,14 @@ pipeline before paying for LLM calls).
 
 from __future__ import annotations
 
+import os
+os.environ.setdefault("PYTHONHASHSEED", "42")
+
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
-import os
 import sys
 import time
 from collections import Counter
@@ -280,6 +283,12 @@ def _make_random_event_stream(
         "雪球/富途活跃用户数据显示散户情绪指数环比上升 3pp.",
         "国务院国资委强调央企要发挥市值管理主力军作用.",
         "沪深 300 ETF 单日净申购 12 亿份, 机构买入明显.",
+        "融券余额本周增加 12%, 做空情绪升温.",
+        "北向资金今日净卖出 45.2 亿元, 连续 2 日流出.",
+        "大宗交易数据: 本周 22 笔大宗折价成交, 产业资本减持动作明显.",
+        "公募基金仓位指数本周回落 1.8 个百分点至 83%.",
+        "两融余额缩减至 1.42 万亿, 杠杆资金避险情绪浓厚.",
+        "离岸人民币兑美元跌破 7.25, 汇率承压加剧外资流出担忧.",
     ]
 
     def _generator(snapshot: SimSnapshot) -> list[ExternalEvent]:
@@ -455,7 +464,7 @@ async def _run_one_sim(ev: dict) -> dict:
     # config produces reproducible noise across ablation runs.
     external_events = None
     if not FLAG_DISABLE_EVENTS:
-        seed = abs(hash(ev["ticker"])) % (2**32)
+        seed = int(hashlib.md5(ev["ticker"].encode()).hexdigest()[:8], 16)
         external_events = _make_random_event_stream(ev, rng_seed=seed)
 
     result = await run_simulation(

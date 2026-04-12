@@ -969,9 +969,9 @@ def load_personas(path: str | Path) -> list[Persona]:
 def persona_set_hash(personas: list[Persona]) -> str:
     """Stable hash of a persona set, for reproducibility tracking in scorecard.
 
-    Hash inputs: id + model + voice_prompt + market_share. Other fields are
-    excluded so a v2 schema bump that adds metadata fields doesn't invalidate
-    the hash chain.
+    Hash inputs cover all fields that affect simulation behavior:
+    id, model, voice_prompt, market_share, sandbox config (instance_count,
+    action_space, risk), sub_populations, and follows.
     """
     h = hashlib.sha256()
     for p in sorted(personas, key=lambda x: x.id):
@@ -982,6 +982,19 @@ def persona_set_hash(personas: list[Persona]) -> str:
             for dim in ("by_volume", "by_holdings", "by_account_count"):
                 val = p.market_share.get(dim)
                 h.update(f"{dim}={val}".encode())
+        if p.sandbox:
+            h.update(f"instance_count={p.sandbox.instance_count}".encode())
+            for action in sorted(p.sandbox.action_space, key=lambda a: a.get("id", a.get("name", ""))):
+                h.update(f"action={action.get('id', action.get('name', ''))}".encode())
+            if p.sandbox.risk:
+                h.update(f"stop_loss={p.sandbox.risk.get('stop_loss_threshold')}".encode())
+                h.update(f"profit_take={p.sandbox.risk.get('profit_take_threshold')}".encode())
+        if p.sub_populations:
+            for sp in sorted(p.sub_populations, key=lambda x: x.id):
+                h.update(f"subpop={sp.id}:{sp.fraction}:{sp.decision_style}".encode())
+        if p.follows:
+            for f in sorted(p.follows):
+                h.update(f"follows={f}".encode())
     return h.hexdigest()[:16]
 
 
