@@ -2,7 +2,7 @@
   <div class="setup">
     <WorkflowRail />
 
-    <main class="main">
+    <main class="main" aria-label="推演配置">
       <div v-if="!session.eventProposal" class="empty">
         <h1>还没有<span class="accent">抽取</span>结果。</h1>
         <p>先回到开始页上传文档并点「开始抽取」。</p>
@@ -482,7 +482,7 @@ async function onStart () {
 
 <style scoped>
 .setup {
-  min-height: 100vh;
+  min-height: 100svh;
   display: flex;
   align-items: stretch;
 }
