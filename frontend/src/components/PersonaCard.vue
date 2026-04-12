@@ -166,7 +166,6 @@ function formatCny (n) {
 <style scoped>
 .p-card {
   border: 1px solid var(--ss-line);
-  border-top: 2px solid var(--ss-accent);
   background: #fff;
   border-radius: 8px;
   padding: 12px 14px;
