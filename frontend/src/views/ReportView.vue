@@ -22,7 +22,7 @@
       </template>
     </WorkflowRail>
 
-    <main class="main">
+    <main class="main" aria-label="推演报告">
       <div v-if="loading" class="state">
         <p class="mono">加载中…</p>
       </div>
@@ -553,7 +553,7 @@ onMounted(() => {
 
 <style scoped>
 .report {
-  min-height: 100vh;
+  min-height: 100svh;
   display: flex;
   align-items: stretch;
 }
@@ -624,6 +624,7 @@ onMounted(() => {
   color: #fff;
   border: 0;
   padding: 10px 16px;
+  min-height: 44px;
   border-radius: 8px;
   font: 500 13px 'Inter', sans-serif;
   cursor: pointer;
@@ -832,7 +833,8 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 9px 10px;
+  min-height: 38px;
   font-size: 11px;
   color: var(--ss-fg);
   border: 1px solid var(--ss-line);
