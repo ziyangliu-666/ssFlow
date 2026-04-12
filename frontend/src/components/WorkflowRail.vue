@@ -265,7 +265,7 @@ function statusClass (s) {
   display: flex;
   flex-direction: column;
   background: var(--ss-bg-soft);
-  min-height: 100vh;
+  min-height: 100svh;
 }
 
 /* ── Narrow viewport: sidebar collapses to a horizontal top strip ──
@@ -461,7 +461,7 @@ function statusClass (s) {
   border: 1px solid var(--ss-line);
   background: #fff;
   border-radius: 8px;
-  border-top: 2px solid var(--ss-accent);
+  border-top: 1px solid var(--ss-line);
 }
 .ctx-title {
   font-family: 'Noto Serif SC', serif;
@@ -541,7 +541,8 @@ function statusClass (s) {
   color: var(--ss-fg-muted);
   background: none;
   border: 0;
-  padding: 4px 0;
+  padding: 8px 0;
+  min-height: 44px;
   cursor: pointer;
   font-size: 11px;
   font-family: inherit;
@@ -557,7 +558,11 @@ function statusClass (s) {
   font-family: 'JetBrains Mono', monospace;
   outline: none;
 }
-.auth-input:focus { border-color: var(--ss-accent); }
+.auth-input:focus-visible {
+  border-color: var(--ss-accent);
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 1px;
+}
 
 .disclaimer em {
   font-family: 'Noto Serif SC', serif;
