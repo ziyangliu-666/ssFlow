@@ -453,17 +453,17 @@ function priceDeltaClass (v) {
   padding-left: 10px;
 }
 .force-marker {
-  color: #d32f2f;
+  color: var(--ss-bad);
   margin-right: 4px;
 }
 .force-line {
-  border-left: 3px solid #d32f2f;
+  border-left: 3px solid var(--ss-bad);
   padding-left: 10px;
-  background: rgba(211, 47, 47, 0.04);
+  background: rgba(196, 60, 60, 0.04);
 }
 .force-badge {
   display: inline-block;
-  background: #d32f2f;
+  background: var(--ss-bad);
   color: #fff;
   font-size: 0.78em;
   font-weight: 600;
@@ -476,7 +476,7 @@ function priceDeltaClass (v) {
   font-size: 0.88em;
 }
 .replaced-tag {
-  color: #d32f2f;
+  color: var(--ss-bad);
   font-size: 0.78em;
   font-style: italic;
 }
