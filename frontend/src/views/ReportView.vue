@@ -250,8 +250,10 @@
                       >
                         <span class="td-k">{{ k }}</span>
                         <span class="td-v mono">{{
-                          (v * 100).toFixed(0)
-                        }}%</span>
+                          typeof v === 'number' && !isNaN(v)
+                            ? (v * 100).toFixed(0) + '%'
+                            : String(v || '—')
+                        }}</span>
                       </span>
                     </div>
                     <div v-if="t.rationale" class="trade-rationale">
