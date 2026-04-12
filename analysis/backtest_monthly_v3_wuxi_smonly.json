@@ -1,0 +1,86 @@
+[
+  {
+    "name": "药明康德 BIOSECURE 法案",
+    "ticker": "603259",
+    "event_type": "regulatory",
+    "event_date": "2024-01-25",
+    "adv": 5000000000,
+    "event_text": "美国参议院提出《生物安全法案》(BIOSECURE Act), 将药明康德(603259)列入'受关注的生物技术公司'清单. 若法案通过, 美国政府机构和受资助实体将被禁止与药明康德签订新合同. 药明康德约30%营收来自美国客户. 公司回应称'对指控深表遗憾', 强调不会威胁美国国家安全. 业内担忧美国客户将预防性转移订单, 即使法案最终未通过也会引发业务重定价. 市场恐慌情绪浓厚, 盘前 ADR 暴跌 20%+.",
+    "prior_consensus": "药明康德是全球CRO/CDMO龙头, 2023年业绩稳健增长. 市场一致预期2024年营收400亿+, PE约25x. 中美脱钩风险存在但此前未实质落地. 机构普遍持有.",
+    "real": {
+      "anchor_price": 73.29,
+      "anchor_date": "2024-01-25",
+      "real_cum_pct": -46.53,
+      "real_last_close": 39.19,
+      "range_high": 74.69,
+      "range_low": 36.36,
+      "max_up_pct": 1.91,
+      "max_dn_pct": -50.39,
+      "monthly_closes": [
+        [
+          "2024-01",
+          54.2
+        ],
+        [
+          "2024-02",
+          54.48
+        ],
+        [
+          "2024-03",
+          46.18
+        ],
+        [
+          "2024-04",
+          43.67
+        ],
+        [
+          "2024-05",
+          42.11
+        ],
+        [
+          "2024-06",
+          39.19
+        ]
+      ],
+      "n_bars": 120
+    },
+    "anchor_price": 73.29,
+    "sim": {
+      "simulation_id": "oasis_1500bebebb16",
+      "initial_price": 73.29,
+      "final_price": 47.60471331000002,
+      "cum_pct": -35.05,
+      "price_trajectory": [
+        73.29,
+        65.96,
+        59.36,
+        53.43,
+        48.09,
+        52.89,
+        47.6
+      ],
+      "round_deltas_pct": [
+        -10.0,
+        -10.0,
+        -10.0,
+        -10.0,
+        10.0,
+        -10.0
+      ],
+      "up_rounds": 1,
+      "down_rounds": 5,
+      "reversals": 2,
+      "total_actions": {
+        "buy": 660,
+        "sell": 3536,
+        "hold": 4308,
+        "do_nothing": 2
+      },
+      "total_buy_flow": 8591464085.0,
+      "total_sell_flow": 80874061614.0,
+      "buy_sell_ratio": 0.11,
+      "cost_usd": 0.3544,
+      "elapsed_s": 76.9
+    }
+  }
+]
