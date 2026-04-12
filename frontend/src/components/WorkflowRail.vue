@@ -232,10 +232,17 @@ const contextCard = computed(() => {
     }
   }
 
+  // Use the Chinese instrument name from the universe if available,
+  // otherwise fall back to the event proposal's instrument (often English).
+  const primaryInst = universe?.instruments?.find(
+    (i) => i.relationship === 'event_subject' || i.relationship === 'primary'
+  ) || universe?.instruments?.[0]
+  const displayInstrument = primaryInst?.name || ep?.instrument || ''
+
   return {
     title,
     ticker: ep?.ticker || '',
-    instrument: ep?.instrument || '',
+    instrument: displayInstrument,
     market: ep?.market || '',
     eventType: ep?.event_type || '',
     price,

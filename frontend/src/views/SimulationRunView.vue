@@ -415,7 +415,14 @@ const elapsedDisplay = computed(() => elapsedSeconds.value.toFixed(1) + 's')
 
 const eventSummary = computed(() => {
   const e = session.eventProposal || {}
-  const parts = [e.instrument || e.ticker, e.ticker && e.market ? `${e.market}` : null].filter(Boolean)
+  // Use the Chinese instrument name from the universe if available,
+  // otherwise fall back to the event proposal's instrument (often English).
+  const universe = session.instrumentUniverse
+  const primaryInst = universe?.instruments?.find(
+    i => i.relationship === 'event_subject' || i.relationship === 'primary'
+  ) || universe?.instruments?.[0]
+  const displayName = primaryInst?.name || e.instrument || e.ticker
+  const parts = [displayName, e.ticker && e.market ? `${e.market}` : null].filter(Boolean)
   if (parts.length === 0) return '推演'
   return parts.join(' · ')
 })

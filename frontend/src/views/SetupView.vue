@@ -112,7 +112,7 @@
                   @click="expandedTicker = expandedTicker === inst.ticker ? null : inst.ticker"
                 >
                   <div class="inst-h">
-                    <span class="inst-name">{{ inst.name }}</span>
+                    <span class="inst-name">{{ inst.name && inst.name !== inst.ticker ? inst.name : '' }}</span>
                     <span class="inst-ticker mono">{{ inst.ticker }}</span>
                   </div>
                   <div class="inst-meta">
