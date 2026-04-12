@@ -10,7 +10,7 @@
 
 html, body, #app {
   width: 100%;
-  min-height: 100vh;
+  min-height: 100svh;
   background: #ffffff;
   color: #0a0a0a;
 }
@@ -18,7 +18,7 @@ html, body, #app {
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont,
                'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -64,7 +64,7 @@ textarea {
   --ss-bg-card: #fafafa;
   --ss-fg: #0a0a0a;
   --ss-fg-muted: #6b6b6b;
-  --ss-fg-faint: #a3a3a3;
+  --ss-fg-faint: #888888;
   --ss-line: #ececec;
   --ss-line-strong: #cfcfcf;
   --ss-accent: #ff6a00;
@@ -109,6 +109,18 @@ textarea {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .dot.live { animation: none; }
+}
+
+/* Global focus-visible */
+:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
 
 /* Generic button */
 .btn {
@@ -116,6 +128,7 @@ textarea {
   align-items: center;
   gap: 6px;
   padding: 10px 18px;
+  min-height: 44px;
   border: 1px solid var(--ss-line-strong);
   background: #0a0a0a;
   color: #fff;
