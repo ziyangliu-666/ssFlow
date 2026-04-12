@@ -213,6 +213,7 @@ def _participation_rate(
     round_idx: int,
     cumulative_delta_pct: float,
     active_types: set[str] | None,
+    params: "ParticipationParams | None" = None,
 ) -> float:
     """Fraction of agents that actually trade this round.
 
@@ -220,14 +221,21 @@ def _participation_rate(
       1. Activity schedule — non-active types get reduced (background noise)
       2. Urgency decay — later rounds have naturally declining participation
       3. Momentum exhaustion — large cumulative moves thin marginal flow
+
+    All coefficients are now driven by ``ParticipationParams`` so each
+    simulation can have different decay / exhaustion characteristics
+    calibrated to event severity.
     """
+    from .simulation_params import ParticipationParams
+
+    p = params or ParticipationParams()
     base = 1.0
     ptype = persona.agent_type or "retail"
     if active_types is not None and ptype not in active_types:
-        base = 0.15
-    urgency = 1.0 / (1.0 + 0.3 * round_idx)
-    exhaustion = 1.0 / (1.0 + 2.0 * abs(cumulative_delta_pct))
-    return max(0.05, base * urgency * exhaustion)
+        base = p.inactive_base
+    urgency = 1.0 / (1.0 + p.urgency_decay * round_idx)
+    exhaustion = 1.0 / (1.0 + p.exhaustion_coeff * abs(cumulative_delta_pct))
+    return max(p.min_participation, base * urgency * exhaustion)
 
 
 def _currency_symbol(currency: str) -> str:
@@ -838,31 +846,28 @@ async def run_simulation(
     # via `_is_monthly_cadence()`. For daily schedules the defaults are
     # preserved and this is a no-op. Backtest v2 (§3.3) showed the day
     # cap clipping a +70% real monthly move to +3.68% sim on 东方财富 924.
-    from .market_dynamics import CADENCE_CAPS, caps_for_cadence
+    from .market_dynamics import caps_for_cadence
+    _mp = _sim_params.market
     _is_monthly_cadence = bool(
         round_schedule and hasattr(round_schedule, "_is_monthly_cadence")
         and round_schedule._is_monthly_cadence()
     )
     if _is_monthly_cadence:
         _cadence_label = "monthly"
-        _max_delta_pct, _monthly_knee = caps_for_cadence("monthly")
-        # Monthly schedules need a shallower resistance curve (0.8 vs 3.0)
-        # so that M+1's +20% cum_abs_delta doesn't already collapse the
-        # knee to near-zero on M+2.
+        _monthly_caps = _mp.cadence_caps.get("monthly", (0.25, 0.20))
+        _max_delta_pct, _monthly_knee = _monthly_caps
         _resistance_scale = 0.8
-        # Override the calibration library's daily knee with the monthly
-        # default — calibration was measured on daily backtests and the
-        # knee is cadence-dependent, not event-type-dependent.
         _calibrated_knee = _monthly_knee
         log.info(
             "Cadence: monthly — Kyle cap %.2f, base_knee %.2f, "
-            "resistance_scale %.2f (overriding daily defaults)",
+            "resistance_scale %.2f (from sim_params)",
             _max_delta_pct, _calibrated_knee, _resistance_scale,
         )
     else:
         _cadence_label = "daily"
-        _max_delta_pct, _ = caps_for_cadence("daily")
-        _resistance_scale = 3.0
+        _daily_caps = _mp.cadence_caps.get("daily", (0.10, 0.08))
+        _max_delta_pct = _daily_caps[0]
+        _resistance_scale = _mp.resistance_scale
 
     # ── Limit board + publication effects (A-share realism) ──
     from .limit_board import LimitBoard, T1Ledger, infer_board_type
@@ -1826,6 +1831,7 @@ async def run_simulation(
                 # Compute participation rate (urgency decay + momentum exhaustion)
                 p_rate = _participation_rate(
                     persona, round_idx, cumulative_delta_pct, active_types,
+                    params=_sim_params.participation,
                 )
                 # Apply publication effect: participation modifier
                 p_rate = apply_effects_to_participation(
@@ -1988,6 +1994,7 @@ async def run_simulation(
                     max_delta_pct=_max_delta_pct,
                     flow_knee=_mi_knee,
                     sentiment_modifier=_mi_sentiment,
+                    sentiment_scale=_mp.sentiment_scale,
                 )
                 for ticker, delta in delta_by_ticker.items():
                     current_prices[ticker] = current_prices[ticker] * (1.0 + delta)
@@ -2035,6 +2042,7 @@ async def run_simulation(
                     max_delta_pct=_max_delta_pct,
                     flow_knee=dynamic_knee,
                     sentiment_modifier=clamped_sentiment,
+                    sentiment_scale=_mp.sentiment_scale,
                 )
                 # Apply A-share limit-board clamping (涨跌停板). The limit
                 # board models *daily* 10% limits — on monthly cadence the

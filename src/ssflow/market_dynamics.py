@@ -179,6 +179,7 @@ def compute_price_impact(
     max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
     flow_knee: float = FLOW_KNEE,
     sentiment_modifier: float = 0.0,
+    sentiment_scale: float = 0.3,
 ) -> float:
     """Square-root market impact (Kyle 1985) with soft flow compression.
 
@@ -252,7 +253,7 @@ def compute_price_impact(
     # additive bias irrelevant while other changes destabilised the
     # context). Keeping 0.3 as the calibrated value that iter3 used.
     if sentiment_modifier != 0.0:
-        raw_delta = raw_delta + sentiment_modifier * max_delta_pct * 0.3
+        raw_delta = raw_delta + sentiment_modifier * max_delta_pct * sentiment_scale
 
     clamped = max(-max_delta_pct, min(max_delta_pct, raw_delta))
     if abs(raw_delta) > max_delta_pct:
@@ -284,6 +285,7 @@ def compute_multi_instrument_impact(
     max_delta_pct: float = MAX_DELTA_PCT_PER_ROUND,
     flow_knee: float = FLOW_KNEE,
     sentiment_modifier: float = 0.0,
+    sentiment_scale: float = 0.3,
 ) -> dict[str, float]:
     """Per-instrument Kyle impact for multiple instruments.
 
@@ -312,6 +314,7 @@ def compute_multi_instrument_impact(
             max_delta_pct=max_delta_pct,
             flow_knee=flow_knee,
             sentiment_modifier=sentiment_modifier,
+            sentiment_scale=sentiment_scale,
         )
     return result
 

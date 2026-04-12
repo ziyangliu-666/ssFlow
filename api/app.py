@@ -57,6 +57,7 @@ from ssflow.persona_proposer import (
     persona_from_partial,
     propose_personas,
 )
+from ssflow.simulation_params import SimulationParams, generate_sim_params
 from ssflow.report import render_simulation_safe_or_quarantine, save_report
 from ssflow.distillation import distill_sync
 from ssflow.sandbox_generator import build_from_template
@@ -451,6 +452,20 @@ def create_app() -> Flask:
         entity_graph_data = payload.get("entity_graph")
         round_schedule_data = payload.get("round_schedule")
 
+        # Generate per-simulation calibration parameters from event context.
+        # These replace the hardcoded constants in market_dynamics /
+        # trading_layer / oasis_engine with event-sensitive values.
+        _subject_price = float(_iu_subject.get("current_price", 0))
+        _subject_adv = float(_iu_subject.get("adv_value", 0))
+        _subject_cap = float(_iu_subject.get("float_market_cap", 0))
+        sim_params = generate_sim_params(
+            event_type=event.event_type or "",
+            severity_signed=float(getattr(event, "severity_signed", 0) or 0),
+            adv_value=_subject_adv,
+            float_cap_cny=_subject_cap,
+        )
+        sim_params_dict = sim_params.to_dict()
+
         # Stash everything in the store. The actual run happens when the
         # client opens the SSE GET.
         stream_id = store.register_stream_payload(
@@ -464,11 +479,16 @@ def create_app() -> Flask:
                 "entity_graph": entity_graph_data,
                 "instrument_universe": instrument_universe_data,
                 "round_schedule": round_schedule_data,
+                "sim_params": sim_params_dict,
             },
             session_id=session_id,
         )
 
-        return jsonify({"stream_id": stream_id, "n_personas": len(personas)})
+        return jsonify({
+            "stream_id": stream_id,
+            "n_personas": len(personas),
+            "sim_params": sim_params_dict,
+        })
 
     # ─────────────────────── /simulate-stream/<id> ───────────────────────
 
@@ -548,6 +568,8 @@ def create_app() -> Flask:
 
         def engine_thread() -> None:
             try:
+                _sp_dict = entry.payload.get("sim_params")
+                _sp = SimulationParams.from_dict(_sp_dict) if _sp_dict else None
                 result = asyncio.run(
                     run_simulation(
                         event,
@@ -558,6 +580,7 @@ def create_app() -> Flask:
                         entity_graph=entity_graph,
                         instrument_universe=instrument_universe,
                         round_schedule=round_schedule,
+                        sim_params=_sp,
                     )
                 )
                 # Render + persist the report
