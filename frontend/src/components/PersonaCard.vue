@@ -46,6 +46,43 @@
       <span><em>持仓 p=</em>{{ (local.prob_holding || 0).toFixed(2) }}</span>
     </div>
 
+    <div
+      v-if="hasSubPops"
+      class="sub-pop-bar"
+      :class="{ collapsed: !expanded }"
+      data-testid="sub-pop-bar"
+      @click.stop
+    >
+      <div class="sub-pop-label">
+        <span>类内分布</span>
+        <span class="sub-pop-count">{{ local.sub_populations.length }} 子群</span>
+      </div>
+      <div class="sub-pop-track" role="img" :aria-label="subPopAria">
+        <div
+          v-for="sp in local.sub_populations"
+          :key="sp.id"
+          class="sub-pop-seg"
+          :style="{ width: (sp.fraction * 100).toFixed(2) + '%', background: styleColor(sp.decision_style) }"
+          :title="`${sp.label_zh} · ${(sp.fraction * 100).toFixed(0)}% · ${sp.decision_style}${sp.rationale ? '\n' + sp.rationale : ''}`"
+          :data-sub-pop-id="sp.id"
+        >
+          <span v-if="sp.fraction >= 0.18" class="sub-pop-text">
+            {{ sp.label_zh }} {{ Math.round(sp.fraction * 100) }}%
+          </span>
+        </div>
+      </div>
+      <div v-if="expanded" class="sub-pop-legend">
+        <span
+          v-for="sp in local.sub_populations"
+          :key="sp.id"
+          class="sub-pop-legend-item"
+        >
+          <span class="legend-dot" :style="{ background: styleColor(sp.decision_style) }"></span>
+          {{ sp.label_zh }} · {{ sp.decision_style }} · {{ Math.round(sp.fraction * 100) }}%
+        </span>
+      </div>
+    </div>
+
     <div v-if="expanded" class="body" @click.stop>
       <div v-if="isTrader" class="row3">
         <label>
@@ -80,6 +117,27 @@ const local = reactive({ ...props.persona })
 const expanded = ref(false)
 
 const isTrader = computed(() => local.entity_role === 'trader')
+const hasSubPops = computed(
+  () => Array.isArray(local.sub_populations) && local.sub_populations.length > 0,
+)
+const subPopAria = computed(() => {
+  if (!hasSubPops.value) return ''
+  return local.sub_populations
+    .map((sp) => `${sp.label_zh} ${Math.round(sp.fraction * 100)}%`)
+    .join('，')
+})
+
+const STYLE_COLORS = {
+  momentum: '#e07a3a',     // orange — chase
+  contrarian: '#7c5fd0',   // purple — fade
+  fundamental: '#3a78c4',  // blue — analytical
+  panic: '#c43a4f',        // red — sell-first
+  conviction: '#3aa05c',   // green — hold-tight
+}
+
+function styleColor (style) {
+  return STYLE_COLORS[style] || '#888'
+}
 
 watch(() => props.persona, (v) => Object.assign(local, v), { deep: true })
 watch(local, (v) => emit('update:persona', { ...v }), { deep: true })
@@ -256,5 +314,75 @@ function formatCny (n) {
   min-height: 96px;
   font-weight: 400;
   line-height: 1.55;
+}
+
+.sub-pop-bar {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ss-line);
+}
+.sub-pop-bar.collapsed {
+  margin-top: 8px;
+}
+.sub-pop-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ss-fg-muted);
+  margin-bottom: 5px;
+  letter-spacing: 0.04em;
+}
+.sub-pop-count {
+  color: var(--ss-fg-faint);
+}
+.sub-pop-track {
+  display: flex;
+  width: 100%;
+  height: 16px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--ss-bg-soft);
+  border: 1px solid var(--ss-line);
+}
+.sub-pop-seg {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Inter', sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: help;
+  transition: opacity 0.15s ease;
+}
+.sub-pop-seg:hover { opacity: 0.85; }
+.sub-pop-text {
+  padding: 0 4px;
+  text-shadow: 0 1px 1px rgba(0,0,0,0.18);
+}
+.sub-pop-legend {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+}
+.sub-pop-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 </style>

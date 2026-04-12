@@ -198,6 +198,56 @@ personas:
         type: discrete
         values: [0, 0, 0, 1, 1, 2]   # ~50% R0, ~33% R1, ~17% R2
 
+    # Intra-class heterogeneity — the 5000 追涨散户 do NOT move as one
+    # block. CICC 2023 零售结构调查把活跃小散拆成四类, 各自对事件反应
+    # 方向都不一样, 合在一起才产生接近现实的 histogram. 本配置是 Phase II
+    # 研究期间手工调优的起点; rationale 字段保留来源引用.
+    sub_populations:
+      - id: momentum_chaser
+        label_zh: 动量追涨客
+        fraction: 0.40
+        decision_style: momentum
+        rationale: "CICC 2023 retail survey: ~40% of active <¥500k accounts chase breakouts within 1-3 trading days"
+        bias_overrides:
+          momentum_chasing: 0.95
+          loss_aversion: 0.50
+        event_conviction_offset:
+          policy: 0.10        # 动量客对政策利好额外加码
+
+      - id: swing_trader
+        label_zh: 波段小散
+        fraction: 0.30
+        decision_style: conviction
+        rationale: "CICC 2023: ~30% hold 3-14 days and ride mid-term waves, less impulsive"
+        bias_overrides:
+          fomo: 0.50
+          anchoring_to_entry_price: 0.70
+
+      - id: meme_speculator
+        label_zh: 梗股投机客
+        fraction: 0.20
+        decision_style: panic
+        rationale: "~20% of retail accounts concentrate on lottery-ticket tickers; high vol preference, thin wallet"
+        capital_multiplier: 0.6
+        bias_overrides:
+          loss_aversion: 0.30
+          fomo: 0.95
+        event_conviction_offset:
+          policy: 0.25        # 打鸡血能量最大
+          earnings: -0.05
+
+      - id: burnt_veteran
+        label_zh: 被套老油条
+        fraction: 0.10
+        decision_style: contrarian
+        rationale: "~10% of active retail are ex-bag-holders who fade hype after learning from 2015/2018"
+        prob_holding_override: 0.35   # 仓位更轻
+        bias_overrides:
+          loss_aversion: 0.85
+          overconfidence_after_wins: 0.30
+        event_conviction_offset:
+          policy: -0.20       # 听过太多故事, fade policy hype
+
   # ─── 2. 中产配置型散户 (30-300 万) ─────────────────────────
   - id: retail_passive_holder
     archetype: 散户(中产配置型)
@@ -475,6 +525,39 @@ personas:
         type: discrete
         values: [0, 1, 1, 2, 2, 3]
 
+    # Intra-class heterogeneity — 主动权益基金内部 PM 风格差异巨大.
+    # 开源证券 2024 公募主动权益研究把主动权益基金分为基准贴合型 (多数) /
+    # 主题坚定型 / 量化辅助型. 每一类对同一事件的反应决策不同.
+    sub_populations:
+      - id: benchmark_hugger
+        label_zh: 基准守门员
+        fraction: 0.60
+        decision_style: conviction
+        rationale: "开源证券 2024 主动权益研究: ~60% 主动偏股基金 tracking error <5% vs CSI300"
+        bias_overrides:
+          benchmark_hugging: 0.90
+          career_risk_aversion: 0.85
+
+      - id: theme_conviction
+        label_zh: 主题坚定型
+        fraction: 0.25
+        decision_style: conviction
+        rationale: "~25% of active PMs run concentrated thematic bets (新能源/AI/医药 etc)"
+        bias_overrides:
+          benchmark_hugging: 0.30
+          career_risk_aversion: 0.40
+        event_conviction_offset:
+          policy: 0.15        # 主题型对政策利好格外敏感
+
+      - id: quant_augmented
+        label_zh: 量化辅助型
+        fraction: 0.15
+        decision_style: fundamental
+        rationale: "~15% of active funds overlay quant signals on fundamental selection"
+        bias_overrides:
+          benchmark_hugging: 0.50
+          model_driven: 0.70
+
   # ─── 5. 公募 ETF / 被动 AP ───────────────────────────────
   - id: etf_authorized_participant
     follows:
@@ -625,6 +708,30 @@ personas:
       reaction_lag_rounds:
         type: discrete
         values: [0, 0, 1, 1, 2, 2]
+
+    # Intra-class heterogeneity — 私募风格双峰分布. 集中进攻型 (宏观 +
+    # 单边多头) vs 分散对冲型 (多空/量化复合). 对事件的反应方向常常相反:
+    # 进攻型放大信号, 对冲型 fade 或锁定.
+    sub_populations:
+      - id: concentrated_conviction
+        label_zh: 集中进攻
+        fraction: 0.60
+        decision_style: conviction
+        rationale: "中型主动多头私募多为集中持仓型,单一标的权重可至 10%+"
+        bias_overrides:
+          conviction_concentration: 0.95
+          hard_stop_loss: 0.80
+        event_conviction_offset:
+          policy: 0.15
+
+      - id: diversified_hedge
+        label_zh: 分散对冲
+        fraction: 0.40
+        decision_style: contrarian
+        rationale: "~40% of active PE run multi-strategy books; fade consensus, hedge with shorts"
+        bias_overrides:
+          contrarian_to_consensus: 0.85
+          conviction_concentration: 0.50
 
   # ─── 7. 险资 / 社保 / 养老 (long-horizon institutional) ──
   - id: insurance_pension

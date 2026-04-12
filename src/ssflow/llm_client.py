@@ -47,7 +47,8 @@ PRICING_PER_M: dict[str, dict[str, float]] = {
     "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
     "gpt-4.1": {"input": 2.00, "output": 8.00},
     # Anthropic family (via yourapi)
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+    "claude-haiku-4-5": {"input": 0.15, "output": 0.75},
+    "claude-haiku-4-5-20251001": {"input": 0.15, "output": 0.75},
     "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
     # Google Gemini family
     "gemini-2.5-pro": {"input": 1.25, "output": 5.00},

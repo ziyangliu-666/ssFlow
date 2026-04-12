@@ -101,6 +101,70 @@ class MarketShare:
         )
 
 
+# Sub-population decision styles. MVP uses 5 stable archetypes.
+# Fail HARD on unknown styles at YAML load time so the research layer
+# can't silently drift — matches the plan-agent review #8 decision.
+_VALID_DECISION_STYLES: frozenset[str] = frozenset({
+    "momentum",
+    "contrarian",
+    "fundamental",
+    "panic",
+    "conviction",
+})
+
+
+@dataclass(frozen=True)
+class SubPopulation:
+    """One behavioral sub-population within a persona class.
+
+    A persona's ``sub_populations`` list partitions its ``instance_count``
+    agents into groups that respond to the same class-level LLM decision
+    differently. Example: ``retail_short_term_chaser`` might split into
+    40% momentum chasers (amplify bull signals) + 30% swing traders +
+    20% meme speculators (panic on bad news) + 10% burnt veterans
+    (contrarian, fade hype).
+
+    The sub-pop mechanism adds STRUCTURAL heterogeneity beyond the
+    existing Gaussian dispersion noise in ``apply_distribution_to_agent_pop``.
+    Different sub-pops get different event-type conviction offsets via
+    ``STYLE_TILT`` + ``event_conviction_offset``, so a class with mixed
+    sub-pops produces a non-degenerate action histogram even when the
+    LLM class decision is a single scalar.
+
+    Fractions within a persona must sum to 1.0 (±1e-6 at load time).
+    Unknown ``decision_style`` raises at load time. Everything else is
+    optional and falls through to persona-class defaults.
+
+    ``exit_rules`` is a Phase 2 placeholder — schema forward-compat for
+    continuous target tracking ("hold until NAV +20%") — not evaluated
+    by the runtime yet.
+    """
+
+    id: str                                # "momentum_chaser"
+    label_zh: str                          # "动量追涨客"
+    fraction: float                        # 0.0-1.0, sum to 1.0 per persona
+    decision_style: str                    # one of _VALID_DECISION_STYLES
+    rationale: str = ""                    # free text / research citation
+
+    # Per-agent spawn-time correlations — applied inside spawn_agents
+    capital_multiplier: float = 1.0        # multiplies sampled capital
+    prob_holding_override: float | None = None  # override initial_position_distribution
+
+    # Per-agent risk overrides — fall through to persona.sandbox.risk if None
+    max_position_pct_override: float | None = None
+    stop_loss_threshold_override: float | None = None
+
+    # Merged OVER persona.biases at decision time
+    bias_overrides: dict[str, float] = field(default_factory=dict)
+
+    # Added ON TOP OF STYLE_TILT during conviction computation
+    # Example: {"policy": +0.3, "regulatory": -0.1}
+    event_conviction_offset: dict[str, float] = field(default_factory=dict)
+
+    # Phase 2 placeholder — schema forward-compat only
+    exit_rules: list[dict[str, Any]] = field(default_factory=list)
+
+
 @dataclass
 class SandboxConfig:
     """Per-persona sandbox configuration for agent-based market mode.
@@ -279,6 +343,22 @@ class Persona:
     # the default bundle.
     self_model: dict[str, Any] | None = None
 
+    # ─────────────────────── Intra-class sub-populations ───────────────────────
+    #
+    # Optional list of ``SubPopulation`` that partitions this persona's
+    # ``sandbox.instance_count`` agents into behavioral groups. When None,
+    # all agents are homogeneous (backward-compatible default for every
+    # existing hand-authored persona). When set, the YAML loader validates
+    # that fractions sum to 1.0 at load time, ``spawn_agents`` assigns
+    # each TraderInstance to a sub-pop via weighted sampling, and
+    # ``apply_distribution_to_agent_pop`` applies per-agent event-type
+    # conviction offsets keyed off ``decision_style`` + explicit overrides.
+    #
+    # See ``src/ssflow/sub_population_styles.py`` for the STYLE_TILT library
+    # and ``tests/test_persona_sub_populations.py`` for schema-round-trip
+    # regression coverage.
+    sub_populations: list[SubPopulation] | None = None
+
     def system_prompt(self) -> str:
         """Render the persona as a system prompt for an LLM call."""
         bias_lines = (
@@ -438,6 +518,164 @@ def _validate_follows_references(personas: list["Persona"], source: str) -> None
                     f"{source}: persona '{p.id}' follows unknown id '{ref}'. "
                     f"Known ids: {sorted(known_ids)}"
                 )
+
+
+def _coerce_sub_populations(
+    data: Any,
+    persona_id: str,
+) -> list[SubPopulation] | None:
+    """Parse the optional ``sub_populations:`` YAML block into a list of
+    ``SubPopulation`` objects.
+
+    Returns ``None`` when the field is absent (homogeneous persona —
+    backward-compatible default). Raises :class:`PersonaSchemaError` on:
+
+    - Non-list top-level
+    - Entry missing required fields (``id`` / ``label_zh`` / ``fraction`` /
+      ``decision_style``)
+    - Unknown ``decision_style`` — fail-hard so the research layer can't
+      silently drift
+    - Fractions not summing to 1.0 ± 1e-6 — fail at LOAD TIME, not spawn
+      time, to avoid 10-minute backtests crashing mid-sim
+    - Duplicate sub-pop ids within the same persona
+
+    All trait overrides (``bias_overrides``, ``risk_overrides``,
+    ``event_conviction_offset``, etc.) are optional and fall through to
+    persona-class defaults when absent.
+    """
+    if data is None:
+        return None
+    if not isinstance(data, list):
+        raise PersonaSchemaError(
+            f"persona '{persona_id}': sub_populations must be a list of mappings, "
+            f"got {type(data).__name__}"
+        )
+    if not data:
+        return None  # explicit empty list == no sub-pops
+
+    result: list[SubPopulation] = []
+    seen_ids: set[str] = set()
+    required = {"id", "label_zh", "fraction", "decision_style"}
+
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] must be a mapping"
+            )
+        missing = required - entry.keys()
+        if missing:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] missing required "
+                f"fields: {sorted(missing)}"
+            )
+
+        sp_id = str(entry["id"])
+        if sp_id in seen_ids:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': duplicate sub_population id '{sp_id}'"
+            )
+        seen_ids.add(sp_id)
+
+        style = str(entry["decision_style"])
+        if style not in _VALID_DECISION_STYLES:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' has "
+                f"unknown decision_style '{style}'. Valid: "
+                f"{sorted(_VALID_DECISION_STYLES)}"
+            )
+
+        try:
+            fraction = float(entry["fraction"])
+        except (TypeError, ValueError) as exc:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' has "
+                f"non-numeric fraction {entry['fraction']!r}"
+            ) from exc
+        if not 0.0 <= fraction <= 1.0:
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' fraction "
+                f"{fraction} is outside [0, 1]"
+            )
+
+        def _maybe_float(val: Any, field_name: str) -> float | None:
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except (TypeError, ValueError) as exc:
+                raise PersonaSchemaError(
+                    f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' "
+                    f"{field_name} must be numeric, got {val!r}"
+                ) from exc
+
+        def _coerce_float_dict(val: Any, field_name: str) -> dict[str, float]:
+            if val is None:
+                return {}
+            if not isinstance(val, dict):
+                raise PersonaSchemaError(
+                    f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' "
+                    f"{field_name} must be a dict, got {type(val).__name__}"
+                )
+            out: dict[str, float] = {}
+            for k, v in val.items():
+                try:
+                    out[str(k)] = float(v)
+                except (TypeError, ValueError) as exc:
+                    raise PersonaSchemaError(
+                        f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' "
+                        f"{field_name}[{k}] must be numeric, got {v!r}"
+                    ) from exc
+            return out
+
+        exit_rules_raw = entry.get("exit_rules", [])
+        if exit_rules_raw and not isinstance(exit_rules_raw, list):
+            raise PersonaSchemaError(
+                f"persona '{persona_id}': sub_populations[{i}] '{sp_id}' "
+                f"exit_rules must be a list, got {type(exit_rules_raw).__name__}"
+            )
+
+        result.append(
+            SubPopulation(
+                id=sp_id,
+                label_zh=str(entry["label_zh"]),
+                fraction=fraction,
+                decision_style=style,
+                rationale=str(entry.get("rationale", "")),
+                capital_multiplier=_maybe_float(
+                    entry.get("capital_multiplier", 1.0), "capital_multiplier"
+                ) or 1.0,
+                prob_holding_override=_maybe_float(
+                    entry.get("prob_holding_override"), "prob_holding_override"
+                ),
+                max_position_pct_override=_maybe_float(
+                    entry.get("max_position_pct_override"),
+                    "max_position_pct_override",
+                ),
+                stop_loss_threshold_override=_maybe_float(
+                    entry.get("stop_loss_threshold_override"),
+                    "stop_loss_threshold_override",
+                ),
+                bias_overrides=_coerce_float_dict(
+                    entry.get("bias_overrides"), "bias_overrides"
+                ),
+                event_conviction_offset=_coerce_float_dict(
+                    entry.get("event_conviction_offset"),
+                    "event_conviction_offset",
+                ),
+                exit_rules=list(exit_rules_raw or []),
+            )
+        )
+
+    # Load-time fraction sum validation — fail FAST, not at spawn time.
+    total = sum(sp.fraction for sp in result)
+    if abs(total - 1.0) > 1e-6:
+        raise PersonaSchemaError(
+            f"persona '{persona_id}': sub_populations fractions sum to "
+            f"{total:.6f}, expected 1.0 ± 1e-6. Check per-entry values: "
+            f"{[(sp.id, sp.fraction) for sp in result]}"
+        )
+
+    return result
 
 
 def _coerce_sandbox(data: dict[str, Any], persona_id: str) -> SandboxConfig | None:
@@ -716,6 +954,9 @@ def load_personas(path: str | Path) -> list[Persona]:
                 follows=_coerce_follows(p.get("follows"), p["id"]),
                 publishes=_coerce_publishes(p.get("publishes"), p["id"]),
                 self_model=p.get("self_model"),  # dict or None; validated at runtime
+                sub_populations=_coerce_sub_populations(
+                    p.get("sub_populations"), p["id"],
+                ),
             )
         )
 
@@ -751,6 +992,7 @@ __all__ = [
     "PublishConfig",
     "SandboxConfig",
     "StrategicSignalSchema",
+    "SubPopulation",
     "SCHEMA_VERSION",
     "VALID_CONTENT_TYPES",
     "VALID_DECISION_MODES",

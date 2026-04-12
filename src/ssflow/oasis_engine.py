@@ -1855,6 +1855,7 @@ async def run_simulation(
                     conviction_damper=damper,
                     limit_board=limit_board,
                     t1_ledger=t1_ledger,
+                    event_type=event.event_type or "",
                 )
                 class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
@@ -1915,6 +1916,7 @@ async def run_simulation(
                     round_idx=round_idx,
                     limit_board=limit_board,
                     t1_ledger=t1_ledger,
+                    event_type=event.event_type or "",
                 )
                 class_flows.append(hold_flow)
                 safe_emit(

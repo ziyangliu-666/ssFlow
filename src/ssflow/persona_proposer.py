@@ -77,6 +77,22 @@ def persona_to_partial(persona: Persona) -> dict[str, Any]:
             except (TypeError, ValueError):
                 prob_holding = None
 
+    # Read-only sub-population breakdown for the SetupView card. Phase II
+    # heterogeneity surfaces the declared sub-pops so the user can see
+    # how a class is partitioned (no edit UI yet — yaml is the source).
+    sub_populations: list[dict[str, Any]] | None = None
+    if persona.sub_populations:
+        sub_populations = [
+            {
+                "id": sp.id,
+                "label_zh": sp.label_zh,
+                "fraction": float(sp.fraction),
+                "decision_style": sp.decision_style,
+                "rationale": sp.rationale,
+            }
+            for sp in persona.sub_populations
+        ]
+
     return {
         "id": persona.id,
         "archetype": persona.archetype,
@@ -88,6 +104,8 @@ def persona_to_partial(persona: Persona) -> dict[str, Any]:
         "instance_count": instance_count,
         "capital_median_cny": capital_median_cny,
         "prob_holding": prob_holding,
+        # Read-only sub-population breakdown — None for homogeneous classes.
+        "sub_populations": sub_populations,
         # Sticky reference back to the base persona this partial was
         # projected from. The backend uses this on `/simulate-stream/init`
         # to re-hydrate the full persona on submit.

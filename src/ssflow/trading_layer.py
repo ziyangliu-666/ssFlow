@@ -31,7 +31,8 @@ from typing import Any
 
 from .limit_board import LimitBoard, T1Ledger
 from .output_filter import sanitize_text
-from .persona import Persona
+from .persona import Persona, SubPopulation
+from .sub_population_styles import style_tilt_for
 
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,16 @@ class TraderInstance:
     reaction_lag: int = 0           # round index when this agent becomes active
     first_position_round: int = -1  # round when first non-zero position opened (-1 = never)
     agent_id: str = ""              # unique ID for T1Ledger tracking (auto-assigned at spawn)
+
+    # Intra-class sub-population assignment (Phase II heterogeneity).
+    # Defaults keep single-bucket homogeneous behavior for every persona
+    # without a ``sub_populations`` block. When the persona declares
+    # sub-pops, ``spawn_agents`` stamps each instance with the sampled
+    # ``SubPopulation`` and the decision path applies per-agent
+    # STYLE_TILT + event_conviction_offset before Gaussian dispersion.
+    sub_pop_id: str = "default"
+    sub_pop_style: str = ""
+    sub_pop_traits: SubPopulation | None = None
 
     @property
     def holdings_shares(self) -> float:
@@ -222,17 +233,53 @@ def spawn_agents(
             f"got {sandbox.instance_count}"
         )
 
-    max_position_pct = float(sandbox.risk.get("max_position_pct", 1.0))
-    max_position_pct = max(0.0, min(1.0, max_position_pct))
+    default_max_position_pct = float(sandbox.risk.get("max_position_pct", 1.0))
+    default_max_position_pct = max(0.0, min(1.0, default_max_position_pct))
+
+    # ── Sub-population assignment (deterministic under ``rng``) ──
+    #
+    # When the persona declares ``sub_populations``, we draw instance_count
+    # sub-pop labels *before* the per-agent loop using the same ``rng`` that
+    # already seeds capital / position / lag sampling. This keeps
+    # spawn_agents fully deterministic under a shared seed — critical for
+    # backtest reproducibility (plan-agent fatal issue #2).
+    sub_pops = persona.sub_populations
+    if sub_pops:
+        sub_pop_assignments: list[SubPopulation | None] = rng.choices(
+            sub_pops,
+            weights=[sp.fraction for sp in sub_pops],
+            k=sandbox.instance_count,
+        )
+    else:
+        sub_pop_assignments = [None] * sandbox.instance_count
 
     agents: list[Agent] = []
     for agent_idx in range(sandbox.instance_count):
+        sp = sub_pop_assignments[agent_idx]
         capital = _sample_capital(sandbox.capital_distribution, rng)
-        position_pct = _sample_position_pct(sandbox.initial_position_distribution, rng)
+        if sp is not None and sp.capital_multiplier != 1.0:
+            capital = capital * sp.capital_multiplier
+        # Sub-pop may override the class-level prob_holding so e.g. a
+        # "burnt_veteran" sub-pop of a retail class can start mostly flat
+        # even when the base class runs a bernoulli(0.60).
+        pos_spec = sandbox.initial_position_distribution
+        if sp is not None and sp.prob_holding_override is not None and pos_spec:
+            pos_spec = {**pos_spec, "prob_holding": sp.prob_holding_override}
+        position_pct = _sample_position_pct(pos_spec, rng)
         position_pct = max(0.0, min(1.0, position_pct))
         holdings_value = capital * position_pct
         cash = capital - holdings_value
         reaction_lag = _sample_reaction_lag(sandbox.reaction_lag_rounds, rng)
+
+        # Per-agent risk cap: sub-pop override first, else the class default.
+        if sp is not None and sp.max_position_pct_override is not None:
+            agent_max_pct = max(0.0, min(1.0, float(sp.max_position_pct_override)))
+        else:
+            agent_max_pct = default_max_position_pct
+        agent_max_holdings = capital * agent_max_pct
+
+        sub_pop_id = sp.id if sp is not None else "default"
+        sub_pop_style = sp.decision_style if sp is not None else ""
 
         if multi_prices and len(multi_prices) > 0:
             # Multi-instrument: allocate initial holdings based on real
@@ -270,10 +317,13 @@ def spawn_agents(
                     capital=capital,
                     cash=cash,
                     holdings=holdings,
-                    max_holdings_value=capital * max_position_pct,
+                    max_holdings_value=agent_max_holdings,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
                     agent_id=f"{persona.id}_{agent_idx}",
+                    sub_pop_id=sub_pop_id,
+                    sub_pop_style=sub_pop_style,
+                    sub_pop_traits=sp,
                 )
             )
         else:
@@ -285,10 +335,13 @@ def spawn_agents(
                     capital=capital,
                     cash=cash,
                     holdings={primary_ticker: holdings_shares},
-                    max_holdings_value=capital * max_position_pct,
+                    max_holdings_value=agent_max_holdings,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
                     agent_id=f"{persona.id}_{agent_idx}",
+                    sub_pop_id=sub_pop_id,
+                    sub_pop_style=sub_pop_style,
+                    sub_pop_traits=sp,
                 )
             )
     return agents
@@ -462,6 +515,11 @@ class ClassFlowResult:
     fill_rate: float = 1.0          # Fraction of intended orders that filled [0, 1]
     unfilled_volume: float = 0.0    # Volume that could not fill due to limit board
     t1_blocked_sells: int = 0       # Number of sell attempts blocked by T+1
+    # Per-sub-pop breakdown of ``action_histogram`` for classes that declare
+    # ``sub_populations``. Keys are sub_pop_id; values are per-action counts.
+    # For personas without sub_populations this is {"default": {...}} and
+    # summing across keys gives back ``action_histogram``.
+    action_histogram_by_sub_pop: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 # ─────────────────────── Distribution application (pure math) ───────────────────────
@@ -526,6 +584,7 @@ def apply_distribution_to_agent_pop(
     conviction_damper: float = 1.0,
     limit_board: LimitBoard | None = None,
     t1_ledger: T1Ledger | None = None,
+    event_type: str = "",
 ) -> ClassFlowResult:
     """Pure-math: sample one action per agent from `distribution`, apply it,
     return aggregated ClassFlowResult. Does NOT make any LLM calls.
@@ -593,6 +652,11 @@ def apply_distribution_to_agent_pop(
 
     agent_specs: list[tuple[Agent, dict[str, Any]]] = []
     histogram: dict[str, int] = {}
+    # Per-sub-pop bucketed view of the histogram. Populated in both the
+    # freeform and legacy paths so ClassFlowResult always carries the
+    # breakdown — personas without sub_populations land everything under
+    # a single "default" key, which sums back to ``histogram``.
+    histogram_by_sub_pop: dict[str, dict[str, int]] = {}
     normalized: dict[str, float] = {}
     warning: str | None = None
 
@@ -637,22 +701,46 @@ def apply_distribution_to_agent_pop(
 
         histogram = {"buy": 0, "sell": 0, "hold": 0}
         for agent_inst in active_agents:
-            # Each agent gets a noisy conviction
-            agent_conviction = class_conviction + rng.gauss(0, dispersion)
+            # Structural heterogeneity: add a deterministic sub-pop tilt
+            # (by decision_style × event_type) plus any explicit
+            # event_conviction_offset declared on the SubPopulation.
+            # These land on top of the class conviction BEFORE Gaussian
+            # noise so different sub-pops in the same class can end up
+            # on opposite sides of the 0.02 / -0.02 threshold.
+            style_tilt = style_tilt_for(agent_inst.sub_pop_style, event_type)
+            explicit_offset = 0.0
+            traits = agent_inst.sub_pop_traits
+            if traits is not None and traits.event_conviction_offset:
+                explicit_offset = float(
+                    traits.event_conviction_offset.get(event_type, 0.0)
+                )
+            agent_conviction = (
+                class_conviction
+                + style_tilt
+                + explicit_offset
+                + rng.gauss(0, dispersion)
+            )
 
             if agent_conviction > 0.02:
                 agent_frac = min(abs(agent_conviction), 1.0)
                 buy_pool = pool if pool and side == "buy" else "cash"
                 spec = {"side": "buy", "pool": buy_pool, "fraction": agent_frac}
-                histogram["buy"] += 1
+                action_name = "buy"
             elif agent_conviction < -0.02:
                 agent_frac = min(abs(agent_conviction), 1.0)
                 sell_pool = pool if pool and side == "sell" else "holdings_in_target"
                 spec = {"side": "sell", "pool": sell_pool, "fraction": agent_frac}
-                histogram["sell"] += 1
+                action_name = "sell"
             else:
                 spec = {"side": "none", "pool": "none", "fraction": 0.0}
-                histogram["hold"] += 1
+                action_name = "hold"
+
+            histogram[action_name] += 1
+            bucket = histogram_by_sub_pop.setdefault(
+                agent_inst.sub_pop_id,
+                {"buy": 0, "sell": 0, "hold": 0},
+            )
+            bucket[action_name] += 1
 
             agent_specs.append((agent_inst, spec))
 
@@ -682,6 +770,8 @@ def apply_distribution_to_agent_pop(
         for agent_inst, action_name in zip(active_agents, sampled_names):
             spec = spec_by_name.get(action_name)
             histogram[action_name] = histogram.get(action_name, 0) + 1
+            bucket = histogram_by_sub_pop.setdefault(agent_inst.sub_pop_id, {})
+            bucket[action_name] = bucket.get(action_name, 0) + 1
             if spec is None:
                 agent_specs.append((agent_inst, {"side": "none", "pool": "none", "fraction": 0.0}))
             else:
@@ -775,6 +865,7 @@ def apply_distribution_to_agent_pop(
         fill_rate=avg_fill_rate,
         unfilled_volume=total_unfilled,
         t1_blocked_sells=t1_blocked,
+        action_histogram_by_sub_pop=histogram_by_sub_pop,
     )
 
 
