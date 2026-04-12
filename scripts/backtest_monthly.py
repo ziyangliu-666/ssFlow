@@ -50,7 +50,7 @@ from ssflow.information.external_events import (
     SimSnapshot,
 )
 from ssflow.instrument import Instrument, InstrumentUniverse
-from ssflow.market_data import fetch_kline_historical
+from ssflow.market_data import fetch_kline_historical_cached as fetch_kline_historical
 from ssflow.oasis_engine import run_simulation
 from ssflow.persona import load_personas
 from ssflow.round_schedule import make_schedule

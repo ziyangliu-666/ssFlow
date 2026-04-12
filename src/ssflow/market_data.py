@@ -43,11 +43,13 @@ synthesis produced.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import statistics
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import httpx
 
@@ -608,6 +610,31 @@ async def _fetch_sina_kline_bars(
         return []
 
 
+def _historical_cache_path(
+    ticker: str,
+    as_of_date: str,
+    months_forward: int,
+    months_back: int,
+    market: str,
+) -> "Path":
+    """Return the on-disk cache path for a historical kline request.
+
+    Caches are keyed on (market, ticker, as_of_date, months_forward,
+    months_back) because those uniquely determine the slice returned
+    by ``fetch_kline_historical``. The cache is only writable when the
+    upstream Sina/yfinance fetch succeeds — on failure we read whatever
+    was cached previously, allowing reproducible backtests even when
+    the upstream API is down.
+    """
+    from pathlib import Path
+    from .config import settings
+
+    cache_dir = Path(settings.reports_dir) / "market_data_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = f"{market}_{ticker}_{as_of_date}_f{months_forward}_b{months_back}.json"
+    return cache_dir / key
+
+
 async def fetch_kline_historical(
     ticker: str,
     as_of_date: str,
@@ -731,7 +758,7 @@ async def fetch_kline_historical(
         if backward_cutoff <= str(b.get("date", "")) <= anchor_date
     ]
 
-    return {
+    result = {
         "anchor_bar": anchor,
         "anchor_date": anchor_date,
         "forward_bars": forward_bars,
@@ -739,10 +766,81 @@ async def fetch_kline_historical(
         "all_bars": bars,
     }
 
+    # Persist to on-disk cache on success so subsequent runs can fall
+    # back when Sina / yfinance is down. Backtest reliability was
+    # tanking on 2026-04-12 because Sina's historical kline endpoint
+    # intermittently returned empty payloads for all 5 tickers, forcing
+    # full-sim SKIP and blocking Phase 8 iteration.
+    try:
+        cache_path = _historical_cache_path(
+            ticker, as_of_date, months_forward, months_back, market,
+        )
+        cache_path.write_text(
+            json.dumps(result, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        log.warning("fetch_kline_historical cache write failed: %s", exc)
+
+    return result
+
+
+async def fetch_kline_historical_cached(
+    ticker: str,
+    as_of_date: str,
+    months_forward: int = 6,
+    months_back: int = 1,
+    market: str = "ashare",
+) -> dict[str, Any]:
+    """Cache-first wrapper around ``fetch_kline_historical``.
+
+    Reads from disk cache if present; otherwise fetches from upstream
+    and caches the result. Returns an empty structure only when BOTH
+    the cache and upstream fetch fail.
+
+    Design: cache-first (not stale-while-revalidate) because historical
+    kline data for past events is immutable. Once fetched correctly it
+    never needs refreshing.
+    """
+    import json
+
+    cache_path = _historical_cache_path(
+        ticker, as_of_date, months_forward, months_back, market,
+    )
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if data.get("anchor_bar"):
+                return data
+        except Exception as exc:
+            log.warning(
+                "fetch_kline_historical_cached: cache read failed for %s: %s",
+                cache_path, exc,
+            )
+
+    # Cache miss or corrupt — go to upstream
+    result = await fetch_kline_historical(
+        ticker=ticker,
+        as_of_date=as_of_date,
+        months_forward=months_forward,
+        months_back=months_back,
+        market=market,
+    )
+    # If upstream also failed but we have a (presumably stale/partial)
+    # cache, prefer that over the empty structure — any data is better
+    # than nothing for backtest reproducibility.
+    if not result.get("anchor_bar") and cache_path.exists():
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return result
+
 
 __all__ = [
     "MarketQuote",
     "fetch_kline_30d",
+    "fetch_kline_historical_cached",
     "fetch_kline_historical",
     "fetch_market_quote",
     "fetch_market_quotes",
