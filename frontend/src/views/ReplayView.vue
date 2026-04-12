@@ -238,7 +238,7 @@ const loading = ref(true)
 const errorMsg = ref('')
 
 const filterTypes = ref([
-  { label: '想法', value: 'persona_thought', on: true },
+  { label: '想法', value: 'persona_thought', on: false },
   { label: '交易', value: 'trade_submitted', on: true },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },

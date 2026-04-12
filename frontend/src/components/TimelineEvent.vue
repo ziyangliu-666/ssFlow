@@ -340,8 +340,18 @@ function priceDeltaClass (v) {
 .t-ev {
   display: flex;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
   position: relative;
+}
+/* Trades and flows are high-frequency — tighter spacing */
+.t-ev.trade,
+.t-ev.flow {
+  margin-bottom: 8px;
+}
+/* Round-end is just a summary line, minimal space */
+.t-ev.round-end {
+  margin-bottom: 6px;
+  opacity: 0.6;
 }
 
 .marker {
@@ -366,13 +376,26 @@ function priceDeltaClass (v) {
 }
 .t-ev.thought .marker {
   background: var(--ss-bg-soft);
-  border-color: var(--ss-fg-muted);
-  color: var(--ss-fg);
+  border-color: var(--ss-line-strong);
+  color: var(--ss-fg-muted);
+}
+/* Thoughts are the highest-volume event. Keep them visually light
+   so they don't compete with trades and price updates. */
+.t-ev.thought {
+  opacity: 0.75;
+}
+.t-ev.thought:hover {
+  opacity: 1;
 }
 .t-ev.price .marker {
   background: var(--ss-fg);
   border-color: var(--ss-fg);
   color: #fff;
+}
+/* Price updates are the key signal each round — make them pop */
+.t-ev.price {
+  padding: 8px 0;
+  margin-bottom: 16px;
 }
 .t-ev.round .marker, .t-ev.round-end .marker {
   background: var(--ss-bg-soft);
@@ -384,12 +407,12 @@ function priceDeltaClass (v) {
    horizontal rule across the full feed width so visually the reader
    sees "new round starts here" at a glance. */
 .t-ev.round {
-  margin-top: 22px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--ss-line-strong);
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 2px solid var(--ss-line-strong);
 }
 .t-ev.round :deep(.body-h) {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--ss-fg);
 }
@@ -398,8 +421,9 @@ function priceDeltaClass (v) {
   font-style: italic;
 }
 .t-ev.round :deep(.t-text) {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ss-fg);
+  font-weight: 500;
 }
 /* First round in the feed shouldn't have a rule above it (nothing to
    separate from). */

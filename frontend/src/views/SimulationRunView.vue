@@ -368,7 +368,7 @@ const eventBuffer = ref([])           // buffered events while paused
 // user sees what they care about; everything else is engine-detail noise
 // and defaults off. Users who want to see the mechanics can flip chips on.
 const filterTypes = ref([
-  { label: '想法', value: 'persona_thought', on: true },
+  { label: '想法', value: 'persona_thought', on: false },
   { label: '交易', value: 'trade_submitted', on: true },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },
