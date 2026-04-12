@@ -518,6 +518,11 @@ function sparkline (bars) {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; }
+  .status-dot.pulse { animation: none; }
+  .status-label::after { animation: none; }
+}
 
 /* Skip note */
 .skip-note {
@@ -541,7 +546,7 @@ function sparkline (bars) {
 .item-badge {
   font-size: 10px;
   color: var(--ss-info);
-  background: #eef3fb;
+  background: rgba(44, 102, 212, 0.08);
   padding: 1px 5px;
   border-radius: 2px;
   flex-shrink: 0;
@@ -567,9 +572,9 @@ function sparkline (bars) {
   flex-shrink: 0;
   font-weight: 500;
 }
-.doc-kind.pdf { background: #fce8e8; color: #c43c3c; }
-.doc-kind.html, .doc-kind.url { background: #eef3fb; color: var(--ss-info); }
-.doc-kind.image { background: #f0e8fc; color: #7c3aed; }
+.doc-kind.pdf { background: rgba(196, 60, 60, 0.08); color: var(--ss-bad); }
+.doc-kind.html, .doc-kind.url { background: rgba(44, 102, 212, 0.08); color: var(--ss-info); }
+.doc-kind.image { background: rgba(107, 107, 107, 0.08); color: var(--ss-fg-muted); }
 .doc-title {
   flex: 1;
   min-width: 0;
@@ -640,7 +645,7 @@ function sparkline (bars) {
   transition: width 0.6s ease;
 }
 .conf-fill.high { background: var(--ss-accent); }
-.conf-fill.mid  { background: #e6a23c; }
+.conf-fill.mid  { background: var(--ss-fg-muted); }
 .conf-fill.low  { background: var(--ss-fg-faint); }
 .conf-val { font-size: 10px; color: var(--ss-fg-faint); text-align: right; }
 
