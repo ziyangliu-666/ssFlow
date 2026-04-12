@@ -234,7 +234,6 @@ personas:
           fomo: 0.95
         event_conviction_offset:
           policy: 0.25        # 打鸡血能量最大
-          earnings: -0.05
 
       - id: burnt_veteran
         label_zh: 被套老油条

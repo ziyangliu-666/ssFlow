@@ -84,7 +84,11 @@ STYLE_TILT: dict[str, dict[str, float]] = {
         "demand_shock": +0.05,
         "regulatory": -0.30,
         "lawsuit": -0.25,
-        "earnings": +0.10,
+        # Earnings direction depends on beat-vs-miss polarity, which the
+        # style tilt cannot know. A fixed positive tilt here flipped 五粮液
+        # (earnings miss) from correct -19% to wrong +5% in backtest v4.
+        # Leave at 0.0 so the LLM class decision drives direction alone.
+        "earnings": 0.0,
     },
     "panic": {
         "policy": 0.0,
@@ -92,7 +96,10 @@ STYLE_TILT: dict[str, dict[str, float]] = {
         "demand_shock": 0.0,
         "regulatory": -0.30,
         "lawsuit": -0.20,
-        "earnings": -0.15,
+        # Same reasoning as fundamental: panic's negative tilt here was
+        # correct for misses but wrong for beats. Zeroed to avoid
+        # polarity-ignorant interference.
+        "earnings": 0.0,
     },
     "conviction": {
         "policy": +0.15,
@@ -100,7 +107,7 @@ STYLE_TILT: dict[str, dict[str, float]] = {
         "demand_shock": +0.10,
         "regulatory": -0.15,
         "lawsuit": -0.10,
-        "earnings": +0.05,
+        "earnings": 0.0,
     },
 }
 

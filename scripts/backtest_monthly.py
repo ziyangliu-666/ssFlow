@@ -630,9 +630,21 @@ async def main() -> None:
         help="A/B ablation: don't inject DynamicEventStream mid-sim events. "
              "Use with --disable-self-model to measure P0 bug fixes alone.",
     )
+    parser.add_argument(
+        "--personas",
+        default=None,
+        help="A/B ablation: override the default personas/ashare.yaml. "
+             "Used by the v3-vs-v4 sub-population study to measure model "
+             "vs mechanism contributions independently.",
+    )
     args = parser.parse_args()
     FLAG_DISABLE_SELF_MODEL = bool(args.disable_self_model)
     FLAG_DISABLE_EVENTS = bool(args.no_events)
+
+    global PERSONAS_PATH
+    if args.personas:
+        PERSONAS_PATH = Path(args.personas)
+        print(f"[ablation] using persona pack: {PERSONAS_PATH}", file=sys.stderr)
     if FLAG_DISABLE_SELF_MODEL or FLAG_DISABLE_EVENTS:
         print(
             f"[ablation] disable_self_model={FLAG_DISABLE_SELF_MODEL} "
