@@ -593,7 +593,8 @@ async function onStart () {
   color: var(--ss-fg-muted);
   background: #fff;
   border: 1px solid var(--ss-line);
-  padding: 5px 10px;
+  padding: 6px 12px;
+  min-height: 32px;
   border-radius: 6px;
   cursor: pointer;
   font-family: inherit;
@@ -611,7 +612,8 @@ async function onStart () {
 }
 .pill {
   font-size: 11px;
-  padding: 5px 12px;
+  padding: 6px 12px;
+  min-height: 32px;
   border-radius: 999px;
   border: 1px solid var(--ss-line);
   background: #fff;
@@ -766,7 +768,11 @@ async function onStart () {
   resize: vertical;
   outline: none;
 }
-.event-textarea:focus { border-color: var(--ss-accent); }
+.event-textarea:focus-visible {
+  border-color: var(--ss-accent);
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 1px;
+}
 
 /* Entity sandbox */
 .entity-grid {
@@ -901,7 +907,11 @@ async function onStart () {
   color: var(--ss-fg);
   background: #fff;
 }
-.foot-meta .inp:focus { border-color: var(--ss-accent); }
+.foot-meta .inp:focus-visible {
+  border-color: var(--ss-accent);
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 1px;
+}
 .base-pack {
   margin-left: 14px;
   font-size: 11px;
@@ -925,6 +935,7 @@ async function onStart () {
   border: 0;
   border-radius: 8px;
   padding: 10px 18px;
+  min-height: 44px;
   font: 500 13px 'Inter', sans-serif;
   cursor: pointer;
   display: inline-flex;
