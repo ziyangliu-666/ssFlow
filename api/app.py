@@ -106,6 +106,36 @@ def create_app() -> Flask:
     def healthz():
         return jsonify({"status": "ok", "version": "0.0.3"})
 
+    @app.get("/schedule/presets")
+    def schedule_presets():
+        """List available round-schedule presets with round counts."""
+        from ssflow.round_schedule import _PRESETS, PRESET_NAMES
+        out = []
+        for name in PRESET_NAMES:
+            rounds = _PRESETS[name]
+            out.append({
+                "id": name,
+                "n_rounds": len(rounds),
+                "labels": [r["label"] for r in rounds[:6]] + (
+                    [f"…+{len(rounds) - 6}"] if len(rounds) > 6 else []
+                ),
+            })
+        return jsonify(out)
+
+    @app.post("/schedule/preview")
+    def schedule_preview():
+        """Preview a round schedule for a given preset or custom spec."""
+        from ssflow.round_schedule import make_schedule
+        payload = request.get_json(silent=True) or {}
+        preset = payload.get("preset", "earnings-5d")
+        event_date = payload.get("event_date", "TBD")
+        spec = payload.get("spec")
+        try:
+            schedule = make_schedule(preset=preset, event_date=event_date, spec=spec)
+            return jsonify(schedule.to_serializable())
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.get("/")
     def index():
         root = _spa_root()

@@ -221,11 +221,19 @@
 
     <footer v-if="session.eventProposal" class="bottom-bar">
       <div class="foot-meta">
-        <span><em>轮数</em></span>
-        <input v-model.number="nRounds" type="number" min="1" max="20" class="inp" />
-        <span><em>随机种子</em></span>
+        <span><em>时间轴</em></span>
+        <select v-model="schedulePreset" class="inp schedule-select" @change="onPresetChange">
+          <option value="flash-1d">闪电 1天 (1轮)</option>
+          <option value="quick-3r">快速 2天 (3轮)</option>
+          <option value="intraday">盘中 1天 (4轮)</option>
+          <option value="earnings-3d">短线 3天 (4轮)</option>
+          <option value="earnings-5d">标准 5天 (6轮)</option>
+          <option value="policy-10d">政策 10天 (11轮)</option>
+          <option value="monthly-6m">月度 6月 (6轮)</option>
+          <option value="weekly-6m">周度 6月 (26轮)</option>
+        </select>
+        <span><em>种子</em></span>
         <input v-model.number="seed" type="number" class="inp" />
-        <span class="base-pack">基础角色包：<em>{{ session.basePersonasPath }}</em></span>
       </div>
       <div class="spacer"></div>
       <span v-if="status" class="status">{{ status }}</span>
@@ -250,6 +258,7 @@ import { session } from '../store/session'
 import WorkflowRail from '../components/WorkflowRail.vue'
 import EventProposalForm from '../components/EventProposalForm.vue'
 import PersonaCard from '../components/PersonaCard.vue'
+import { http } from '../api/client'
 import { fetchPersonaTemplate } from '../api/extract'
 import { initSimulationStream } from '../api/simulate'
 
@@ -259,6 +268,7 @@ const event = ref({})
 const personas = ref([])
 const nRounds = ref(5)
 const seed = ref(42)
+const schedulePreset = ref('earnings-5d')
 const loading = ref(false)
 const status = ref('')
 const activeFilter = ref('all')
@@ -447,6 +457,20 @@ async function addPersona () {
   } catch (err) {
     console.error(err)
     status.value = '添加角色失败：' + err.message
+  }
+}
+
+async function onPresetChange () {
+  const eventDate = event.value?.event_date || ''
+  try {
+    const r = await http.post('/schedule/preview', {
+      preset: schedulePreset.value,
+      event_date: eventDate,
+    })
+    session.roundSchedule = r.data
+    nRounds.value = r.data?.rounds?.length || nRounds.value
+  } catch (err) {
+    console.warn('Schedule preview failed:', err)
   }
 }
 
@@ -906,6 +930,11 @@ async function onStart () {
   outline: none;
   color: var(--ss-fg);
   background: #fff;
+}
+.schedule-select {
+  width: auto;
+  min-width: 130px;
+  appearance: auto;
 }
 .foot-meta .inp:focus-visible {
   border-color: var(--ss-accent);

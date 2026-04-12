@@ -47,6 +47,7 @@ export default defineConfig({
       '/cost':               { target: 'http://localhost:5001', changeOrigin: true },
       '/distill':            { target: 'http://localhost:5001', changeOrigin: true },
       '/sandbox':            { target: 'http://localhost:5001', changeOrigin: true },
+      '/schedule':           { target: 'http://localhost:5001', changeOrigin: true },
     },
   },
   build: {
