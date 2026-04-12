@@ -46,6 +46,7 @@ from typing import Optional
 import oasis
 from oasis.environment.env_action import LLMAction, ManualAction
 from oasis.social_platform.channel import Channel
+from oasis.social_platform.platform import Platform
 from oasis.social_platform.typing import ActionType, DefaultPlatformType
 
 from .config import settings
@@ -655,9 +656,38 @@ async def run_simulation(
     )
 
     # ── Build the OASIS env ──
+    # Use a custom Platform instance instead of DefaultPlatformType.TWITTER
+    # so we can swap the recsys away from twhin-bert. The twhin path runs
+    # BERT forward passes over the full post corpus on every refresh
+    # (`rec_sys_personalized_twh` → `generate_post_vector`), which on CPU
+    # can spike to 500-1100s wall-clock per refresh as post count grows.
+    # The 2026-04-12 reliability runs saw intermittent 100-300s stalls
+    # inside twhin that tripled single-event wall-clock and sometimes
+    # hung for 20+ minutes.
+    #
+    # ``reddit`` uses the cheap hot-score ranking (pure numpy, <10ms per
+    # refresh regardless of post count). This matches financial-news
+    # feed semantics better than "bio similarity" anyway — trending
+    # catalysts and institutional posts should surface by activity
+    # score, not by cosine similarity to trader profile text.
+    #
+    # Backward compat: set ``SSFLOW_OASIS_RECSYS=twhin-bert`` to restore
+    # the original path for experiments that need BERT semantics.
+    _recsys_type = os.environ.get("SSFLOW_OASIS_RECSYS", "reddit")
+    _oasis_channel = Channel()
+    _platform = Platform(
+        db_path=str(db_path_obj),
+        channel=_oasis_channel,
+        recsys_type=_recsys_type,
+        refresh_rec_post_count=5,   # was 2 in twitter default — 5 is enough for a trader feed
+        max_rec_post_len=10,        # was 2 — give traders a bit more context per refresh
+        following_post_count=5,
+        show_score=False,           # twitter-ish, not reddit-ish
+        allow_self_rating=True,
+    )
     env = oasis.make(
         agent_graph=agent_graph,
-        platform=DefaultPlatformType.TWITTER,
+        platform=_platform,
         database_path=str(db_path_obj),
     )
     await env.reset()
