@@ -6,6 +6,11 @@
       <div v-if="!session.eventProposal" class="empty">
         <h1>还没有<span class="accent">抽取</span>结果。</h1>
         <p>先回到开始页上传文档并点「开始抽取」。</p>
+        <div class="empty-context">
+          <div class="empty-item"><span class="empty-glyph">◇</span>事件结构 — 股票代码、市场、事件类型、日期</div>
+          <div class="empty-item"><span class="empty-glyph">◇</span>AI 角色 — 交易员、媒体、分析师、监管、KOL</div>
+          <div class="empty-item"><span class="empty-glyph">◇</span>标的宇宙 — 相关股票 + 实时价格 + 30 日 K 线</div>
+        </div>
         <button class="btn" type="button" @click="$router.push('/')">← 返回开始</button>
       </div>
 
@@ -143,22 +148,7 @@
               </div>
             </section>
 
-            <!-- ROUND SCHEDULE -->
-            <section v-if="roundSchedule && roundSchedule.rounds" class="schedule-section">
-              <div class="section-h">
-                <span class="t">时间轴</span>
-                <span class="tag">{{ roundSchedule.rounds.length }} 轮</span>
-              </div>
-              <div class="schedule-row">
-                <span
-                  v-for="(rd, i) in roundSchedule.rounds"
-                  :key="rd.id"
-                  class="round-chip mono"
-                >{{ rd.label }}</span>
-              </div>
-            </section>
-
-            <!-- ENTITY GRAPH -->
+            <!-- ENTITY GRAPH — primary context, alongside instruments -->
             <section v-if="entityGraph && entityGraph.entities" class="entity-section">
               <div class="section-h">
                 <span class="t">实体关系</span>
@@ -184,7 +174,22 @@
               </div>
             </section>
 
-            <!-- SIMULATION PARAMS -->
+            <!-- ROUND SCHEDULE — secondary context -->
+            <section v-if="roundSchedule && roundSchedule.rounds" class="schedule-section">
+              <div class="section-h">
+                <span class="t">时间轴</span>
+                <span class="tag">{{ roundSchedule.rounds.length }} 轮</span>
+              </div>
+              <div class="schedule-row">
+                <span
+                  v-for="(rd, i) in roundSchedule.rounds"
+                  :key="rd.id"
+                  class="round-chip mono"
+                >{{ rd.label }}</span>
+              </div>
+            </section>
+
+            <!-- SIMULATION PARAMS — secondary context -->
             <section v-if="simParams" class="sim-params-section" data-testid="sim-params">
               <div class="section-h">
                 <span class="t">推演校准参数</span>
@@ -543,7 +548,26 @@ async function onStart () {
   color: var(--ss-accent);
   margin: 0 0.08em;
 }
-.empty p { color: var(--ss-fg-muted); margin-bottom: 24px; }
+.empty p { color: var(--ss-fg-muted); margin-bottom: 16px; }
+.empty-context {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.empty-item {
+  font-size: 13px;
+  color: var(--ss-fg-muted);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1.5;
+}
+.empty-glyph {
+  color: var(--ss-accent);
+  font-size: 11px;
+  flex-shrink: 0;
+}
 .btn {
   background: var(--ss-fg); color: #fff;
   border: 0; border-radius: 8px;
@@ -719,9 +743,16 @@ async function onStart () {
   border-top: 1px dashed var(--ss-line);
 }
 
-/* Instrument Universe */
-.universe-section, .entity-section, .schedule-section, .sim-params-section {
+/* Instrument Universe — primary context, prominent */
+.universe-section, .entity-section {
   margin-bottom: 24px;
+}
+
+/* Schedule + Params — secondary context, dimmer */
+.schedule-section, .sim-params-section {
+  margin-bottom: 16px;
+  opacity: 0.75;
+  font-size: 0.95em;
 }
 .universe-grid {
   display: grid;

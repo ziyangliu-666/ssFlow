@@ -197,11 +197,16 @@
       <div class="body">
         <div class="head">
           <span class="title">准备就绪</span>
-          <span v-if="stepDone('ready')" class="active-hint done-hint">全部完成</span>
+          <span v-if="stepActive('ready')" class="active-hint done-hint">全部完成</span>
         </div>
-        <div v-if="stepDone('ready')" class="content">
+        <div v-if="stepActive('ready')" class="content">
+          <div class="ready-summary">
+            <span v-if="eventProposal">{{ eventProposal.instrument || eventProposal.ticker }}</span>
+            <span v-if="personas.length" class="mono">· {{ personas.length }} 个角色</span>
+            <span v-if="instrumentCount" class="mono">· {{ instrumentCount }} 个标的</span>
+          </div>
           <button class="go-btn" type="button" @click="$emit('go-setup')">
-            进入确认 →
+            确认结果 →
           </button>
         </div>
       </div>
@@ -683,7 +688,7 @@ function sparkline (bars) {
   font-size: 11px;
   color: var(--ss-fg);
 }
-.persona-chip.trader { border-top: 2px solid var(--ss-accent); }
+.persona-chip.trader { font-weight: 500; }
 .persona-chip.more {
   color: var(--ss-fg-faint);
   font-style: italic;
@@ -797,6 +802,13 @@ function sparkline (bars) {
   border: 1px solid var(--ss-line);
   border-radius: 3px;
   color: var(--ss-fg-muted);
+}
+
+/* Ready summary */
+.ready-summary {
+  font-size: 12px;
+  color: var(--ss-fg-muted);
+  margin-bottom: 10px;
 }
 
 /* Go button */

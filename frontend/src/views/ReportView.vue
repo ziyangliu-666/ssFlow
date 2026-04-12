@@ -854,6 +854,10 @@ onMounted(() => {
 }
 .aside-btn.primary:hover:not(:disabled) { background: var(--ss-accent); border-color: var(--ss-accent); }
 
+@media (max-width: 860px) {
+  .aside-btn { display: none; }
+}
+
 /* Round-by-round inspector — sits between the summary strip and the
    report body. Click R0/R1/… to inspect a round without playing back. */
 .rounds {

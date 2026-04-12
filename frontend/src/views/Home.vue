@@ -13,7 +13,7 @@
       <div class="wrap">
         <div class="eyebrow">市场事件 · 群体推演</div>
         <h1 aria-label="一条消息，如何在市场里发酵。">
-          一条消息，如何在市场里<span class="verb-slot">
+          一条消息，如何在市场里<span class="verb-group"><span class="verb-slot">
             <transition name="rip">
               <span
                 class="accent-verb"
@@ -21,7 +21,7 @@
                 aria-live="polite"
               >{{ currentVerb }}</span>
             </transition>
-          </span><span class="period">。</span>
+          </span><span class="period">。</span></span>
         </h1>
         <p class="sub">
           拖入研报、新闻、财报，写下你想跟踪的走势。ssFlow 会抽出要研究的对象、
@@ -381,10 +381,9 @@ async function onStart () {
       console.warn('Distill/sandbox failed (non-fatal):', distillErr)
     }
 
-    // Phase 4: Done — show results briefly, then auto-navigate
+    // Phase 4: Done — show extraction summary and explicit CTA
     pipelinePhase.value = 'done'
     status.value = ''
-    setTimeout(() => router.push({ name: 'Setup' }), 1500)
   } catch (err) {
     console.error(err)
     status.value = ''
@@ -453,6 +452,9 @@ h1 {
    up and out the top) doesn't shift the rest of the headline. All
    verbs in the pool are exactly 2 CJK characters wide, so a 2-char
    slot is enough. overflow:hidden clips the verbs as they slide. */
+h1 .verb-group {
+  white-space: nowrap;
+}
 h1 .verb-slot {
   display: inline-block;
   position: relative;
