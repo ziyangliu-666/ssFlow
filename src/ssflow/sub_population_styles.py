@@ -112,15 +112,24 @@ STYLE_TILT: dict[str, dict[str, float]] = {
 }
 
 
-def style_tilt_for(style: str, event_type: str) -> float:
+def style_tilt_for(
+    style: str,
+    event_type: str,
+    tilt_table: dict[str, dict[str, float]] | None = None,
+) -> float:
     """Return the additive conviction offset for (style, event_type).
+
+    When ``tilt_table`` is provided (from ``SimulationParams.decision``),
+    it overrides the module-level ``STYLE_TILT`` constant.  This lets
+    each simulation carry its own calibrated tilt table.
 
     Returns 0.0 on any unknown key — never raises — so the engine can
     call this in a hot loop without defensive try/except and so new
     event_types added by the research layer don't crash existing
     backtests (plan-agent fatal issue #3).
     """
-    return STYLE_TILT.get(style, {}).get(event_type, 0.0)
+    table = tilt_table if tilt_table is not None else STYLE_TILT
+    return table.get(style, {}).get(event_type, 0.0)
 
 
 def flat_action_histogram(histogram: dict[str, object]) -> dict[str, int]:

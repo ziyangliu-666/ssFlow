@@ -32,6 +32,7 @@ from typing import Any
 from .limit_board import LimitBoard, T1Ledger
 from .output_filter import sanitize_text
 from .persona import Persona, SubPopulation
+from .simulation_params import DecisionParams
 from .sub_population_styles import style_tilt_for
 
 
@@ -585,6 +586,7 @@ def apply_distribution_to_agent_pop(
     limit_board: LimitBoard | None = None,
     t1_ledger: T1Ledger | None = None,
     event_type: str = "",
+    decision_params: DecisionParams | None = None,
 ) -> ClassFlowResult:
     """Pure-math: sample one action per agent from `distribution`, apply it,
     return aggregated ClassFlowResult. Does NOT make any LLM calls.
@@ -691,23 +693,24 @@ def apply_distribution_to_agent_pop(
             class_conviction = 0.0
 
         # Compute per-agent dispersion from persona biases.
-        # High herd_following → low dispersion (agents follow the class)
-        # High contrarian_tendency → high dispersion (agents diverge)
-        # Default: moderate dispersion (0.30) for personas without biases.
+        # Weights and floor are now driven by DecisionParams so each
+        # simulation can have different sensitivity.
+        dp = decision_params or DecisionParams()
         biases = persona.biases if persona.biases else {}
         herd = biases.get("herd_following", biases.get("herd_mentality", 0.5))
         contrarian = biases.get("contrarian_tendency", 0.0)
-        dispersion = max(0.05, 0.5 * (1.0 - herd) + 0.3 * contrarian)
+        dispersion = max(
+            dp.min_dispersion,
+            dp.herd_weight * (1.0 - herd) + dp.contrarian_weight * contrarian,
+        )
+        conv_thresh = dp.conviction_threshold
+        tilt_table = dp.style_tilt if dp.style_tilt else None
 
         histogram = {"buy": 0, "sell": 0, "hold": 0}
         for agent_inst in active_agents:
-            # Structural heterogeneity: add a deterministic sub-pop tilt
-            # (by decision_style × event_type) plus any explicit
-            # event_conviction_offset declared on the SubPopulation.
-            # These land on top of the class conviction BEFORE Gaussian
-            # noise so different sub-pops in the same class can end up
-            # on opposite sides of the 0.02 / -0.02 threshold.
-            style_tilt = style_tilt_for(agent_inst.sub_pop_style, event_type)
+            style_tilt = style_tilt_for(
+                agent_inst.sub_pop_style, event_type, tilt_table=tilt_table,
+            )
             explicit_offset = 0.0
             traits = agent_inst.sub_pop_traits
             if traits is not None and traits.event_conviction_offset:
@@ -721,12 +724,12 @@ def apply_distribution_to_agent_pop(
                 + rng.gauss(0, dispersion)
             )
 
-            if agent_conviction > 0.02:
+            if agent_conviction > conv_thresh:
                 agent_frac = min(abs(agent_conviction), 1.0)
                 buy_pool = pool if pool and side == "buy" else "cash"
                 spec = {"side": "buy", "pool": buy_pool, "fraction": agent_frac}
                 action_name = "buy"
-            elif agent_conviction < -0.02:
+            elif agent_conviction < -conv_thresh:
                 agent_frac = min(abs(agent_conviction), 1.0)
                 sell_pool = pool if pool and side == "sell" else "holdings_in_target"
                 spec = {"side": "sell", "pool": sell_pool, "fraction": agent_frac}

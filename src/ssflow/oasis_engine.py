@@ -107,6 +107,7 @@ from .self_model import (
     build_evaluators_for_personas,
 )
 from .self_model.schema import RoundCtx as SelfModelRoundCtx, TradeResult as SelfModelTradeResult
+from .simulation_params import SimulationParams
 from .trading_layer import (
     Agent,
     ClassFlowResult,
@@ -483,6 +484,7 @@ async def run_simulation(
     round_schedule: "RoundSchedule | None" = None,
     sim_graph: "SimGraph | None" = None,
     self_model_enabled: bool = True,
+    sim_params: "SimulationParams | None" = None,
 ) -> OasisSimResult:
     """Run a Phase I OASIS-based market simulation.
 
@@ -525,6 +527,10 @@ async def run_simulation(
         BudgetExceeded: if cost guard trips mid-run
     """
     _patch_oasis_recsys()
+
+    # Resolve per-simulation parameters. None → use hardcoded defaults
+    # (backward compat for all existing callers and tests).
+    _sim_params = sim_params or SimulationParams.defaults()
 
     if not personas:
         raise ValueError("run_simulation requires at least one persona")
@@ -1856,6 +1862,7 @@ async def run_simulation(
                     limit_board=limit_board,
                     t1_ledger=t1_ledger,
                     event_type=event.event_type or "",
+                    decision_params=_sim_params.decision,
                 )
                 class_flows.append(flow)
                 submitted_ids.add(order.persona_id)
@@ -1917,6 +1924,7 @@ async def run_simulation(
                     limit_board=limit_board,
                     t1_ledger=t1_ledger,
                     event_type=event.event_type or "",
+                    decision_params=_sim_params.decision,
                 )
                 class_flows.append(hold_flow)
                 safe_emit(
