@@ -911,18 +911,12 @@ async def run_simulation(
         for round_idx in range(n_rounds):
             log.info("OASIS sim %s round %d starting at price %.2f",
                      simulation_id, round_idx, current_price)
-            safe_emit(
-                event_sink,
-                EVENT_ROUND_START,
-                simulation_id=simulation_id,
-                round_idx=round_idx,
-                current_price=current_price,
-            )
             pre_round_post_id = _max_post_id(str(db_path_obj))
             order_collector.set_round(round_idx)
             action_collector.set_round(round_idx)
 
-            # 0.5. Read time context from round_schedule
+            # 0.5. Read time context from round_schedule (BEFORE emitting
+            #      round_start so the event carries the label + active types)
             round_label = ""
             active_types: set[str] | None = None
             if round_schedule is not None:
@@ -954,6 +948,24 @@ async def run_simulation(
                                     "limit board reset at %.2f, T+1 ledger cleared",
                                     round_idx, curr_day, current_price,
                                 )
+
+            # Emit round_start with schedule metadata so the frontend can
+            # display which persona types are active this round.
+            _hours = None
+            if round_schedule is not None:
+                _rd = round_schedule.get_round(round_idx)
+                if _rd:
+                    _hours = _rd.hours_since_event
+            safe_emit(
+                event_sink,
+                EVENT_ROUND_START,
+                simulation_id=simulation_id,
+                round_idx=round_idx,
+                current_price=current_price,
+                round_label=round_label or None,
+                active_agent_types=sorted(active_types) if active_types else None,
+                hours_since_event=_hours,
+            )
 
             # 0.6. Pre-open auction: estimate the opening shock and pre-set
             #      the limit board state BEFORE any agent trades this day.

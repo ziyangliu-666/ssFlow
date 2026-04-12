@@ -29,6 +29,13 @@
         <span v-if="payload.hours_since_event" class="mono subdued">
           (事件后 {{ payload.hours_since_event }}h)
         </span>
+        <div v-if="payload.active_agent_types && payload.active_agent_types.length" class="active-types">
+          本轮参与：<span
+            v-for="t in payload.active_agent_types"
+            :key="t"
+            class="atype-chip"
+          >{{ agentTypeLabel(t) }}</span>
+        </div>
       </div>
 
       <!-- persona_thought -->
@@ -334,6 +341,14 @@ function priceDeltaClass (v) {
   if (typeof v !== 'number') return ''
   return v > 0 ? 'good' : v < 0 ? 'bad' : ''
 }
+
+const AGENT_TYPE_LABELS = {
+  retail: '散户', institutional: '机构', strategic: '产业/战略',
+  kol: 'KOL', analyst: '分析师', media: '媒体',
+  news_wire: '资讯', quant: '量化', regulator: '监管',
+  policy: '政策', company_ir: '上市公司',
+}
+function agentTypeLabel (t) { return AGENT_TYPE_LABELS[t] || t }
 </script>
 
 <style scoped>
@@ -721,4 +736,24 @@ function priceDeltaClass (v) {
 
 .good { color: var(--ss-good); }
 .bad  { color: var(--ss-bad); }
+
+/* Active agent types shown on round_start */
+.active-types {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ss-fg-muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.atype-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--ss-line);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--ss-fg);
+  background: var(--ss-bg-soft);
+}
 </style>
