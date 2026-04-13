@@ -104,6 +104,14 @@ _ASHARE_TICKER_RE = re.compile(r"^\d{6}$")
 # CNY (not shares), so we must NOT multiply by close when computing ADV.
 _SZSE_INDEX_RE = re.compile(r"^399\d{3}$")
 
+# For index tickers the Sina volume captures index-tracking product
+# turnover, not the aggregate constituent-stock market depth.  Real
+# constituent ADV for broad indices like 创业板指 is typically 15-20×
+# the index-level number.  We apply a fixed multiplier so the Kyle
+# price-impact formula uses a market-depth denominator that matches
+# reality (i.e. ~3000億, not ~200億).
+_INDEX_ADV_CONSTITUENT_MULTIPLIER = 15.0
+
 
 def _ashare_prefix(ticker: str) -> tuple[str, str]:
     """Return (sina_prefix, eastmoney_prefix) for a 6-digit A-share ticker.
@@ -235,7 +243,10 @@ async def _fetch_sina_kline_adv(
                 continue
         if not turnovers:
             return None
-        return statistics.mean(turnovers)
+        adv = statistics.mean(turnovers)
+        if is_index:
+            adv *= _INDEX_ADV_CONSTITUENT_MULTIPLIER
+        return adv
     except Exception as exc:
         log.warning("sina kline fetch failed for %s: %s", ticker, exc)
         return None
