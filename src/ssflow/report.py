@@ -250,8 +250,7 @@ def _render_phase_breakdown(round_record, currency: str = "CNY") -> str:
         lines.append(
             f"- **{phase_name}**: "
             f"{sym}{pb:.2f} → {sym}{pa:.2f} ({dp*100:+.2f}%), "
-            f"flow={sym}{nf/big_div:+.2f}{big_unit}, "
-            f"{na} LLM + {np_} plan"
+            f"flow={sym}{nf/big_div:+.2f}{big_unit}"
         )
     return "\n".join(lines) + "\n"
 
