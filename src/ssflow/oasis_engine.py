@@ -259,6 +259,7 @@ class OasisSimResult:
 def _activity_level(
     agent_type: str,
     hours_since_event: float | None,
+    event_severity: float = 0.0,
 ) -> float:
     """Per-persona probability of participating in a round (0-1).
 
@@ -273,6 +274,10 @@ def _activity_level(
       - Analysts need time to publish research
       - Institutions move deliberately, peaking T+1 to T+3
       - Strategic capital (industrials, government) moves last
+
+    When ``event_severity`` is high (|severity| > 0.2), institutional
+    and quant curves are boosted early — major events compress reaction
+    times for professional participants.
     """
     if hours_since_event is None:
         # No schedule info — everyone participates equally
@@ -295,6 +300,20 @@ def _activity_level(
         "policy":       [(0, 0.02), (1, 0.05), (3, 0.15), (5, 0.20), (7, 0.10)],
         "company_ir":   [(0, 0.30), (1, 0.50), (2, 0.30), (4, 0.10), (7, 0.05)],
     }
+
+    # ── Severity boost: major events compress institutional reaction time ──
+    # When |severity| > 0.2, institutional and quant types get a floor boost
+    # at early time points. This models the real behavior where significant
+    # events (earnings beat, major policy, M&A) cause institutions to react
+    # faster than their usual cadence.
+    sev_abs = abs(event_severity)
+    if sev_abs > 0.2 and agent_type in ("institutional", "quant"):
+        # Boost = severity magnitude × 0.5, capped at 0.40
+        boost = min(0.40, sev_abs * 0.5)
+        if agent_type in curves:
+            curves[agent_type] = [
+                (t_pt, min(1.0, v + boost)) for t_pt, v in curves[agent_type]
+            ]
 
     pts = curves.get(agent_type, [(0, 0.50), (7, 0.30)])
 
@@ -1223,7 +1242,11 @@ async def run_simulation(
                 if p.sandbox is None:
                     continue  # non-trader personas handled separately
                 ptype = p.agent_type or "retail"
-                level = _activity_level(ptype, _round_hours)
+                _sev_for_activity = (
+                    _initial_severity.overnight_sentiment
+                    if _initial_severity is not None else 0.0
+                )
+                level = _activity_level(ptype, _round_hours, _sev_for_activity)
                 if sample_rng.random() >= level:
                     inactive_trader_ids.add(p.id)
             if inactive_trader_ids:
