@@ -2253,11 +2253,13 @@ async def run_simulation(
                         compute_multi_instrument_impact,
                     )
                     _pf_flows_by_ticker: dict[str, float] = {}
+                    es_ticker = instrument_universe.event_subject_ticker
                     for cf in _phase_flows:
-                        if cf.instrument == "_default":
-                            continue
-                        _pf_flows_by_ticker[cf.instrument] = (
-                            _pf_flows_by_ticker.get(cf.instrument, 0.0) + cf.net_flow
+                        # Route unspecified ("_default") flows to the event
+                        # subject so they produce Kyle price impact.
+                        ticker = es_ticker if cf.instrument == "_default" else cf.instrument
+                        _pf_flows_by_ticker[ticker] = (
+                            _pf_flows_by_ticker.get(ticker, 0.0) + cf.net_flow
                         )
                     _pf_n_active = len({
                         cf.persona_id for cf in _phase_flows if cf.net_flow != 0
