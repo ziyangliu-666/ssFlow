@@ -1,7 +1,7 @@
-# ssFlow 自主改进循环
+# ssFlow 引擎优化循环
 
-你是 ssFlow 市场推演引擎的自主改进代理。你的工作流是一个闭环：
-分析 → 改代码 → 跑推演 → 送 Codex 审查 → 读审查 → 分析 → ...
+你是 ssFlow 市场推演引擎的自主优化代理。你的工作流是一个闭环：
+分析 → 改后端/引擎代码 → 跑推演 → 送 Codex 审查 → 读审查 → 分析 → ...
 
 **NEVER STOP**: 不要暂停问用户要不要继续。用户可能在睡觉。
 你是自主的。如果当前层级的修复不起作用，升级到更深层级。
@@ -69,7 +69,7 @@ Why 5：[根因——改什么能永久消除这类问题]
 
 - 根据根因分析确定的层级，修改对应模块
 - **每次只改一个原子性变更**——方便定位改进/回退
-- 不改前端代码
+- 不改前端代码（前端有独立的优化流程）
 - 跑测试确认没破坏东西：
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest tests/ \
@@ -103,10 +103,16 @@ PYTHONPATH=src /home/rufus/ssFlow/.venv/bin/python scripts/run_one.py \
 - 写一段【输出变更摘要】（3-5 句话，只描述报告输出层面的变化，不提代码/实现/模型名称）
   - 好的例子："本轮修改后，机构资金不再在事件当天大量交易，而是延迟到 T+1 才入场"
   - 坏的例子："修改了 Kyle lambda 参数从 0.5 到 0.3"（暴露实现）
-- 调用 `mcp__codex__codex`（每次都是全新 session，无前文污染）：
+- **首轮**用 `mcp__codex__codex` 创建新 session：
   - prompt: CODEX_PROMPT.md 内容，把 `{report_content}` 替换为报告全文，`{change_summary}` 替换为输出变更摘要
   - sandbox: "read-only"
   - cwd: "/home/rufus/ssFlow"
+  - 记下返回的 `session_id`，后续复用
+- **后续轮次**用 `mcp__codex__codex-reply` 复用同一 session：
+  - session_id: 首轮拿到的 session_id
+  - message: 输出变更摘要 + 报告全文（同样按 CODEX_PROMPT.md 格式组织）
+  - 好处：Codex 可以对比前后轮变化，给出更有针对性的 review
+- **何时重开 session**：如果 session 已累积超过 5 轮 review，或者修复层级从 L0/L1 跳到 L2/L3（问题性质变了），用 `mcp__codex__codex` 开一个全新 session，重新计数
 - **绝对不要**在 prompt 里提及任何实现细节（模型名称、公式、参数、代码结构）
 - 等待 Codex 返回
 
@@ -166,9 +172,9 @@ IF 已到 L3 且连续 3 轮无改善:
 
 ## 重要约束
 
-- 每次 Codex 必须是全新 session（`mcp__codex__codex`），不用 `mcp__codex__codex-reply`
-- 不改前端代码
-- 保持向后兼容（不破坏 RoundSchedule、report 格式）
+- Codex 首轮用 `mcp__codex__codex` 新建 session，后续轮次用 `mcp__codex__codex-reply` 复用；超过 5 轮或层级跳变时重开
+- 不改前端代码（前端有独立的优化流程）
+- **不需要向后兼容**——没有用户数据要迁移，大胆做破坏性变更，但删代码要删干净（不留死引用、孤立 import、废弃配置）
 - 推演用固定 seed=42（通过 SSFLOW_SEED 环境变量，默认即为 42）和固定输入，保证可比性
 - **每次只改一个原子变更**——多个变更混在一起无法定位哪个有效
 - **commit 在验证前**——方便 revert 回退失败实验
