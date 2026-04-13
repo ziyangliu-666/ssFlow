@@ -216,18 +216,23 @@ def make_freeform_trading_tool(
             qty = 0.0
 
         # ── Rationale-side consistency guard ──────────────────────────
-        # If the LLM explicitly says "观望/hold" in the rationale but
-        # chose side=buy/sell, override to hold. This catches a common
-        # LLM failure where the text says "暂时观望" but the tool call
-        # side field is "buy" with small qty.
+        # 1) Hold override: if rationale says "观望" but side is buy/sell,
+        #    force to hold.
+        # 2) Direction flip: if rationale clearly says "进入/买入" but
+        #    side is "sell" (or vice versa), flip to match the rationale.
+        #    This catches the LLM+sampling failure where text says
+        #    "进入头寸" but distribution sampling produced sell.
         if side_clean != "hold" and rationale:
             _r = rationale.lower()
             _hold_phrases = ("观望", "保持现有", "维持现有", "暂不操作", "暂不交易", "不做操作")
-            _action_phrases = ("进入", "增持", "离场", "降低敞口", "做空", "做多",
-                               "锁定利润", "入场", "exit", "enter", "buy", "sell")
+            _buy_phrases = ("进入头寸", "增持", "加仓", "买入", "入场", "进入",
+                            "布局", "配置", "enter", "buy")
+            _sell_phrases = ("减持", "减仓", "卖出", "降低敞口", "离场", "做空",
+                             "锁定收益", "锁定利润", "获利了结", "exit", "sell")
             _text_says_hold = any(p in _r for p in _hold_phrases)
-            _text_says_action = any(p in _r for p in _action_phrases)
-            if _text_says_hold and not _text_says_action:
+            _text_says_buy = any(p in _r for p in _buy_phrases)
+            _text_says_sell = any(p in _r for p in _sell_phrases)
+            if _text_says_hold and not _text_says_buy and not _text_says_sell:
                 log.info(
                     "Rationale-side override for %s: side=%s→hold "
                     "(rationale says hold: '%s')",
@@ -235,6 +240,18 @@ def make_freeform_trading_tool(
                 )
                 side_clean = "hold"
                 qty = 0.0
+            elif side_clean == "sell" and _text_says_buy and not _text_says_sell:
+                log.info(
+                    "Rationale-side flip for %s: sell→buy (rationale: '%s')",
+                    persona_id, rationale[:80],
+                )
+                side_clean = "buy"
+            elif side_clean == "buy" and _text_says_sell and not _text_says_buy:
+                log.info(
+                    "Rationale-side flip for %s: buy→sell (rationale: '%s')",
+                    persona_id, rationale[:80],
+                )
+                side_clean = "sell"
 
         inst = str(instrument).strip() if instrument else None
         pool_raw = str(pool).strip().lower() if pool else ""
