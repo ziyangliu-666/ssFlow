@@ -328,8 +328,10 @@ def _activity_level(
     # faster than their usual cadence.
     sev_abs = abs(event_severity)
     if sev_abs > 0.2 and agent_type in ("institutional", "quant"):
-        # Boost = severity magnitude × 0.5, capped at 0.40
-        boost = min(0.40, sev_abs * 0.5)
+        # Boost = severity magnitude × 1.0, capped at 0.55
+        # This is aggressive but realistic: on a major event, most institutions
+        # ARE active — the question is what they DO, not whether they participate.
+        boost = min(0.55, sev_abs * 1.0)
         if agent_type in curves:
             curves[agent_type] = [
                 (t_pt, min(1.0, v + boost)) for t_pt, v in curves[agent_type]
@@ -2312,12 +2314,59 @@ async def run_simulation(
                         continue
                     if persona.id in inactive_trader_ids:
                         continue
-                    hold_action = next(
-                        (a["name"] for a in persona.sandbox.action_space
-                         if a.get("side") == "none"),
-                        persona.sandbox.action_space[0]["name"],
-                    )
-                    hold_dist = {hold_action: 1.0}
+
+                    # ── Severity-based hold override (tool-skip path) ──
+                    # When the LLM was called but didn't invoke the trading
+                    # tool (defaulted to social-only), and event severity is
+                    # significant, probabilistically convert the synthetic
+                    # hold to a small directional trade.
+                    _ptype = persona.agent_type or "retail"
+                    _do_sev_override = False
+                    if (_initial_severity is not None
+                            and abs(_initial_severity.overnight_sentiment) > 0.2
+                            and _ptype in ("institutional", "quant")):
+                        _sev = _initial_severity.overnight_sentiment
+                        _override_prob = min(0.5, abs(_sev) * 0.7)
+                        if sample_rng.random() < _override_prob:
+                            _do_sev_override = True
+
+                    if _do_sev_override:
+                        _sev = _initial_severity.overnight_sentiment
+                        _override_side = "buy" if _sev > 0 else "sell"
+                        _override_action = next(
+                            (a["name"] for a in persona.sandbox.action_space
+                             if a.get("side") == _override_side),
+                            None,
+                        )
+                        if _override_action:
+                            hold_dist = {_override_action: 1.0}
+                            _rationale = (
+                                f"事件方向明确({'利好' if _sev > 0 else '利空'})，"
+                                f"CIO层面要求小幅{'增配' if _sev > 0 else '减配'}。"
+                            )
+                            log.info(
+                                "  R%d/%s SEVERITY_OVERRIDE %s: hold→%s (sev=%.2f)",
+                                round_idx, _phase.value, persona.id,
+                                _override_side, _sev,
+                            )
+                        else:
+                            # No matching action — fall back to hold
+                            hold_action = next(
+                                (a["name"] for a in persona.sandbox.action_space
+                                 if a.get("side") == "none"),
+                                persona.sandbox.action_space[0]["name"],
+                            )
+                            hold_dist = {hold_action: 1.0}
+                            _rationale = "本轮维持现有仓位不动。"
+                    else:
+                        hold_action = next(
+                            (a["name"] for a in persona.sandbox.action_space
+                             if a.get("side") == "none"),
+                            persona.sandbox.action_space[0]["name"],
+                        )
+                        hold_dist = {hold_action: 1.0}
+                        _rationale = "本轮维持现有仓位不动。"
+
                     hold_flow = apply_distribution_to_agent_pop(
                         persona=persona,
                         agents=agent_pops[persona.id],
@@ -2325,7 +2374,7 @@ async def run_simulation(
                         current_price=_phase_price,
                         rng=sample_rng,
                         instrument=_primary_ticker if instrument_universe is None else "_default",
-                        rationale="本轮维持现有仓位不动。",
+                        rationale=_rationale,
                         round_idx=round_idx,
                         limit_board=limit_board,
                         t1_ledger=t1_ledger,
