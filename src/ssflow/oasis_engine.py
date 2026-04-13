@@ -2307,6 +2307,29 @@ async def run_simulation(
                     es_ticker = instrument_universe.event_subject_ticker
                     _phase_delta_pct = _pf_delta_by_ticker.get(es_ticker, 0.0)
                     _phase_price_after = _phase_prices.get(es_ticker, _phase_price)
+
+                    # ETF tracking constraint: sector_etf instruments must
+                    # not diverge from the event subject by more than ±0.5pp
+                    # per phase.  In real markets, ETF AP arbitrage enforces
+                    # this; our model sometimes breaks it when agents trade
+                    # the ETF directly with independent Kyle impact.
+                    for inst in instrument_universe.instruments:
+                        if inst.relationship != "sector_etf":
+                            continue
+                        tk = inst.ticker
+                        if tk not in _phase_prices or tk == es_ticker:
+                            continue
+                        _init_p = current_prices.get(tk, 0)
+                        if _init_p <= 0:
+                            continue
+                        _etf_delta = _phase_prices[tk] / _init_p - 1.0
+                        _max_deviation = 0.005  # ±0.5pp from event subject
+                        _lo = _phase_delta_pct - _max_deviation
+                        _hi = _phase_delta_pct + _max_deviation
+                        if _etf_delta < _lo or _etf_delta > _hi:
+                            _clamped = max(_lo, min(_hi, _etf_delta))
+                            _phase_prices[tk] = _init_p * (1.0 + _clamped)
+                            _pf_delta_by_ticker[tk] = _clamped
                 else:
                     from .market_dynamics import compute_dynamic_knee
                     _pf_n_active = len({
