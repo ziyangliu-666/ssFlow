@@ -1,2 +1,2 @@
 idx	id	category	direction	event_type	input	status	error	simulation_id	initial_price	final_price	delta_pct	n_personas	cost_usd	elapsed_s	report_path	compliance
-1	ashare_earnings_beat	A股-主板	利好	earnings	比亚迪2026Q1财报: 营收2380亿元同比+22%, 净利润105亿同比+38%, 新能源车销量突破100万辆单季纪录, 毛利率22.1%超预期	ok		oasis_47ab7cdb3e29	104.25	113.68	9.04	36	0.1502	50.7	review-loop/generalization/ashare_earnings_beat.md	PASS
+1	ashare_smallcap_ai	A股-AI概念	利好	other	AI应用龙头科大讯飞发布星火大模型4.0, 多项基准测试超越GPT-4o, 宣布与三大运营商签署百亿级智慧城市框架协议	ok		oasis_dd297edb66bb	47.78	46.73	-2.19	36	0.1502	49.7	review-loop/generalization/ashare_smallcap_ai.md	PASS
