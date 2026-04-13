@@ -189,7 +189,7 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
             elif cf.net_flow > 0 and _text_implies_sell and not _text_implies_buy:
                 consistency_note = " *(净买盘与减持意图偏差: 分布采样结果)*"
             elif cf.net_flow < 0 and _text_implies_buy and not _text_implies_sell:
-                consistency_note = " *(净卖盘与加仓意图偏差: 分布采样结果)*"
+                consistency_note = " *(净卖盘与增持意图偏差: 分布采样结果)*"
 
         lines.append(
             f"- **{p.archetype}**{source_tag} ({sign} {sym}{abs(cf.net_flow) / big_div:.2f}{big_unit}): _{rationale}_{consistency_note}"

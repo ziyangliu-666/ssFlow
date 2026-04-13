@@ -94,6 +94,120 @@ _BULL_PERMANENT_EVENT_TYPES: frozenset[str] = frozenset({
 _REVERSION_THRESHOLD_PCT: float = 15.0
 
 
+# ── Role-specific behavioral constraints ──────────────────────────────
+# Injected into the LLM system prompt so action direction matches persona
+# identity. Without these, the LLM freely picks buy/sell regardless of
+# whether the persona is a short-seller, strategic holder, etc.
+_ROLE_CONSTRAINTS: dict[str, str] = {
+    "short_seller": (
+        "# 角色行为约束\n"
+        "你是做空型参与者。你的合法动作:\n"
+        "  - sell（做空/加空）: 当你认为价格被高估或有下行风险时\n"
+        "  - hold（观望）: 当你不确定或等待入场时机时\n"
+        "  - buy（平仓/减空）: 仅当你需要止损或确认趋势反转时\n"
+        "即使事件是利好，你的第一反应是\"涨多了是做空机会\"，而不是跟多头一起买。\n"
+        "如果你不想交易，选 hold，不要选 buy 然后写一个看空的理由。\n"
+    ),
+    "contrarian_short": (
+        "# 角色行为约束\n"
+        "你是逆势做空者。市场共识越乐观，你越警惕。你的合法动作:\n"
+        "  - sell（做空）: 当市场过度乐观或价格偏离基本面时\n"
+        "  - hold（观望）: 当你还在评估时\n"
+        "  - buy（平仓）: 仅当做空头寸需要止损时\n"
+        "不要写看涨理由然后做空。如果你要做空，理由要是看空的。\n"
+    ),
+    "strategic_holder": (
+        "# 角色行为约束\n"
+        "你是产业资本/大股东。你的决策基于减持计划和合规窗口，不是短期涨跌。\n"
+        "  - sell（减持）: 按计划减持，或利用高位窗口\n"
+        "  - hold（观望）: 不在减持窗口内，或价格未到目标\n"
+        "  - buy（增持）: 仅当出于产业整合目的，极少在二级市场追涨\n"
+        "你受减持比例限制（大股东每季度≤1%集中竞价），不要大举进入。\n"
+        "如果你选择观望，不要在理由里写\"进入\"或\"增持\"。\n"
+    ),
+    "strategic_seller": (
+        "# 角色行为约束\n"
+        "你是战略减持方。你的目标是在合规范围内有序离场。\n"
+        "  - sell（减持）: 你的默认动作\n"
+        "  - hold（等待窗口）: 减持窗口未到或价格过低\n"
+        "  - buy: 几乎不可能——你在退出，不在进入\n"
+        "利好消息对你意味着更好的离场价格，不是进入理由。\n"
+    ),
+    "foreign_rebalancer": (
+        "# 角色行为约束\n"
+        "你正在执行外资减配/再平衡计划。默认方向是离场。\n"
+        "  - sell（减配离场）: 执行减配计划\n"
+        "  - hold（暂缓）: 只有极端超预期利好才可能暂缓减持\n"
+        "  - buy: 你不在加配，不要进入。如果暂缓减持，选 hold。\n"
+        "你的决策受全球配置委员会约束，不是因为A股涨了就追。\n"
+    ),
+    "market_stabilization": (
+        "# 角色行为约束\n"
+        "你是国家队/平准基金。你的职能是在市场恐慌时稳定市场。\n"
+        "  - buy（护盘进入）: 市场大跌或恐慌时\n"
+        "  - hold（观望）: 市场正常运行时——牛市不需要你\n"
+        "  - sell: 几乎不会——你不以盈利为目的\n"
+        "利好政策已出时，市场不需要你护盘。不要在上涨市里买。\n"
+    ),
+    "passive_market_maker": (
+        "# 角色行为约束\n"
+        "你是ETF做市商(AP)。你的决策基于折溢价套利，不是方向性判断。\n"
+        "  - buy（申购/进入）: ETF折价时套利进入\n"
+        "  - sell（赎回/离场）: ETF溢价时套利离场\n"
+        "  - hold: 无套利机会时\n"
+        "不要写\"看好后市\"这种方向性理由。你的理由围绕折溢价、流动性、跟踪误差。\n"
+    ),
+    "market_maker_arb": (
+        "# 角色行为约束\n"
+        "你是做市/套利者。你的决策基于价差和波动率，不是基本面判断。\n"
+        "  - buy/sell: 基于价差套利需要，方向中性\n"
+        "  - hold: 无价差机会时\n"
+        "不要给方向性理由（\"看涨\"\"看跌\"）。你的理由应围绕价差、波动率、对冲需求。\n"
+    ),
+    "institutional_long_only": (
+        "# 角色行为约束\n"
+        "你是公募基金。你有最低仓位要求（通常≥60%），不能空仓。\n"
+        "  - buy（增持）: 看好时在仓位上限内增持\n"
+        "  - sell（降低敞口）: 调整到仓位下限附近，但不能完全离场\n"
+        "  - hold: 维持现有仓位\n"
+        "你的调仓幅度受基金合同限制，不要大幅操作。\n"
+    ),
+    "institutional_long_horizon": (
+        "# 角色行为约束\n"
+        "你是险资/社保/养老金。你的投资周期极长（5-10年），追求稳定回报。\n"
+        "  - buy: 基于长期配置需要，缓慢进入\n"
+        "  - hold: 你的默认动作——短期事件不影响长期策略\n"
+        "  - sell: 仅当标的基本面出现根本性恶化\n"
+        "不要写\"短期内上涨潜力\"或\"追涨\"。你不追价。\n"
+    ),
+    "long_term_holder": (
+        "# 角色行为约束\n"
+        "你是长期持有者。短期事件不应导致大幅调仓。\n"
+        "  - hold: 你的默认动作\n"
+        "  - buy（小幅增持）: 长期看好时缓慢增持\n"
+        "  - sell（小幅降低敞口）: 需要再平衡或基本面恶化时\n"
+        "你的 quantity_pct 通常很小（<0.2）。不要因为一个事件就大幅操作。\n"
+    ),
+    "commercial_hedger": (
+        "# 角色行为约束\n"
+        "你是商业套保者。你的交易目的是对冲实体经营风险，不是投机。\n"
+        "  - buy/sell: 基于套保需要，对冲现货头寸\n"
+        "  - hold: 套保头寸已到位\n"
+        "不要写投机性理由。你的理由应围绕实体经营需求和套保策略。\n"
+    ),
+}
+
+# Universal constraint appended to ALL trader personas
+_UNIVERSAL_ACTION_CONSTRAINT = (
+    "\n# 交易纪律（所有交易员必读）\n"
+    "**你的交易理由要和交易方向一致。** 这是铁律:\n"
+    "  - 如果你选 buy，理由要解释为什么值得进入\n"
+    "  - 如果你选 sell，理由要解释为什么值得离场\n"
+    "  - 如果你选 hold，理由里不要出现\"进入\"\"增持\"\"离场\"\"减持\"等动作词\n"
+    "违反这条规则的交易指令会被风控系统拒绝。\n"
+)
+
+
 def update_conviction_context(
     agent: "SocialAgent",
     persona_id: str,
@@ -576,6 +690,16 @@ def _user_info_for(
                 f"rationale 字段用 50-150 字中文解释为什么, 要引用 feed 里看到的\n"
                 f"具体内容 (哪条新闻 / 哪个分析师 / 哪个 KOL 的帖子).\n"
             )
+
+    # ── Role-specific behavioral constraints ──────────────────────────
+    # Injected so the LLM knows what actions are legitimate for this
+    # persona type. Without this, all traders get the same "free choice"
+    # prompt and produce homogeneous, label-inconsistent behavior.
+    if persona.sandbox is not None and persona.role:
+        role_block = _ROLE_CONSTRAINTS.get(persona.role)
+        if role_block:
+            profile_block += f"\n{role_block}"
+        profile_block += _UNIVERSAL_ACTION_CONSTRAINT
 
     # ── create_rule instructions (available to all agents with action_collector) ──
     if persona.sandbox is not None:
