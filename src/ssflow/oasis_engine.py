@@ -1173,105 +1173,26 @@ async def run_simulation(
                 hours_since_event=_hours,
             )
 
-            # 0.6. Pre-open auction: estimate the opening shock and pre-set
-            #      the limit board state BEFORE any agent trades this day.
-            #      Without this, the first round of each day trades as if the
-            #      board is NORMAL, even when the event shock should immediately
-            #      create a one-word limit-down/up.
-            from .limit_board import gap_open as _gap_open
-
-            _is_new_trading_day = False
+            # 0.6. Resolve event severity at R0 for Kyle sentiment bias
+            #      and terminal-risk detection.  Gap-open price adjustments
+            #      are DISABLED — they caused persistent state-machine
+            #      inconsistencies (flow/price direction mismatch, phase
+            #      price ≠ round price).  The LLM personas already model
+            #      overnight sentiment through their reactions.
             if round_idx == 0:
-                _is_new_trading_day = True
-            elif round_schedule is not None:
-                rd = round_schedule.get_round(round_idx)
-                prev_rd = round_schedule.get_round(round_idx - 1)
-                if rd and prev_rd:
-                    _is_new_trading_day = (
-                        int(rd.hours_since_event // 24)
-                        > int(prev_rd.hours_since_event // 24)
-                    )
-
-            if _is_new_trading_day:
-                # Estimate overnight sentiment for the gap-open model using
-                # the single-source-of-truth resolver in event_severity.py.
-                # Pulled out of the engine in Round 6 so the rules can be
-                # tested directly without spinning up an OASIS round loop.
-                if round_idx == 0:
-                    _sev = resolve_event_severity(
-                        event_type=event.event_type or "",
-                        event_text=event.event_text or "",
-                        day1_open=getattr(event, "day1_open", None),
-                        current_price=initial_price,
-                    )
-                    _overnight_sent = _sev.overnight_sentiment
-                    _gap_vol = _sev.gap_vol
-                    # Stash for later rounds' Kyle sentiment bias propagation.
-                    _initial_severity = _sev
-                    if _sev.terminal_risk:
-                        _sim_terminal_risk = True
-                        log.info(
-                            "  R0 TERMINAL RISK flagged (sentiment=%.2f, source=%s): "
-                            "forced-seller cascade + dip-buy suppression active for the rest of the sim",
-                            _sev.overnight_sentiment, _sev.source,
-                        )
-                else:
-                    # Later days: momentum from previous day's cumulative move.
-                    _cum_delta = (
-                        (current_price / initial_price - 1.0)
-                        if initial_price > 0
-                        else 0.0
-                    )
-                    _overnight_sent = max(-1.0, min(1.0, _cum_delta * 3.0))
-                    _abs_sent = abs(_overnight_sent)
-                    _gap_vol = 0.05 + 0.10 * max(0.0, _abs_sent - 0.3)
-                _open_price = _gap_open(
-                    prev_close=limit_board.prev_close,
-                    overnight_sentiment=_overnight_sent,
-                    board_type=_board_type,
-                    volatility=_gap_vol,
+                _sev = resolve_event_severity(
+                    event_type=event.event_type or "",
+                    event_text=event.event_text or "",
+                    day1_open=getattr(event, "day1_open", None),
+                    current_price=initial_price,
                 )
-
-                # If the open price diverges from prev_close, simulate a
-                # pre-open auction that moves the board state before trading.
-                _gap_delta = (
-                    (_open_price - limit_board.prev_close)
-                    / limit_board.prev_close
-                    if limit_board.prev_close > 0
-                    else 0.0
-                )
-                _clamped_gap = limit_board.clamp_delta(_gap_delta)
-                if abs(_clamped_gap) > 0.001:
-                    # Simulate the auction: at-limit opens have extreme
-                    # order imbalance (one side >> the other).
-                    if _clamped_gap > 0:
-                        limit_board.update(
-                            _clamped_gap,
-                            buy_volume=1e10,
-                            sell_volume=1e8,
-                        )
-                    else:
-                        limit_board.update(
-                            _clamped_gap,
-                            buy_volume=1e8,
-                            sell_volume=1e10,
-                        )
-                    limit_board.current_price = _open_price
-                    # Adjust the running price so agents see the post-gap level
-                    current_price = _open_price
-                    # Keep current_prices dict in sync with scalar price
-                    if instrument_universe and current_prices:
-                        _gap_es = instrument_universe.event_subject_ticker
-                        current_prices[_gap_es] = _open_price
+                _initial_severity = _sev
+                if _sev.terminal_risk:
+                    _sim_terminal_risk = True
                     log.info(
-                        "  R%d PRE-OPEN AUCTION: gap %.2f%% → board %s, "
-                        "price %.2f → %.2f (sentiment=%.2f)",
-                        round_idx,
-                        _gap_delta * 100,
-                        limit_board.state.value,
-                        limit_board.prev_close,
-                        limit_board.current_price,
-                        _overnight_sent,
+                        "  R0 TERMINAL RISK flagged (sentiment=%.2f, source=%s): "
+                        "forced-seller cascade + dip-buy suppression active for the rest of the sim",
+                        _sev.overnight_sentiment, _sev.source,
                     )
 
             # Probabilistic participation — replaces the old binary
