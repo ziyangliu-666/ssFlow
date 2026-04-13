@@ -1713,17 +1713,14 @@ async def run_simulation(
             #      post-fast price and trade second. Two Kyle computations
             #      per round, but only ONE EVENT_PRICE_UPDATED at the end.
             _phase_prices = dict(current_prices) if current_prices else {}
-            # Use pre-gap price as the phase starting point so the first
-            # phase absorbs the gap-open into its delta.  This keeps the
-            # phase breakdown consistent with the round header (which also
-            # uses price_at_round_start).
+            # In multi-instrument mode, sync the scalar _phase_price with
+            # the event-subject ticker's price in current_prices to avoid
+            # price_before / delta_pct inconsistencies in PhaseResult.
             if instrument_universe and current_prices:
                 _es_ticker = instrument_universe.event_subject_ticker
-                # Overlay pre-gap price for the event subject ticker
-                _phase_prices[_es_ticker] = price_at_round_start
-                _phase_price = price_at_round_start
+                _phase_price = current_prices.get(_es_ticker, current_price)
             else:
-                _phase_price = price_at_round_start
+                _phase_price = current_price
             class_flows: list[ClassFlowResult] = []
             submitted_ids: set[str] = set()
             social_publications: list = []
@@ -2425,17 +2422,23 @@ async def run_simulation(
                 )
 
                 # 2j. Record PhaseResult, accumulate into all_class_flows.
-                # Recompute delta_pct from actual prices to guarantee
-                # price_before → price_after matches the displayed %.
+                # For the FIRST phase of each round, use the pre-gap
+                # price_at_round_start as price_before so the phase
+                # breakdown is continuous with the round header.
+                _pr_display_before = (
+                    price_at_round_start
+                    if len(phase_results) == 0
+                    else _phase_price
+                )
                 _pr_delta = (
-                    (_phase_price_after / _phase_price - 1.0)
-                    if _phase_price > 0 else 0.0
+                    (_phase_price_after / _pr_display_before - 1.0)
+                    if _pr_display_before > 0 else 0.0
                 )
                 phase_results.append(PhaseResult(
                     phase=_phase,
                     class_flows=_phase_flows,
                     net_flow=_phase_net_flow,
-                    price_before=_phase_price,
+                    price_before=_pr_display_before,
                     price_after=_phase_price_after,
                     delta_pct=_pr_delta,
                     n_active_personas=len(_phase_submitted),
