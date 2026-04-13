@@ -14,3 +14,6 @@ In QA mode, flag any code that doesn't match DESIGN.md.
 To run the self-improving simulation loop: read `review-loop/LOOP.md` for full instructions.
 Start with `/loop` and paste the contents of LOOP.md as the prompt.
 Requires: Codex MCP (`mcp__codex__codex`), ssflow conda env, backend running on :5001.
+
+`review-loop/` is a local-only working directory (gitignored) — it holds the
+loop's own notes and per-round analyses, and is not part of the published repo.

@@ -37,6 +37,22 @@ tmp/
 # PNGs in the project root are always dev junk.
 /*.png
 
+# Browser accessibility snapshots dumped at repo root by /browse and /qa
+# (iter2-home-snap.yml, setup-bottom-snap.yml, ...). Real config lives in
+# subdirectories, so a root-level glob is safe.
+/*.yml
+
+# Claude Code local session state (permissions, task locks).
+.claude/
+
 # Extra local venv + ad-hoc analysis artifacts
 /.venv312/
 /analysis/backtest_monthly_v2_full.json
+
+# Internal working notes and handoff material — kept locally, not published.
+/AUTO_REVIEW.md
+/TODO.md
+/HANDOFF_FRONTEND.md
+/REVIEW_STATE.json
+/review-loop/
+/docs/handoff-baselines/
