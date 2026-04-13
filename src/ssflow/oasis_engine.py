@@ -2059,6 +2059,31 @@ async def run_simulation(
                         side = order.raw_args.get("side", "hold")
                         qty = order.raw_args.get("quantity_pct", 0.0)
                         pool = order.raw_args.get("pool", "")
+
+                        # ── Severity-based hold override for institutional personas ──
+                        # When event severity is significant and the LLM defaulted to
+                        # hold, probabilistically convert to a small directional trade.
+                        # Models "CIO override" — major events force portfolio positioning
+                        # even when the PM is cautious.
+                        if (side == "hold"
+                                and _initial_severity is not None
+                                and abs(_initial_severity.overnight_sentiment) > 0.2
+                                and persona.agent_type in ("institutional", "quant")):
+                            _sev = _initial_severity.overnight_sentiment
+                            _override_prob = min(0.5, abs(_sev) * 0.7)
+                            if sample_rng.random() < _override_prob:
+                                side = "buy" if _sev > 0 else "sell"
+                                qty = 0.03  # small 3% position
+                                pool = "cash" if side == "buy" else "holdings_in_target"
+                                order.raw_args["side"] = side
+                                order.raw_args["quantity_pct"] = qty
+                                order.raw_args["pool"] = pool
+                                log.info(
+                                    "  R%d %s SEVERITY_OVERRIDE hold→%s "
+                                    "(sev=%.2f, p=%.2f)",
+                                    round_idx, order.persona_id,
+                                    side, _sev, _override_prob,
+                                )
                         emit_dist = {
                             "side": side,
                             "quantity_pct": qty,
