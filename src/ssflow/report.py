@@ -84,7 +84,7 @@ def _render_header(result: "OasisSimResult") -> str:
 **Event**: `{instrument}` · {event.event_type} · {event.event_date}
 **Simulation ID**: `{result.simulation_id}`
 **Engine**: OASIS (camel-oasis) + ssFlow trading layer
-**Scale**: {result.n_personas} personas ({result.n_traders} traders + {result.n_personas - result.n_traders} info entities) × {result.n_rounds} rounds
+**Scale**: {result.n_traders} trader archetypes + {result.n_personas - result.n_traders} info entities · ~{result.n_agents:,} simulated agents × {result.n_rounds} rounds
 **Initial price**: {_fmt_price(result.initial_price, currency)} · **Final**: {_fmt_price(result.final_price, currency)}
 **Cumulative**: **{result.cumulative_delta_pct * 100:+.2f}%**
 **Wall clock**: {result.elapsed_seconds:.1f}s · **Cost**: ${result.cost_usd:.4f}

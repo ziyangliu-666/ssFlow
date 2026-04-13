@@ -192,6 +192,15 @@ class OasisSimResult:
         return sum(1 for p in self.personas if p.sandbox is not None)
 
     @property
+    def n_agents(self) -> int:
+        """Total simulated agents across all trader persona classes."""
+        return sum(
+            p.sandbox.instance_count
+            for p in self.personas
+            if p.sandbox is not None
+        )
+
+    @property
     def n_rounds(self) -> int:
         return len(self.rounds)
 
