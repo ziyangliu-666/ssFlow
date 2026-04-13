@@ -772,6 +772,20 @@ async def run_simulation(
             event.event_type,
         )
 
+    # Damp λ for index event subjects.  Individual-stock Kyle λ (≈0.5)
+    # overstates impact for broad indices whose constituents provide
+    # diversified liquidity.  Factor 0.3 gives λ_index ≈ 0.15 which
+    # calibrates well: 50億 flow / 3000億 ADV ≈ 1% index move.
+    from .market_data import _SZSE_INDEX_RE
+    if _SZSE_INDEX_RE.match(event.ticker or ""):
+        _index_lambda_factor = 0.3
+        lambda_used *= _index_lambda_factor
+        log.info(
+            "Index event subject %s: lambda damped %.4f → %.4f (factor=%.2f)",
+            event.ticker, lambda_used / _index_lambda_factor,
+            lambda_used, _index_lambda_factor,
+        )
+
     # ── Build SimGraph (unified world model) ──
     # If not provided, build from legacy inputs via the adapter.
     if sim_graph is None:
