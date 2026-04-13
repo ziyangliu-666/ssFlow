@@ -2173,6 +2173,25 @@ async def run_simulation(
                         event_type=event.event_type or "",
                         decision_params=_sim_params.decision,
                     )
+                    # ── Per-class ADV flow cap ──
+                    # No single participant class should generate more flow
+                    # than the market can absorb in one phase. Cap at 1x ADV.
+                    _ADV_FLOW_CAP = 1.0
+                    _cap_adv = adv_values.get(order_ticker, effective_adv)
+                    _cap_limit = _ADV_FLOW_CAP * _cap_adv
+                    if _cap_limit > 0 and abs(flow.net_flow) > _cap_limit:
+                        _pre_cap = flow.net_flow
+                        flow.net_flow = (
+                            _cap_limit if flow.net_flow > 0 else -_cap_limit
+                        )
+                        log.info(
+                            "  R%d/%s FLOW_CAP %s: %.2fB → %.2fB "
+                            "(capped at %.1fx ADV=%.2fB)",
+                            round_idx, _phase.value, order.persona_id,
+                            _pre_cap / 1e8, flow.net_flow / 1e8,
+                            _ADV_FLOW_CAP, _cap_adv / 1e8,
+                        )
+
                     # Tag flow with phase and source metadata
                     flow.phase = _phase.value
                     flow.source = _order_source
