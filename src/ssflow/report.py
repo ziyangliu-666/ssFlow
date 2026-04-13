@@ -312,22 +312,44 @@ def _render_class_pnl_table(result: "OasisSimResult") -> str:
     pnl = result.compute_class_pnl()
     if not pnl:
         return "_(no agents)_"
-    rows_data = sorted(pnl.items(), key=lambda kv: kv[1], reverse=True)
 
+    # Compute active vs passive P&L decomposition
+    active_pnl = result.compute_class_active_pnl()
+    passive_pnl = result.compute_class_passive_pnl()
+
+    # ── Table 1: Active Trading P&L (sorted by active P&L) ──
+    active_rows = sorted(active_pnl.items(), key=lambda kv: kv[1], reverse=True)
     lines = [
-        f"| Persona class | Archetype | Final P&L ({sym}{sm_unit}) | Per-agent ({sym}k) | Agents |",
+        f"### Active Trading P&L (from decisions made during simulation)\n",
+        f"| Persona class | Archetype | Trading P&L ({sym}{sm_unit}) | Per-agent ({sym}k) | Agents |",
         "|---|---|---|---|---|",
     ]
-    for cid, total_pnl in rows_data:
+    for cid, a_pnl in active_rows:
         p = by_id.get(cid)
         if p is None or p.sandbox is None:
             continue
         n_agents = p.sandbox.instance_count
-        per_agent = (total_pnl / n_agents / 1e3) if n_agents else 0.0
+        per_agent = (a_pnl / n_agents / 1e3) if n_agents else 0.0
         lines.append(
             f"| `{cid}` | {p.archetype} | "
-            f"{total_pnl / sm_div:+.2f} | {per_agent:+.1f} | {n_agents} |"
+            f"{a_pnl / sm_div:+.2f} | {per_agent:+.1f} | {n_agents} |"
         )
+
+    # ── Table 2: Passive Position Float (top 5 by magnitude) ──
+    passive_rows = sorted(passive_pnl.items(), key=lambda kv: abs(kv[1]), reverse=True)
+    lines.append(f"\n### Passive Position Float (unrealized gain on pre-existing holdings)\n")
+    lines.append(f"| Persona class | Archetype | Float ({sym}{sm_unit}) | Agents |")
+    lines.append("|---|---|---|---|")
+    for cid, p_pnl in passive_rows[:5]:
+        p = by_id.get(cid)
+        if p is None or p.sandbox is None:
+            continue
+        n_agents = p.sandbox.instance_count
+        lines.append(
+            f"| `{cid}` | {p.archetype} | "
+            f"{p_pnl / sm_div:+.2f} | {n_agents} |"
+        )
+
     return "\n".join(lines)
 
 

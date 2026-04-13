@@ -180,6 +180,8 @@ class OasisSimResult:
     adv_value_used: float
     oasis_db_path: str
     final_agents_by_class: dict[str, list[Agent]] = field(default_factory=dict)
+    # Multi-instrument: initial per-ticker prices (snapshot at sim start).
+    initial_prices: dict[str, float] = field(default_factory=dict)
     # Multi-instrument: final per-ticker prices. Empty when single-instrument.
     final_prices: dict[str, float] = field(default_factory=dict)
     # Multi-instrument: per-ticker price trajectories. Empty when single-instrument.
@@ -249,6 +251,24 @@ class OasisSimResult:
         price = self.final_prices if self.final_prices else self.final_price
         return {
             class_id: sum(a.pnl(price) for a in agents)
+            for class_id, agents in self.final_agents_by_class.items()
+        }
+
+    def compute_class_active_pnl(self) -> dict[str, float]:
+        """P&L from actual trading decisions only (excludes passive float)."""
+        price = self.final_prices if self.final_prices else self.final_price
+        init_price = self.initial_prices if self.initial_prices else self.initial_price
+        return {
+            class_id: sum(a.active_pnl(price, init_price) for a in agents)
+            for class_id, agents in self.final_agents_by_class.items()
+        }
+
+    def compute_class_passive_pnl(self) -> dict[str, float]:
+        """Unrealized gain on pre-existing holdings (position float)."""
+        price = self.final_prices if self.final_prices else self.final_price
+        init_price = self.initial_prices if self.initial_prices else self.initial_price
+        return {
+            class_id: sum(a.passive_pnl(price, init_price) for a in agents)
             for class_id, agents in self.final_agents_by_class.items()
         }
 
@@ -1050,6 +1070,7 @@ async def run_simulation(
     # ── Multi-instrument price tracking ──
     # All prices/ADVs flow from the InstrumentUniverse — single source of truth.
     current_prices: dict[str, float] = instrument_universe.prices()
+    _initial_prices_snap: dict[str, float] = dict(current_prices)  # snapshot for P&L decomposition
     adv_values: dict[str, float] = instrument_universe.adv_values()
     adaptive_advs: dict[str, AdaptiveADV] = {
         t: AdaptiveADV(baseline=v) for t, v in adv_values.items()
@@ -2811,6 +2832,7 @@ async def run_simulation(
         adv_value_used=initial_adv,
         oasis_db_path=str(db_path_obj),
         final_agents_by_class=agent_pops,
+        initial_prices=dict(_initial_prices_snap) if _initial_prices_snap else {},
         final_prices=dict(current_prices) if current_prices else {},
         price_trajectories=(
             dict(multi_trajectories)

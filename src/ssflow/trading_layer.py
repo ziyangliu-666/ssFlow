@@ -74,6 +74,9 @@ class TraderInstance:
     reaction_lag: int = 0           # round index when this agent becomes active
     first_position_round: int = -1  # round when first non-zero position opened (-1 = never)
     agent_id: str = ""              # unique ID for T1Ledger tracking (auto-assigned at spawn)
+    # Snapshot of holdings at spawn time — used to decompose P&L into
+    # passive (pre-existing position float) vs active (trading gains).
+    initial_holdings: dict[str, float] = field(default_factory=dict)
 
     # Intra-class sub-population assignment (Phase II heterogeneity).
     # Defaults keep single-bucket homogeneous behavior for every persona
@@ -120,6 +123,29 @@ class TraderInstance:
 
     def pnl(self, current_price: float | dict[str, float]) -> float:
         return self.nav(current_price) - self.capital
+
+    def passive_pnl(self, current_price: float | dict[str, float], initial_price: float | dict[str, float]) -> float:
+        """Unrealized gain on pre-existing holdings (position float).
+
+        This is the P&L component from price movement on shares held at
+        spawn time — no trading decision was made, these shares were just
+        sitting there.
+        """
+        prices = self._resolve_prices(current_price)
+        init_prices = self._resolve_prices(initial_price)
+        return sum(
+            shares * (prices.get(ticker, 0.0) - init_prices.get(ticker, 0.0))
+            for ticker, shares in self.initial_holdings.items()
+        )
+
+    def active_pnl(self, current_price: float | dict[str, float], initial_price: float | dict[str, float]) -> float:
+        """P&L from actual trading decisions during the simulation.
+
+        Equals total P&L minus the passive float on pre-existing holdings.
+        Captures both realized gains (closed positions) and unrealized gains
+        on newly opened positions.
+        """
+        return self.pnl(current_price) - self.passive_pnl(current_price, initial_price)
 
     def buy_headroom(self, current_price: float | dict[str, float]) -> float:
         """Remaining buy capacity given the persona's max_position_pct cap."""
@@ -318,6 +344,7 @@ def spawn_agents(
                     capital=capital,
                     cash=cash,
                     holdings=holdings,
+                    initial_holdings=dict(holdings),
                     max_holdings_value=agent_max_holdings,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
@@ -330,12 +357,14 @@ def spawn_agents(
         else:
             # Single-instrument
             holdings_shares = holdings_value / current_price
+            _init_h = {primary_ticker: holdings_shares}
             agents.append(
                 Agent(
                     persona_id=persona.id,
                     capital=capital,
                     cash=cash,
                     holdings={primary_ticker: holdings_shares},
+                    initial_holdings=dict(_init_h),
                     max_holdings_value=agent_max_holdings,
                     reaction_lag=reaction_lag,
                     first_position_round=0 if holdings_value > 0 else -1,
