@@ -2256,7 +2256,7 @@ async def run_simulation(
                         current_price=_phase_price,
                         rng=sample_rng,
                         instrument=_primary_ticker if instrument_universe is None else "_default",
-                        rationale="(no tool call this round, held)",
+                        rationale="本轮维持现有仓位不动。",
                         round_idx=round_idx,
                         limit_board=limit_board,
                         t1_ledger=t1_ledger,
