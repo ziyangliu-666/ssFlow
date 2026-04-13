@@ -165,6 +165,14 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
             continue
         sign = "净买盘" if cf.net_flow > 0 else ("净卖盘" if cf.net_flow < 0 else "观望")
         rationale = sanitize_text(cf.rationale)[:160]
+        # When flow was clamped to zero (direction guard), the original
+        # rationale may contradict the "观望" label. Use neutral text.
+        if cf.net_flow == 0.0 and rationale:
+            _r_lower = rationale.lower()
+            _has_sell = any(w in _r_lower for w in ("减持", "离场", "卖出", "做空", "降低敞口"))
+            _has_buy = any(w in _r_lower for w in ("增持", "买入", "加仓", "进入", "入场"))
+            if _has_sell or _has_buy:
+                rationale = "本轮维持现有仓位不动。"
         # Source tag for TWAP plan or policy-forced orders
         source_tag = ""
         source = getattr(cf, "source", "llm")
