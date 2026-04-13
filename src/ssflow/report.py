@@ -172,8 +172,27 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
             source_tag = " [TWAP]"
         elif source == "policy":
             source_tag = " [POLICY]"
+
+        # ── Action/rationale consistency check ──
+        # Detect when the LLM's stated intent contradicts the actual
+        # net_flow direction and append a brief explanation so the
+        # report doesn't show "net sell" with a "buy" rationale.
+        consistency_note = ""
+        if rationale and source not in ("hold", "policy"):
+            _r = rationale.lower()
+            _buy_words = ("进入", "增持", "增仓", "加仓", "买入", "enter", "buy")
+            _sell_words = ("减持", "减仓", "卖出", "降低敞口", "锁定利润", "exit", "sell")
+            _text_implies_buy = any(w in _r for w in _buy_words)
+            _text_implies_sell = any(w in _r for w in _sell_words)
+            if cf.net_flow == 0 and (_text_implies_buy or _text_implies_sell):
+                consistency_note = " *(意图未执行: 受仓位/T+1/涨跌停约束)*"
+            elif cf.net_flow > 0 and _text_implies_sell and not _text_implies_buy:
+                consistency_note = " *(净买盘与减持意图偏差: 分布采样结果)*"
+            elif cf.net_flow < 0 and _text_implies_buy and not _text_implies_sell:
+                consistency_note = " *(净卖盘与加仓意图偏差: 分布采样结果)*"
+
         lines.append(
-            f"- **{p.archetype}**{source_tag} ({sign} {sym}{abs(cf.net_flow) / big_div:.2f}{big_unit}): _{rationale}_"
+            f"- **{p.archetype}**{source_tag} ({sign} {sym}{abs(cf.net_flow) / big_div:.2f}{big_unit}): _{rationale}_{consistency_note}"
         )
     return "\n".join(lines)
 
