@@ -29,11 +29,14 @@ PYTHONPATH=src /home/rufus/miniconda3/envs/ssflow/bin/python scripts/run_one.py 
 
 ### 4. 送 Codex 审查
 - 读 `review-loop/CODEX_PROMPT.md` 作为 prompt 模板
-- 用 `git diff HEAD~1` 获取本轮代码变更
+- 写一段【输出变更摘要】（3-5 句话，只描述报告输出层面的变化，不提代码/实现/模型名称）
+  - 好的例子："本轮修改后，机构资金不再在事件当天大量交易，而是延迟到 T+1 才入场"
+  - 坏的例子："修改了 Kyle lambda 参数从 0.5 到 0.3"（暴露实现）
 - 调用 `mcp__codex__codex`（每次都是全新 session，无前文污染）：
-  - prompt: CODEX_PROMPT.md 内容 + "\n\n===== 报告全文 =====\n" + 报告内容 + "\n\n===== 本轮代码变更 =====\n" + git diff
+  - prompt: CODEX_PROMPT.md 内容，把 `{report_content}` 替换为报告全文，`{change_summary}` 替换为输出变更摘要
   - sandbox: "read-only"
   - cwd: "/home/rufus/ssFlow"
+- **绝对不要**在 prompt 里提及任何实现细节（模型名称、公式、参数、代码结构）
 - 等待 Codex 返回
 
 ### 5. 存 review
