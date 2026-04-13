@@ -873,6 +873,27 @@ def apply_distribution_to_agent_pop(
         )
         net_flow += order
 
+    # ── Net-flow direction guard ──────────────────────────────────
+    # When the LLM explicitly chose buy or sell, stochastic agent
+    # dispersion must not flip the NET direction.  A "sell" class
+    # decision that produces positive net flow (or vice versa) creates
+    # a credibility-killing contradiction in the report.  Clamp to
+    # zero rather than allowing the opposite direction.
+    if "__freeform__" in distribution and raw_distribution:
+        _llm_side = raw_distribution.get("side", "hold")
+        if _llm_side == "buy" and net_flow < 0:
+            log.info(
+                "Direction guard %s: LLM=buy but net_flow=%.2f → clamped to 0",
+                persona.id, net_flow,
+            )
+            net_flow = 0.0
+        elif _llm_side == "sell" and net_flow > 0:
+            log.info(
+                "Direction guard %s: LLM=sell but net_flow=%.2f → clamped to 0",
+                persona.id, net_flow,
+            )
+            net_flow = 0.0
+
     return ClassFlowResult(
         persona_id=persona.id,
         instrument=instrument,
