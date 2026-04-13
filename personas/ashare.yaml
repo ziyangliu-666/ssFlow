@@ -1287,7 +1287,7 @@ personas:
     market_share:
       by_account_count: 0.0001
       by_holdings: 0.01
-      by_volume: 0.05
+      by_volume: 0.02
       citations:
         - source_id: phase-ii-backtest-fix
     voice_prompt: |
@@ -1341,7 +1341,7 @@ personas:
     market_share:
       by_account_count: 0.00001
       by_holdings: 0.005
-      by_volume: 0.03
+      by_volume: 0.01
       citations:
         - source_id: phase-ii-backtest-fix
     voice_prompt: |
