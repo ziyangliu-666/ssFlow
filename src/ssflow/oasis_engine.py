@@ -2086,6 +2086,29 @@ async def run_simulation(
                                     round_idx, order.persona_id,
                                     side, _sev, _override_prob,
                                 )
+
+                        # ── Severity-based sell suppression for short sellers ──
+                        # On clearly positive events, short sellers should reduce
+                        # their selling. Probabilistically convert sell→hold.
+                        if (side == "sell"
+                                and _initial_severity is not None
+                                and _initial_severity.overnight_sentiment > 0.25
+                                and persona.role in ("short_seller",)):
+                            _sev = _initial_severity.overnight_sentiment
+                            _suppress_prob = min(0.6, _sev * 0.8)
+                            if sample_rng.random() < _suppress_prob:
+                                log.info(
+                                    "  R%d %s SELL_SUPPRESSED %s: sell→hold "
+                                    "(positive sev=%.2f, p=%.2f)",
+                                    round_idx, order.persona_id,
+                                    persona.archetype, _sev, _suppress_prob,
+                                )
+                                side = "hold"
+                                qty = 0.0
+                                pool = ""
+                                order.raw_args["side"] = "hold"
+                                order.raw_args["quantity_pct"] = 0.0
+
                         emit_dist = {
                             "side": side,
                             "quantity_pct": qty,
