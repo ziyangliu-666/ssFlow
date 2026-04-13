@@ -33,6 +33,8 @@ dependencies = [
     # exotic A-share lookups but is not imported on the hot path.
     "yfinance>=0.2.40",
     "akshare>=1.12.0",
+    # LOB market engine (Phase 0 restructure) — price-level sorted containers.
+    "sortedcontainers>=2.4.0",
 ]
 
 [project.optional-dependencies]

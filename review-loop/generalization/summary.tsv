@@ -1,2 +1,0 @@
-idx	id	category	direction	event_type	input	status	error	simulation_id	initial_price	final_price	delta_pct	n_personas	cost_usd	elapsed_s	report_path	compliance
-1	ashare_earnings_beat	A股-主板	利好	earnings	比亚迪2026Q1财报: 营收2380亿元同比+22%, 净利润105亿同比+38%, 新能源车销量突破100万辆单季纪录, 毛利率22.1%超预期	ok		oasis_d35619ddf850	104.25	106.48	2.14	36	0.1623	54.5	review-loop/generalization/ashare_earnings_beat.md	PASS
