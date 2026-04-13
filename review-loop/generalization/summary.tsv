@@ -1,0 +1,7 @@
+idx	id	category	direction	event_type	input	status	error	simulation_id	initial_price	final_price	delta_pct	n_personas	cost_usd	elapsed_s	report_path	compliance
+1	ashare_earnings_beat	A股-主板	利好	earnings	比亚迪2026Q1财报: 营收2380亿元同比+22%, 净利润105亿同比+38%, 新能源车销量突破100万辆单季纪录, 毛利率22.1%超预期	ok		oasis_ce28cf4ac313	104.25	106.08	1.76	36	0.1415	50.5	review-loop/generalization/ashare_earnings_beat.md	PASS
+2	ashare_earnings_miss	A股-主板	利空	earnings	贵州茅台2026Q1业绩快报: 营收同比-3.2%为近十年首次季度下滑, 直销占比下降至38%, 批价跌破2200元, 管理层称消费降级影响持续	ok		oasis_7e31d8c3c70a	1443.31	1370.39	-5.05	36	0.1434	49.4	review-loop/generalization/ashare_earnings_miss.md	PASS
+3	ashare_policy_rate_cut	A股-宏观	利好	policy	中国人民银行宣布下调MLF利率25bp至2.25%, 同时下调7天逆回购利率15bp, 为年内第二次降息, 释放明确宽松信号	ok		oasis_12b553c85670	11.07	13.41	21.16	36	0.1393	46.2	review-loop/generalization/ashare_policy_rate_cut.md	PASS
+4	ashare_regulatory_crackdown	A股-互联网	利空	regulatory	国家市场监管总局对某头部互联网平台开出82亿元反垄断罚款, 要求6个月内完成整改, 涉及'二选一'和大数据杀熟行为	ok		oasis_62302b89d34a	11.07	9.04	-18.3	36	0.1399	44.0	review-loop/generalization/ashare_regulatory_crackdown.md	PASS
+5	ashare_ma_positive	A股-央企重组	利好	m_a	中国神华公告拟以换股方式吸收合并国电电力, 交易对价约1200亿元, 合并后将成为全球最大综合能源集团	ok		oasis_4fcfceef8f25	46.32	51.23	10.59	36	0.1476	56.7	review-loop/generalization/ashare_ma_positive.md	PASS
+6	ashare_gem_ipo	A股-创业板	利好	ipo	国产GPU龙头芯瞳半导体创业板IPO首日, 发行价68.50元, 募资45亿元, 公司对标英伟达A100性能达70%, 已获多家互联网大厂订单	ok		oasis_9f7d7dc8a8be	100.0	120.97	20.97	36	0.1288	70.5	review-loop/generalization/ashare_gem_ipo.md	PASS
