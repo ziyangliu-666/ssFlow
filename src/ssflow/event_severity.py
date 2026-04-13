@@ -134,6 +134,32 @@ _EXTREME_BULL_RE = re.compile(
 _BEAR_CLAMP = -0.85
 _BULL_CLAMP = 0.75
 
+# ── Moderate keywords: common positive/negative indicators ──
+# These nudge sentiment by ±0.3 instead of clamping to extremes.
+# Applied AFTER extreme keywords — if extreme already matched, moderate is skipped.
+_MODERATE_BULL_KEYWORDS_CN = (
+    "超预期", "超出预期", "增长", "突破", "新高", "纪录",
+    "合并", "收购", "重组", "吸收合并",
+    "扶持", "补贴", "纾困", "取消限购",
+    "降息", "降准", "宽松",
+    "超越", "领先", "创新高",
+    "beat",
+)
+_MODERATE_BEAR_KEYWORDS_CN = (
+    "暴雷", "下滑", "亏损", "罚款", "处罚",
+    "减持", "解禁", "负增长", "下降", "首次下滑",
+    "打压", "制裁", "实体清单", "加征关税",
+    "下修", "miss", "不及预期",
+)
+_MODERATE_BULL_NUDGE = 0.35
+_MODERATE_BEAR_NUDGE = -0.35
+_MODERATE_BULL_RE = re.compile(
+    "|".join(re.escape(kw) for kw in _MODERATE_BULL_KEYWORDS_CN), re.IGNORECASE
+)
+_MODERATE_BEAR_RE = re.compile(
+    "|".join(re.escape(kw) for kw in _MODERATE_BEAR_KEYWORDS_CN), re.IGNORECASE
+)
+
 
 @dataclass(frozen=True)
 class SeverityResolution:
@@ -160,20 +186,24 @@ class SeverityResolution:
 def _resolve_keyword_adjustment(
     base_sentiment: float, event_text: str
 ) -> tuple[float, bool, bool]:
-    """Apply extreme-keyword clamps. Returns (new_sentiment, bear_hit, bull_hit).
+    """Apply keyword-based sentiment adjustments.
 
-    Resolution rule when both sides match: choose the side with the larger
-    magnitude. This prevents a bearish event text that happens to mention
-    "龙头" (leader) from being flipped to bullish, and vice versa.
+    Two tiers:
+      1. Extreme keywords → clamp to ±0.75/0.85 (terminal risk / mania).
+      2. Moderate keywords → nudge by ±0.35 (common event indicators).
+
+    Extreme keywords take priority. When both sides match within a tier,
+    choose the side with the larger magnitude.
     """
     if not event_text:
         return base_sentiment, False, False
     text_l = event_text.lower()
+
+    # ── Tier 1: Extreme keywords (hard clamp) ──
     bear_hit = bool(_EXTREME_BEAR_RE.search(text_l))
     bull_hit = bool(_EXTREME_BULL_RE.search(text_l))
 
     if bear_hit and bull_hit:
-        # Conflict: pick the side that moves sentiment further from neutral.
         bear_candidate = min(base_sentiment, _BEAR_CLAMP)
         bull_candidate = max(base_sentiment, _BULL_CLAMP)
         if abs(bear_candidate) >= abs(bull_candidate):
@@ -184,6 +214,28 @@ def _resolve_keyword_adjustment(
         return min(base_sentiment, _BEAR_CLAMP), True, False
     if bull_hit:
         return max(base_sentiment, _BULL_CLAMP), False, True
+
+    # ── Tier 2: Moderate keywords (soft nudge) ──
+    mod_bull = bool(_MODERATE_BULL_RE.search(text_l))
+    mod_bear = bool(_MODERATE_BEAR_RE.search(text_l))
+
+    if mod_bull and mod_bear:
+        # Both matched — pick the side with more keyword matches
+        bull_count = len(_MODERATE_BULL_RE.findall(text_l))
+        bear_count = len(_MODERATE_BEAR_RE.findall(text_l))
+        if bull_count >= bear_count:
+            nudged = max(-1.0, min(1.0, base_sentiment + _MODERATE_BULL_NUDGE))
+            return nudged, False, False
+        nudged = max(-1.0, min(1.0, base_sentiment + _MODERATE_BEAR_NUDGE))
+        return nudged, False, False
+
+    if mod_bull:
+        nudged = max(-1.0, min(1.0, base_sentiment + _MODERATE_BULL_NUDGE))
+        return nudged, False, False
+    if mod_bear:
+        nudged = max(-1.0, min(1.0, base_sentiment + _MODERATE_BEAR_NUDGE))
+        return nudged, False, False
+
     return base_sentiment, False, False
 
 
