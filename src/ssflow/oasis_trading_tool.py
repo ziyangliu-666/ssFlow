@@ -215,6 +215,27 @@ def make_freeform_trading_tool(
             side_clean = "hold"
             qty = 0.0
 
+        # ── Rationale-side consistency guard ──────────────────────────
+        # If the LLM explicitly says "观望/hold" in the rationale but
+        # chose side=buy/sell, override to hold. This catches a common
+        # LLM failure where the text says "暂时观望" but the tool call
+        # side field is "buy" with small qty.
+        if side_clean != "hold" and rationale:
+            _r = rationale.lower()
+            _hold_phrases = ("观望", "保持现有", "维持现有", "暂不操作", "暂不交易", "不做操作")
+            _action_phrases = ("进入", "增持", "离场", "降低敞口", "做空", "做多",
+                               "锁定利润", "入场", "exit", "enter", "buy", "sell")
+            _text_says_hold = any(p in _r for p in _hold_phrases)
+            _text_says_action = any(p in _r for p in _action_phrases)
+            if _text_says_hold and not _text_says_action:
+                log.info(
+                    "Rationale-side override for %s: side=%s→hold "
+                    "(rationale says hold: '%s')",
+                    persona_id, side_clean, rationale[:80],
+                )
+                side_clean = "hold"
+                qty = 0.0
+
         inst = str(instrument).strip() if instrument else None
         pool_raw = str(pool).strip().lower() if pool else ""
 
