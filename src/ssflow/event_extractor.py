@@ -139,7 +139,17 @@ RULES:
    date provided in the user message.
 3. For search_terms_for_context: produce 3 specific queries that would help
    pull the right web results. Use the instrument name + relevant terms.
-4. Return ONLY the JSON, no commentary."""
+4. For MACRO/POLICY events that affect the entire market (央行降准/降息, Fed rate,
+   fiscal stimulus, trade policy) rather than a single company:
+   - Use a broad market ETF as the instrument:
+     A-share: instrument="沪深300ETF", ticker="510300"
+     US: instrument="S&P 500 ETF", ticker="SPY"
+     HK: instrument="恒生ETF", ticker="02800"
+   This ensures the simulation has a real tradeable instrument with price data.
+5. For regulatory events targeting "某" (unspecified company), pick the most
+   prominent company in that sector. E.g., "某头部互联网平台" → "腾讯" or "阿里巴巴".
+   If A-share, prefer A-share listed entities (e.g., ticker="600519" for 茅台).
+6. Return ONLY the JSON, no commentary."""
 
 
 async def _classify_input(raw_input: str, today: str) -> dict[str, Any]:
