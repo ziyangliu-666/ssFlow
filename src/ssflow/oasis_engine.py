@@ -180,6 +180,8 @@ class OasisSimResult:
     adv_value_used: float
     oasis_db_path: str
     final_agents_by_class: dict[str, list[Agent]] = field(default_factory=dict)
+    # Multi-instrument: final per-ticker prices. Empty when single-instrument.
+    final_prices: dict[str, float] = field(default_factory=dict)
     # Multi-instrument: per-ticker price trajectories. Empty when single-instrument.
     price_trajectories: dict[str, list[float]] = field(default_factory=dict)
 
@@ -242,8 +244,11 @@ class OasisSimResult:
         return out
 
     def compute_class_pnl(self) -> dict[str, float]:
+        # Use per-ticker final prices when available so multi-instrument
+        # agents are valued correctly (not all shares × scalar index price).
+        price = self.final_prices if self.final_prices else self.final_price
         return {
-            class_id: sum(a.pnl(self.final_price) for a in agents)
+            class_id: sum(a.pnl(price) for a in agents)
             for class_id, agents in self.final_agents_by_class.items()
         }
 
@@ -2799,6 +2804,7 @@ async def run_simulation(
         adv_value_used=initial_adv,
         oasis_db_path=str(db_path_obj),
         final_agents_by_class=agent_pops,
+        final_prices=dict(current_prices) if current_prices else {},
         price_trajectories=(
             dict(multi_trajectories)
             if multi_trajectories else {}
