@@ -1713,14 +1713,17 @@ async def run_simulation(
             #      post-fast price and trade second. Two Kyle computations
             #      per round, but only ONE EVENT_PRICE_UPDATED at the end.
             _phase_prices = dict(current_prices) if current_prices else {}
-            # In multi-instrument mode, sync the scalar _phase_price with
-            # the event-subject ticker's price in current_prices to avoid
-            # price_before / delta_pct inconsistencies in PhaseResult.
+            # Use pre-gap price as the phase starting point so the first
+            # phase absorbs the gap-open into its delta.  This keeps the
+            # phase breakdown consistent with the round header (which also
+            # uses price_at_round_start).
             if instrument_universe and current_prices:
                 _es_ticker = instrument_universe.event_subject_ticker
-                _phase_price = current_prices.get(_es_ticker, current_price)
+                # Overlay pre-gap price for the event subject ticker
+                _phase_prices[_es_ticker] = price_at_round_start
+                _phase_price = price_at_round_start
             else:
-                _phase_price = current_price
+                _phase_price = price_at_round_start
             class_flows: list[ClassFlowResult] = []
             submitted_ids: set[str] = set()
             social_publications: list = []
