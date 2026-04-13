@@ -2177,7 +2177,7 @@ async def run_simulation(
                     # Each class's max flow is proportional to its real
                     # volume share so different participants hit different
                     # ceilings — avoids the "uniform ration" artifact.
-                    _VOLUME_SHARE_MULT = 5.0  # allow up to 5x normal share
+                    _VOLUME_SHARE_MULT = 3.0  # allow up to 3x normal share
                     _cap_adv = adv_values.get(order_ticker, effective_adv)
                     _vol_share = 0.05  # default floor
                     if persona.market_share and persona.market_share.by_volume:
