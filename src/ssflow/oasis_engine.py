@@ -60,6 +60,10 @@ from .event_bus import (
     EVENT_FORCE_ACTION_OVERRIDE,
     EVENT_PERSONA_STATE_UPDATED,
     EVENT_PERSONA_THOUGHT,
+    EVENT_PHASE_COMPLETE,
+    EVENT_PLAN_CANCELLED,
+    EVENT_PLAN_CREATED,
+    EVENT_PLAN_SLICE_EXECUTED,
     EVENT_POLICY_CREATED,
     EVENT_POLICY_FIRED,
     EVENT_PRICE_UPDATED,
@@ -103,6 +107,16 @@ from .oasis_persona_adapter import (
 )
 from .oasis_trading_tool import OrderCollector, PendingOrder
 from .persona import Persona
+from .round_phase import (
+    FAST_AGENT_TYPES,
+    SLOW_AGENT_TYPES,
+    INFO_ONLY_TYPES,
+    ExecutionPlan,
+    PhaseResult,
+    RoundPhase,
+    classify_agent_phase,
+    create_execution_plan,
+)
 from .self_model import (
     build_evaluators_for_personas,
 )
@@ -140,6 +154,12 @@ class RoundRecord:
     avg_fill_rate: float = 1.0             # Average fill rate across all personas
     total_unfilled_volume: float = 0.0     # Total unfilled volume this round
     total_t1_blocked: int = 0              # Total T+1 blocked sell attempts
+    # Phase-based execution metadata (backward-compat: all default empty)
+    phase_results: list = field(default_factory=list)   # list[PhaseResult]
+    plan_executions: int = 0               # How many ExecutionPlan slices ran
+    active_trader_count: int = 0           # How many traders had LLM calls
+    hold_skip_count: int = 0               # How many skipped entirely
+    round_character: str = ""              # "active" | "quiet" | "plan_only"
 
 
 @dataclass
@@ -294,6 +314,85 @@ def _participation_rate(
     urgency = 1.0 / (1.0 + p.urgency_decay * round_idx)
     exhaustion = 1.0 / (1.0 + p.exhaustion_coeff * abs(cumulative_delta_pct))
     return max(p.min_participation, urgency * exhaustion)
+
+
+def _execute_pending_plans(
+    plans: dict[str, ExecutionPlan],
+    round_idx: int,
+    current_price: float,
+    event_sink: "EventSink | None" = None,
+    simulation_id: str = "",
+) -> list[PendingOrder]:
+    """Auto-execute the next slice of each active ExecutionPlan.
+
+    Returns PendingOrder list (same format as LLM orders) so they flow
+    through the normal apply_distribution_to_agent_pop path.  Completed
+    and cancelled plans are removed from the ``plans`` dict in place.
+    """
+    plan_orders: list[PendingOrder] = []
+    expired_ids: list[str] = []
+
+    for pid, plan in plans.items():
+        if plan.is_complete:
+            expired_ids.append(pid)
+            continue
+        if plan.should_cancel(current_price):
+            log.info(
+                "  R%d PLAN_CANCEL: %s (adverse move, created R%d at %.2f, now %.2f)",
+                round_idx, pid, plan.created_at_round, plan.price_at_creation,
+                current_price,
+            )
+            safe_emit(
+                event_sink,
+                EVENT_PLAN_CANCELLED,
+                simulation_id=simulation_id,
+                round_idx=round_idx,
+                persona_id=pid,
+                plan_id=plan.plan_id,
+                reason="adverse_price_move",
+                remaining_pct=plan.remaining_pct,
+            )
+            expired_ids.append(pid)
+            continue
+
+        slice_pct = plan.next_slice()
+        slice_num = plan.slice_number()
+        plan_orders.append(PendingOrder(
+            persona_id=pid,
+            distribution={"__freeform__": 1.0},
+            rationale=(
+                f"[TWAP {slice_num}/{plan.n_rounds_total}] "
+                f"{plan.rationale}"
+            ),
+            round_idx=round_idx,
+            raw_args={
+                "side": plan.side,
+                "quantity_pct": slice_pct,
+                "pool": plan.pool or (
+                    "cash" if plan.side == "buy" else "holdings_in_target"
+                ),
+            },
+            instrument=plan.instrument if plan.instrument != "_default" else None,
+        ))
+        safe_emit(
+            event_sink,
+            EVENT_PLAN_SLICE_EXECUTED,
+            simulation_id=simulation_id,
+            round_idx=round_idx,
+            persona_id=pid,
+            plan_id=plan.plan_id,
+            slice_number=slice_num,
+            slice_pct=slice_pct,
+            remaining_pct=plan.remaining_pct - slice_pct,
+        )
+        plan.advance(slice_pct)
+        if plan.is_complete:
+            expired_ids.append(pid)
+
+    for pid in expired_ids:
+        plans.pop(pid, None)
+
+    return plan_orders
 
 
 def _currency_symbol(currency: str) -> str:
@@ -965,6 +1064,23 @@ async def run_simulation(
     _initial_severity = None
     _SEVERITY_PRIOR_DECAY = 0.7  # per-round geometric decay
 
+    # ── Phase-based execution state ──
+    execution_plans: dict[str, ExecutionPlan] = {}  # persona_id → active plan
+
+    # Pre-classify personas into fast/slow phases (stable across rounds)
+    _fast_persona_ids: set[str] = set()
+    _slow_persona_ids: set[str] = set()
+    for _p in personas:
+        _atype = _p.agent_type or "retail"
+        if classify_agent_phase(_atype) == RoundPhase.FAST_REACT:
+            _fast_persona_ids.add(_p.id)
+        else:
+            _slow_persona_ids.add(_p.id)
+    log.info(
+        "Phase classification: %d fast, %d slow personas",
+        len(_fast_persona_ids), len(_slow_persona_ids),
+    )
+
     try:
         for round_idx in range(n_rounds):
             log.info("OASIS sim %s round %d starting at price %.2f",
@@ -1537,103 +1653,169 @@ async def run_simulation(
                     other["user_profile"] = up
                     profile["other_info"] = other
 
-            # 2. OASIS social step: every real persona acts via LLM.
-            #    Trader personas see BOTH the 21 native OASIS social actions
-            #    AND the custom `submit_order_distribution` tool. CAMEL's
-            #    ChatAgent picks one (or more) tool calls in a single LLM
-            #    decision — social + trading from one brain, one memory.
-            real_agents = {
-                agent_graph.get_agent(persona_id_to_oasis_id[p.id]): LLMAction()
-                for p in personas
-                if p.sandbox is None  # non-traders always active socially
-                or p.id not in inactive_trader_ids
-            }
-            try:
-                await env.step(real_agents)
-            except BudgetExceeded as exc:
-                log.warning(
-                    "OASIS sim %s hit budget at round %d social step",
-                    simulation_id, round_idx,
-                )
-                safe_emit(
-                    event_sink,
-                    EVENT_ERROR,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    code="budget_exceeded",
-                    detail=str(exc),
-                )
-                raise
-            except Exception as exc:
-                log.warning(
-                    "OASIS sim %s round %d social step error: %s",
-                    simulation_id, round_idx, exc,
-                )
-
-            # 2.5. Query publications created during the social step and
-            #      emit them as persona_thought events BEFORE the trade
-            #      events. Thoughts chronologically precede trades because
-            #      they come from the same LLM decision that triggered the
-            #      submit_order_distribution tool call. Emitting in that
-            #      order lets the frontend timeline read as cause → effect
-            #      (thought → trade → flow → price), not the reverse.
-            post_social_post_id = _max_post_id(str(db_path_obj))
-            social_publications = _query_round_publications(
-                db_path=str(db_path_obj),
-                registry=publication_registry,
-                persona_id_to_oasis_id=persona_id_to_oasis_id,
-                since_post_id=pre_round_post_id,
+            # 2. Execute pending TWAP plans from previous rounds.
+            #    Plan orders are generated BEFORE the phase loop so they
+            #    can be split by phase and merged with LLM orders.
+            plan_orders = _execute_pending_plans(
+                execution_plans, round_idx, current_price,
+                event_sink=event_sink,
+                simulation_id=simulation_id,
             )
-            for pub in social_publications:
-                # Skip market broadcaster posts — they're not persona thoughts.
-                if pub.author_persona_id == MARKET_AGENT_ID_NAME:
-                    continue
-                safe_emit(
-                    event_sink,
-                    EVENT_PERSONA_THOUGHT,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    publication_id=pub.publication_id,
-                    oasis_post_id=pub.oasis_post_id,
-                    persona_id=pub.author_persona_id,
-                    archetype=pub.author_archetype,
-                    content_type=pub.content_type,
-                    text=pub.text,
-                    authority_weight=float(pub.authority_weight),
-                    likes=int(pub.likes),
-                    reposts=int(pub.reposts),
-                    references=list(pub.references),
+            # Split plan orders by phase
+            _fast_plan_orders = [
+                o for o in plan_orders if o.persona_id in _fast_persona_ids
+            ]
+            _slow_plan_orders = [
+                o for o in plan_orders if o.persona_id in _slow_persona_ids
+            ]
+            if plan_orders:
+                log.info(
+                    "  R%d: %d plan orders (fast=%d, slow=%d)",
+                    round_idx, len(plan_orders),
+                    len(_fast_plan_orders), len(_slow_plan_orders),
                 )
 
-            # 2.8. Drain non-trader action collector and dispatch.
-            #      Announcements/regulations/research get posted into feed.
-            pending_actions = action_collector.drain()
-            if pending_actions:
-                log.info(
-                    "  R%d: %d agent actions collected",
-                    round_idx, len(pending_actions),
+            # 2.1. Phase-based execution loop.
+            #      Fast agents (retail, KOL, quant, media) trade first at
+            #      current_price. Their Kyle impact moves _phase_price.
+            #      Slow agents (institutional, strategic, analyst) see the
+            #      post-fast price and trade second. Two Kyle computations
+            #      per round, but only ONE EVENT_PRICE_UPDATED at the end.
+            _phase_price = current_price
+            _phase_prices = dict(current_prices) if current_prices else {}
+            class_flows: list[ClassFlowResult] = []
+            submitted_ids: set[str] = set()
+            social_publications: list = []
+            post_social_post_id = pre_round_post_id
+            phase_results: list[PhaseResult] = []
+            effective_adv = adaptive_adv.effective  # default; updated per phase
+            _round_plan_executions = 0
+
+            _phase_sequence = [
+                (RoundPhase.FAST_REACT, _fast_persona_ids, _fast_plan_orders),
+                (RoundPhase.SLOW_REACT, _slow_persona_ids, _slow_plan_orders),
+            ]
+
+            for _phase, _phase_persona_ids, _phase_plan_orders in _phase_sequence:
+                _phase_pre_post_id = _max_post_id(str(db_path_obj))
+
+                # 2a. OASIS social step: this phase's agents act via LLM.
+                _phase_agents = {
+                    agent_graph.get_agent(persona_id_to_oasis_id[p.id]): LLMAction()
+                    for p in personas
+                    if p.id in _phase_persona_ids
+                    and (p.sandbox is None  # non-traders always active socially
+                         or p.id not in inactive_trader_ids)
+                }
+                if _phase_agents:
+                    try:
+                        await env.step(_phase_agents)
+                    except BudgetExceeded as exc:
+                        log.warning(
+                            "OASIS sim %s hit budget at round %d %s step",
+                            simulation_id, round_idx, _phase.value,
+                        )
+                        safe_emit(
+                            event_sink,
+                            EVENT_ERROR,
+                            simulation_id=simulation_id,
+                            round_idx=round_idx,
+                            code="budget_exceeded",
+                            detail=str(exc),
+                        )
+                        raise
+                    except Exception as exc:
+                        log.warning(
+                            "OASIS sim %s round %d %s step error: %s",
+                            simulation_id, round_idx, _phase.value, exc,
+                        )
+
+                # 2b. Query publications created during this phase's social
+                #     step and emit persona_thought events.
+                _phase_post_post_id = _max_post_id(str(db_path_obj))
+                _phase_publications = _query_round_publications(
+                    db_path=str(db_path_obj),
+                    registry=publication_registry,
+                    persona_id_to_oasis_id=persona_id_to_oasis_id,
+                    since_post_id=_phase_pre_post_id,
                 )
-                for pa in pending_actions:
-                    # ── Dynamic policy creation ──
-                    if pa.action_type == "create_policy":
-                        from .policy import Policy as _Policy
-                        try:
-                            new_policy = _Policy.from_llm_spec(
-                                pa.payload,
-                                source=f"llm_round_{round_idx}",
-                                owner_id=pa.agent_id,
-                            )
-                            # Attach to the owning SimAgent
-                            sim_agent = sim_graph.agent_by_persona(pa.persona_id)
-                            if sim_agent is None:
-                                sim_agent = sim_graph.agents.get(pa.agent_id)
-                            if sim_agent is not None:
-                                sim_agent.policies.append(new_policy)
-                                log.info(
-                                    "  R%d POLICY_CREATED: %s → %s (trigger=%s)",
-                                    round_idx, pa.persona_id,
-                                    new_policy.name, new_policy.trigger_expr,
+                social_publications.extend(_phase_publications)
+                post_social_post_id = _phase_post_post_id
+                for pub in _phase_publications:
+                    # Skip market broadcaster posts — they're not persona thoughts.
+                    if pub.author_persona_id == MARKET_AGENT_ID_NAME:
+                        continue
+                    safe_emit(
+                        event_sink,
+                        EVENT_PERSONA_THOUGHT,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        publication_id=pub.publication_id,
+                        oasis_post_id=pub.oasis_post_id,
+                        persona_id=pub.author_persona_id,
+                        archetype=pub.author_archetype,
+                        content_type=pub.content_type,
+                        text=pub.text,
+                        authority_weight=float(pub.authority_weight),
+                        likes=int(pub.likes),
+                        reposts=int(pub.reposts),
+                        references=list(pub.references),
+                    )
+
+                # 2c. Drain non-trader action collector and dispatch.
+                pending_actions = action_collector.drain()
+                if pending_actions:
+                    log.info(
+                        "  R%d/%s: %d agent actions collected",
+                        round_idx, _phase.value, len(pending_actions),
+                    )
+                    for pa in pending_actions:
+                        # ── Dynamic policy creation ──
+                        if pa.action_type == "create_policy":
+                            from .policy import Policy as _Policy
+                            try:
+                                new_policy = _Policy.from_llm_spec(
+                                    pa.payload,
+                                    source=f"llm_round_{round_idx}",
+                                    owner_id=pa.agent_id,
                                 )
+                                # Attach to the owning SimAgent
+                                sim_agent = sim_graph.agent_by_persona(pa.persona_id)
+                                if sim_agent is None:
+                                    sim_agent = sim_graph.agents.get(pa.agent_id)
+                                if sim_agent is not None:
+                                    sim_agent.policies.append(new_policy)
+                                    log.info(
+                                        "  R%d POLICY_CREATED: %s → %s (trigger=%s)",
+                                        round_idx, pa.persona_id,
+                                        new_policy.name, new_policy.trigger_expr,
+                                    )
+                                    safe_emit(
+                                        event_sink,
+                                        EVENT_POLICY_CREATED,
+                                        simulation_id=simulation_id,
+                                        round_idx=round_idx,
+                                        agent_id=pa.agent_id,
+                                        persona_id=pa.persona_id,
+                                        policy_name=new_policy.name,
+                                        trigger_expr=new_policy.trigger_expr,
+                                        action_type=type(new_policy.action).__name__,
+                                        source=new_policy.source,
+                                    )
+                            except ValueError as exc:
+                                log.warning(
+                                    "  R%d %s create_policy failed: %s",
+                                    round_idx, pa.persona_id, exc,
+                                )
+                            continue
+
+                        # ── Regulatory dispatch: mechanical effects ──
+                        if pa.action_type == "regulate":
+                            from .policy_engine import dispatch_regulatory_action
+                            reg_policies = dispatch_regulatory_action(
+                                pa.payload, sim_graph, round_idx,
+                            )
+                            for rp in reg_policies:
                                 safe_emit(
                                     event_sink,
                                     EVENT_POLICY_CREATED,
@@ -1641,526 +1823,625 @@ async def run_simulation(
                                     round_idx=round_idx,
                                     agent_id=pa.agent_id,
                                     persona_id=pa.persona_id,
-                                    policy_name=new_policy.name,
-                                    trigger_expr=new_policy.trigger_expr,
-                                    action_type=type(new_policy.action).__name__,
-                                    source=new_policy.source,
+                                    policy_name=rp.name,
+                                    trigger_expr=rp.trigger_expr,
+                                    action_type=type(rp.action).__name__,
+                                    source=rp.source,
                                 )
-                        except ValueError as exc:
-                            log.warning(
-                                "  R%d %s create_policy failed: %s",
-                                round_idx, pa.persona_id, exc,
-                            )
-                        continue
+                            # fall through to also post to feed
 
-                    # ── Regulatory dispatch: mechanical effects ──
-                    if pa.action_type == "regulate":
-                        from .policy_engine import dispatch_regulatory_action
-                        reg_policies = dispatch_regulatory_action(
-                            pa.payload, sim_graph, round_idx,
+                        # ── Feed-posting actions (announce, regulate, publish) ──
+                        text = pa.payload.get("text", "")
+                        if not text:
+                            continue
+                        # Accumulate sentiment from announce actions
+                        if pa.action_type == "announce":
+                            authority = float(pa.payload.get("authority_weight", 0.8))
+                            round_sentiment_shift += score_announcement_sentiment(
+                                text
+                            ) * authority
+                        pa_persona_id = pa.persona_id
+                        if pa_persona_id in persona_id_to_oasis_id:
+                            pa_author = agent_graph.get_agent(
+                                persona_id_to_oasis_id[pa_persona_id]
+                            )
+                        else:
+                            pa_author = market_agent
+                        pre_pa_post_id = _max_post_id(str(db_path_obj))
+                        await env.step({
+                            pa_author: ManualAction(
+                                action_type=ActionType.CREATE_POST,
+                                action_args={"content": text},
+                            ),
+                        })
+                        pa_post_id = _max_post_id(str(db_path_obj))
+                        if pa_post_id > pre_pa_post_id:
+                            publication_registry.register(
+                                pa_post_id,
+                                PublicationMetadata(
+                                    content_type=pa.payload.get("content_type", "social_post"),
+                                    author_persona_id=pa_persona_id,
+                                    author_archetype=pa_persona_id,
+                                    authority_weight=float(pa.payload.get("authority_weight", 0.8)),
+                                    round_idx=round_idx,
+                                ),
+                            )
+                        safe_emit(
+                            event_sink,
+                            EVENT_AGENT_ACTION,
+                            simulation_id=simulation_id,
+                            round_idx=round_idx,
+                            agent_id=pa.agent_id,
+                            persona_id=pa_persona_id,
+                            action_type=pa.action_type,
+                            text=text[:200],
                         )
-                        for rp in reg_policies:
+                        log.info(
+                            "  R%d %s [%s]: %s",
+                            round_idx, pa_persona_id, pa.action_type, text[:80],
+                        )
+
+                # 2d. Drain the OrderCollector for this phase's orders.
+                _phase_llm_orders = order_collector.drain()
+                # Filter to only this phase's personas (defensive — the LLM
+                # step above only ran this phase's agents, but orders from a
+                # prior drain could leak if the collector wasn't perfectly
+                # partitioned).
+                _phase_llm_orders = [
+                    o for o in _phase_llm_orders
+                    if o.persona_id in _phase_persona_ids
+                ]
+                log.info(
+                    "  R%d/%s: %d order intents collected from %d traders",
+                    round_idx, _phase.value, len(_phase_llm_orders),
+                    len({o.persona_id for o in _phase_llm_orders}),
+                )
+
+                # 2e. Merge plan orders for this phase's personas.
+                pending_orders = list(_phase_llm_orders)
+                for po in _phase_plan_orders:
+                    _existing = {o.persona_id for o in pending_orders}
+                    if po.persona_id in _existing:
+                        # LLM submitted a new order this round → plan order
+                        # is superseded (plan will be cancelled below if the
+                        # LLM order also has an execution_plan).
+                        continue
+                    pending_orders.append(po)
+                    _round_plan_executions += 1
+
+                # 2e.2. Policy trade overrides for this phase's personas.
+                if trade_overrides:
+                    from .oasis_trading_tool import PendingOrder as _PO
+                    existing_ids = {o.persona_id for o in pending_orders}
+                    for pid, fire in trade_overrides.items():
+                        if pid not in _phase_persona_ids:
+                            continue
+                        ta = fire.action  # TradeAction
+                        pool = ta.pool or ("cash" if ta.side == "buy" else "holdings_in_target")
+                        forced_order = _PO(
+                            persona_id=pid,
+                            distribution={"__freeform__": 1.0},
+                            rationale=f"[强制] {fire.policy.description}",
+                            round_idx=round_idx,
+                            raw_args={
+                                "side": ta.side,
+                                "quantity_pct": ta.quantity_pct,
+                                "pool": pool,
+                            },
+                        )
+                        if pid in existing_ids:
+                            pending_orders = [
+                                o for o in pending_orders if o.persona_id != pid
+                            ]
+                        pending_orders.append(forced_order)
+                        log.info(
+                            "  R%d POLICY_TRADE: %s → %s %.0f%% (%s)",
+                            round_idx, pid, ta.side, ta.quantity_pct * 100,
+                            fire.policy.description,
+                        )
+                        safe_emit(
+                            event_sink,
+                            EVENT_POLICY_FIRED,
+                            simulation_id=simulation_id,
+                            round_idx=round_idx,
+                            agent_id=fire.agent_id,
+                            agent_name=fire.agent_display_name,
+                            policy_id=fire.policy.id,
+                            description=fire.policy.description,
+                            action_type="TradeAction",
+                            forced_side=ta.side,
+                            forced_quantity_pct=ta.quantity_pct,
+                            replaced_llm_order=pid in existing_ids,
+                        )
+
+                # 2f. Terminal-risk forced-seller cascade for this phase.
+                if _sim_terminal_risk:
+                    from .oasis_trading_tool import PendingOrder as _PO
+                    _short_capable_roles = {
+                        "short_seller", "active_long_short",
+                        "long_short", "hedge_fund_short",
+                    }
+                    _existing_ids = {o.persona_id for o in pending_orders}
+                    _cascade_count = 0
+                    for _p in personas:
+                        if _p.id not in _phase_persona_ids:
+                            continue
+                        if _p.sandbox is None:
+                            continue
+                        if _p.id in inactive_trader_ids:
+                            continue
+                        _role = (_p.role or "").lower()
+                        if _role in _short_capable_roles:
+                            continue
+                        _pop = agent_pops.get(_p.id) or []
+                        _has_long = any(
+                            any(v > 0 for v in a.holdings.values()) for a in _pop
+                        )
+                        if not _has_long:
+                            continue
+                        _cascade_frac = 0.40 if limit_board.at_limit_down else 0.30
+                        forced_order = _PO(
+                            persona_id=_p.id,
+                            distribution={"__freeform__": 1.0},
+                            rationale=(
+                                "[强制] 终局风险 forced-seller cascade — "
+                                "基本面已不可交易, 排队止损"
+                            ),
+                            round_idx=round_idx,
+                            raw_args={
+                                "side": "sell",
+                                "quantity_pct": _cascade_frac,
+                                "pool": "holdings_in_target",
+                            },
+                        )
+                        if _p.id in _existing_ids:
+                            pending_orders = [
+                                o for o in pending_orders if o.persona_id != _p.id
+                            ]
+                        pending_orders.append(forced_order)
+                        _cascade_count += 1
+                    if _cascade_count > 0:
+                        log.info(
+                            "  R%d/%s TERMINAL_RISK cascade: forced-sell %d long "
+                            "personas at %.0f%%",
+                            round_idx, _phase.value, _cascade_count,
+                            40 if limit_board.at_limit_down else 30,
+                        )
+
+                # 2g. Apply each captured distribution to the matching agent
+                #     pop. Trades execute at _phase_price (fast=current,
+                #     slow=post-fast-Kyle).
+                _phase_flows: list[ClassFlowResult] = []
+                _phase_submitted: set[str] = set()
+
+                for order in pending_orders:
+                    # Skip orders from temporally inactive traders
+                    if order.persona_id in inactive_trader_ids:
+                        continue
+                    if order.persona_id not in agent_pops:
+                        log.warning(
+                            "unknown persona in order: %s (skipping)",
+                            order.persona_id,
+                        )
+                        continue
+                    persona = persona_by_id[order.persona_id]
+
+                    # Determine source tag for ClassFlowResult
+                    _order_source = "llm"
+                    if any(o is order for o in _phase_plan_orders):
+                        _order_source = "plan"
+
+                    # For freeform orders, send the actual intent to frontend
+                    emit_dist = dict(order.distribution)
+                    if "__freeform__" in emit_dist and order.raw_args:
+                        side = order.raw_args.get("side", "hold")
+                        qty = order.raw_args.get("quantity_pct", 0.0)
+                        pool = order.raw_args.get("pool", "")
+                        emit_dist = {
+                            "side": side,
+                            "quantity_pct": qty,
+                            "pool": pool,
+                        }
+                        log.info(
+                            "  R%d %s freeform order: %s %.0f%% (pool=%s) — %s",
+                            round_idx, order.persona_id,
+                            side, qty * 100, pool,
+                            (order.rationale or "")[:80],
+                        )
+                    safe_emit(
+                        event_sink,
+                        EVENT_TRADE_SUBMITTED,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        persona_id=order.persona_id,
+                        archetype=persona.archetype,
+                        distribution=emit_dist,
+                        rationale=order.rationale,
+                        instrument=order.instrument or "",
+                    )
+                    # Resolve which instrument this order targets.
+                    if instrument_universe is None:
+                        order_ticker = _primary_ticker
+                    elif order.instrument:
+                        order_ticker = order.instrument
+                    else:
+                        log.warning(
+                            "  R%d %s omitted instrument in multi-instrument mode, treating as hold",
+                            round_idx, order.persona_id,
+                        )
+                        continue
+                    order_price = (
+                        _phase_prices.get(order_ticker, _phase_price)
+                        if _phase_prices else _phase_price
+                    )
+                    # Compute participation rate
+                    p_rate = _participation_rate(
+                        persona, round_idx, cumulative_delta_pct, None,
+                        params=_sim_params.participation,
+                    )
+                    p_rate = apply_effects_to_participation(
+                        p_rate, round_pub_effects,
+                    )
+                    # Look up conviction damper from SimAgent state
+                    sim_agent = sim_graph.agent_by_persona(order.persona_id)
+                    damper = (
+                        sim_agent.get("conviction_damper")
+                        if sim_agent and sim_agent.get("conviction_damper") > 0
+                        else 1.0
+                    )
+                    damper = damper * round_pub_effects.urgency_modifier
+                    if abs(round_pub_effects.risk_budget_shift) > 0.001:
+                        for agent in agent_pops[order.persona_id]:
+                            agent.max_holdings_value = apply_effects_to_risk_budget(
+                                agent.max_holdings_value / max(agent.capital, 1.0),
+                                round_pub_effects,
+                            ) * agent.capital
+
+                    # Handle ExecutionPlan creation for slow-phase LLM orders
+                    _exec_plan_cfg = getattr(order, "execution_plan", None)
+                    _actual_qty_pct = None
+                    if (
+                        _exec_plan_cfg
+                        and isinstance(_exec_plan_cfg, dict)
+                        and _exec_plan_cfg.get("n_rounds", 1) > 1
+                        and _phase == RoundPhase.SLOW_REACT
+                        and _order_source == "llm"
+                    ):
+                        _ep_n = int(_exec_plan_cfg["n_rounds"])
+                        _ep_side = order.raw_args.get("side", "hold") if order.raw_args else "hold"
+                        _ep_total = float(order.raw_args.get("quantity_pct", 0.0) or 0.0) if order.raw_args else 0.0
+                        _ep_first_slice = _ep_total / _ep_n
+                        # Cancel existing plan if any
+                        if order.persona_id in execution_plans:
+                            _old = execution_plans.pop(order.persona_id)
+                            log.info(
+                                "  R%d PLAN_CANCEL: %s replaced by new order (old plan %s)",
+                                round_idx, order.persona_id, _old.plan_id,
+                            )
                             safe_emit(
                                 event_sink,
-                                EVENT_POLICY_CREATED,
+                                EVENT_PLAN_CANCELLED,
                                 simulation_id=simulation_id,
                                 round_idx=round_idx,
-                                agent_id=pa.agent_id,
-                                persona_id=pa.persona_id,
-                                policy_name=rp.name,
-                                trigger_expr=rp.trigger_expr,
-                                action_type=type(rp.action).__name__,
-                                source=rp.source,
+                                persona_id=order.persona_id,
+                                plan_id=_old.plan_id,
+                                reason="replaced_by_new_order",
+                                remaining_pct=_old.remaining_pct,
                             )
-                        # fall through to also post to feed
-
-                    # ── Feed-posting actions (announce, regulate, publish) ──
-                    text = pa.payload.get("text", "")
-                    if not text:
-                        continue
-                    # Accumulate sentiment from announce actions
-                    if pa.action_type == "announce":
-                        authority = float(pa.payload.get("authority_weight", 0.8))
-                        round_sentiment_shift += score_announcement_sentiment(
-                            text
-                        ) * authority
-                    pa_persona_id = pa.persona_id
-                    if pa_persona_id in persona_id_to_oasis_id:
-                        pa_author = agent_graph.get_agent(
-                            persona_id_to_oasis_id[pa_persona_id]
-                        )
-                    else:
-                        pa_author = market_agent
-                    pre_pa_post_id = _max_post_id(str(db_path_obj))
-                    await env.step({
-                        pa_author: ManualAction(
-                            action_type=ActionType.CREATE_POST,
-                            action_args={"content": text},
-                        ),
-                    })
-                    pa_post_id = _max_post_id(str(db_path_obj))
-                    if pa_post_id > pre_pa_post_id:
-                        publication_registry.register(
-                            pa_post_id,
-                            PublicationMetadata(
-                                content_type=pa.payload.get("content_type", "social_post"),
-                                author_persona_id=pa_persona_id,
-                                author_archetype=pa_persona_id,
-                                authority_weight=float(pa.payload.get("authority_weight", 0.8)),
-                                round_idx=round_idx,
+                        # Create plan for remaining slices
+                        _new_plan = create_execution_plan(
+                            persona_id=order.persona_id,
+                            side=_ep_side,
+                            total_pct=_ep_total,
+                            n_rounds=_ep_n,
+                            round_idx=round_idx,
+                            current_price=_phase_price,
+                            rationale=(order.rationale or ""),
+                            instrument=order.instrument or (
+                                _primary_ticker if instrument_universe is None else "_default"
                             ),
+                            pool=order.raw_args.get("pool", "") if order.raw_args else "",
+                            cancel_conditions=_exec_plan_cfg.get("cancel_conditions"),
                         )
-                    safe_emit(
-                        event_sink,
-                        EVENT_AGENT_ACTION,
-                        simulation_id=simulation_id,
+                        # First slice executes this round; advance the plan
+                        _new_plan.advance(_ep_first_slice)
+                        execution_plans[order.persona_id] = _new_plan
+                        log.info(
+                            "  R%d PLAN_CREATED: %s %s %.1f%% over %d rounds (plan %s)",
+                            round_idx, order.persona_id, _ep_side,
+                            _ep_total * 100, _ep_n, _new_plan.plan_id,
+                        )
+                        safe_emit(
+                            event_sink,
+                            EVENT_PLAN_CREATED,
+                            simulation_id=simulation_id,
+                            round_idx=round_idx,
+                            persona_id=order.persona_id,
+                            plan_id=_new_plan.plan_id,
+                            side=_ep_side,
+                            total_pct=_ep_total,
+                            n_rounds=_ep_n,
+                            per_round_slice=_ep_first_slice,
+                        )
+                        # Override the order's quantity to just the first slice
+                        _actual_qty_pct = _ep_first_slice
+                        if order.raw_args:
+                            order = PendingOrder(
+                                persona_id=order.persona_id,
+                                distribution=order.distribution,
+                                rationale=f"[TWAP 1/{_ep_n}] {order.rationale or ''}",
+                                round_idx=order.round_idx,
+                                raw_args={
+                                    **order.raw_args,
+                                    "quantity_pct": _ep_first_slice,
+                                },
+                                instrument=order.instrument,
+                            )
+
+                    flow = apply_distribution_to_agent_pop(
+                        persona=persona,
+                        agents=agent_pops[order.persona_id],
+                        distribution=order.distribution,
+                        current_price=order_price,
+                        rng=sample_rng,
+                        instrument=order_ticker,
+                        rationale=order.rationale,
+                        raw_distribution=order.raw_args if order.raw_args else order.distribution,
                         round_idx=round_idx,
-                        agent_id=pa.agent_id,
-                        persona_id=pa_persona_id,
-                        action_type=pa.action_type,
-                        text=text[:200],
+                        participation_rate=p_rate,
+                        conviction_damper=damper,
+                        limit_board=limit_board,
+                        t1_ledger=t1_ledger,
+                        event_type=event.event_type or "",
+                        decision_params=_sim_params.decision,
                     )
-                    log.info(
-                        "  R%d %s [%s]: %s",
-                        round_idx, pa_persona_id, pa.action_type, text[:80],
-                    )
-
-            # 3. Drain the OrderCollector: all trading intents submitted via
-            #    the submit_order_distribution tool during the social step.
-            pending_orders = order_collector.drain()
-            log.info(
-                "  R%d: %d order intents collected from %d traders",
-                round_idx, len(pending_orders),
-                len({o.persona_id for o in pending_orders}),
-            )
-
-            # 3.4. Terminal-risk forced-seller cascade. When the severity
-            #      resolver flagged the sim as terminal-bear, long-only
-            #      holders are injected with a synthetic sell order every
-            #      round so they cascade out of the name even if the LLM
-            #      otherwise decides to dip-buy. Short-capable personas are
-            #      left alone — they're natural sellers who will handle
-            #      the exit themselves. This closes most of the R6 mile-
-            #      stone gap between the mechanism firing (LIMIT_DOWN,
-            #      seal_strength) and the magnitude of the move.
-            if _sim_terminal_risk:
-                from .oasis_trading_tool import PendingOrder as _PO
-                _short_capable_roles = {
-                    "short_seller", "active_long_short",
-                    "long_short", "hedge_fund_short",
-                }
-                _existing_ids = {o.persona_id for o in pending_orders}
-                _cascade_count = 0
-                for _p in personas:
-                    if _p.sandbox is None:
-                        continue
-                    if _p.id in inactive_trader_ids:
-                        continue
-                    _role = (_p.role or "").lower()
-                    if _role in _short_capable_roles:
-                        continue
-                    # Long-only persona with potentially nonzero position.
-                    # Check agent pop — if nobody holds anything there's
-                    # nothing to sell.
-                    _pop = agent_pops.get(_p.id) or []
-                    _has_long = any(
-                        any(v > 0 for v in a.holdings.values()) for a in _pop
-                    )
-                    if not _has_long:
-                        continue
-                    # Magnitude: scale sell intensity by how close price
-                    # already is to the limit. Stronger cascade when the
-                    # board is sealed — matches the forced-seller
-                    # behaviour real institutions display on *ST names.
-                    _cascade_frac = 0.40 if limit_board.at_limit_down else 0.30
-                    forced_order = _PO(
-                        persona_id=_p.id,
-                        distribution={"__freeform__": 1.0},
-                        rationale=(
-                            "[强制] 终局风险 forced-seller cascade — "
-                            "基本面已不可交易, 排队止损"
-                        ),
-                        round_idx=round_idx,
-                        raw_args={
-                            "side": "sell",
-                            "quantity_pct": _cascade_frac,
-                            "pool": "holdings_in_target",
-                        },
-                    )
-                    if _p.id in _existing_ids:
-                        pending_orders = [
-                            o for o in pending_orders if o.persona_id != _p.id
-                        ]
-                    pending_orders.append(forced_order)
-                    _cascade_count += 1
-                if _cascade_count > 0:
-                    log.info(
-                        "  R%d TERMINAL_RISK cascade: forced-sell %d long "
-                        "personas at %.0f%%",
-                        round_idx, _cascade_count,
-                        40 if limit_board.at_limit_down else 30,
-                    )
-
-            # 3.5. Policy trade overrides: if a TradeAction policy fired,
-            #      replace or inject the LLM's order for that persona.
-            if trade_overrides:
-                from .oasis_trading_tool import PendingOrder as _PO
-                existing_ids = {o.persona_id for o in pending_orders}
-                for pid, fire in trade_overrides.items():
-                    ta = fire.action  # TradeAction
-                    pool = ta.pool or ("cash" if ta.side == "buy" else "holdings_in_target")
-                    forced_order = _PO(
-                        persona_id=pid,
-                        distribution={"__freeform__": 1.0},
-                        rationale=f"[强制] {fire.policy.description}",
-                        round_idx=round_idx,
-                        raw_args={
-                            "side": ta.side,
-                            "quantity_pct": ta.quantity_pct,
-                            "pool": pool,
-                        },
-                    )
-                    if pid in existing_ids:
-                        pending_orders = [
-                            o for o in pending_orders if o.persona_id != pid
-                        ]
-                    pending_orders.append(forced_order)
-                    log.info(
-                        "  R%d POLICY_TRADE: %s → %s %.0f%% (%s)",
-                        round_idx, pid, ta.side, ta.quantity_pct * 100,
-                        fire.policy.description,
-                    )
-                    safe_emit(
-                        event_sink,
-                        EVENT_POLICY_FIRED,
-                        simulation_id=simulation_id,
-                        round_idx=round_idx,
-                        agent_id=fire.agent_id,
-                        agent_name=fire.agent_display_name,
-                        policy_id=fire.policy.id,
-                        description=fire.policy.description,
-                        action_type="TradeAction",
-                        forced_side=ta.side,
-                        forced_quantity_pct=ta.quantity_pct,
-                        replaced_llm_order=pid in existing_ids,
-                    )
-
-            # 4. Apply each captured distribution to the matching agent pop.
-            #    If a trader didn't submit an order this round (LLM chose not
-            #    to call the tool), it's treated as a full-hold decision.
-            class_flows: list[ClassFlowResult] = []
-            submitted_ids: set[str] = set()
-
-            for order in pending_orders:
-                # Skip orders from temporally inactive traders
-                if order.persona_id in inactive_trader_ids:
-                    continue
-                if order.persona_id not in agent_pops:
-                    log.warning(
-                        "unknown persona in order: %s (skipping)",
-                        order.persona_id,
-                    )
-                    continue
-                persona = persona_by_id[order.persona_id]
-                # For freeform orders, send the actual intent (side/qty/pool)
-                # to the frontend instead of the marker dict {"__freeform__": 1.0}.
-                emit_dist = dict(order.distribution)
-                if "__freeform__" in emit_dist and order.raw_args:
-                    side = order.raw_args.get("side", "hold")
-                    qty = order.raw_args.get("quantity_pct", 0.0)
-                    pool = order.raw_args.get("pool", "")
-                    emit_dist = {
-                        "side": side,
-                        "quantity_pct": qty,
-                        "pool": pool,
+                    # Tag flow with phase and source metadata
+                    flow.phase = _phase.value
+                    flow.source = _order_source
+                    _phase_flows.append(flow)
+                    _phase_submitted.add(order.persona_id)
+                    submitted_ids.add(order.persona_id)
+                    # Record for conviction persistence
+                    if order.raw_args:
+                        _side = order.raw_args.get("side", "hold")
+                        _qty = float(order.raw_args.get("quantity_pct", 0.0) or 0.0)
+                    else:
+                        _dominant = max(order.distribution.items(), key=lambda kv: kv[1])
+                        _side = _dominant[0]
+                        _qty = float(_dominant[1])
+                    last_actions[order.persona_id] = {
+                        "side": _side,
+                        "quantity_pct": _qty,
+                        "rationale": (order.rationale or "")[:200],
+                        "round_idx": round_idx,
                     }
                     log.info(
-                        "  R%d %s freeform order: %s %.0f%% (pool=%s) — %s",
-                        round_idx, order.persona_id,
-                        side, qty * 100, pool,
-                        (order.rationale or "")[:80],
+                        "  R%d/%s %s → net_flow=%.2f (%d agents, histogram=%s)",
+                        round_idx, _phase.value, order.persona_id,
+                        flow.net_flow, flow.n_agents, flow.action_histogram,
                     )
-                safe_emit(
-                    event_sink,
-                    EVENT_TRADE_SUBMITTED,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    persona_id=order.persona_id,
-                    archetype=persona.archetype,
-                    distribution=emit_dist,
-                    rationale=order.rationale,
-                    instrument=order.instrument or "",
-                )
-                # Resolve which instrument this order targets.
-                # Single-instrument mode: collapse any LLM-supplied ticker to
-                # the event's primary ticker so initial holdings and traded
-                # holdings share one bookkeeping key.
-                if instrument_universe is None:
-                    order_ticker = _primary_ticker
-                elif order.instrument:
-                    order_ticker = order.instrument
-                else:
-                    # Agent omitted instrument in multi-instrument mode → hold
-                    log.warning(
-                        "  R%d %s omitted instrument in multi-instrument mode, treating as hold",
-                        round_idx, order.persona_id,
+                    safe_emit(
+                        event_sink,
+                        EVENT_CLASS_FLOW_COMPUTED,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        persona_id=order.persona_id,
+                        archetype=persona.archetype,
+                        net_flow=float(flow.net_flow),
+                        n_agents=int(flow.n_agents),
+                        action_histogram=dict(flow.action_histogram),
+                        held=False,
                     )
-                    continue
-                order_price = (
-                    current_prices.get(order_ticker, current_price)
-                    if current_prices else current_price
-                )
-                # Compute participation rate (urgency decay + momentum exhaustion)
-                p_rate = _participation_rate(
-                    persona, round_idx, cumulative_delta_pct, None,
-                    params=_sim_params.participation,
-                )
-                # Apply publication effect: participation modifier
-                p_rate = apply_effects_to_participation(
-                    p_rate, round_pub_effects,
-                )
-                # Look up conviction damper from SimAgent state
-                sim_agent = sim_graph.agent_by_persona(order.persona_id)
-                damper = (
-                    sim_agent.get("conviction_damper")
-                    if sim_agent and sim_agent.get("conviction_damper") > 0
-                    else 1.0
-                )
-                # Apply publication effect: urgency modifier scales conviction
-                damper = damper * round_pub_effects.urgency_modifier
-                # Apply publication effect: risk budget shift adjusts position limits
-                if abs(round_pub_effects.risk_budget_shift) > 0.001:
-                    for agent in agent_pops[order.persona_id]:
-                        agent.max_holdings_value = apply_effects_to_risk_budget(
-                            agent.max_holdings_value / max(agent.capital, 1.0),
-                            round_pub_effects,
-                        ) * agent.capital
-                flow = apply_distribution_to_agent_pop(
-                    persona=persona,
-                    agents=agent_pops[order.persona_id],
-                    distribution=order.distribution,
-                    current_price=order_price,
-                    rng=sample_rng,
-                    instrument=order_ticker,
-                    rationale=order.rationale,
-                    raw_distribution=order.raw_args if order.raw_args else order.distribution,
-                    round_idx=round_idx,
-                    participation_rate=p_rate,
-                    conviction_damper=damper,
-                    limit_board=limit_board,
-                    t1_ledger=t1_ledger,
-                    event_type=event.event_type or "",
-                    decision_params=_sim_params.decision,
-                )
-                class_flows.append(flow)
-                submitted_ids.add(order.persona_id)
-                # Record for conviction persistence
-                if order.raw_args:
-                    _side = order.raw_args.get("side", "hold")
-                    _qty = float(order.raw_args.get("quantity_pct", 0.0) or 0.0)
-                else:
-                    # Legacy dist: infer dominant side and use its fraction
-                    _dominant = max(order.distribution.items(), key=lambda kv: kv[1])
-                    _side = _dominant[0]
-                    _qty = float(_dominant[1])
-                last_actions[order.persona_id] = {
-                    "side": _side,
-                    "quantity_pct": _qty,
-                    "rationale": (order.rationale or "")[:200],
-                    "round_idx": round_idx,
-                }
-                log.info(
-                    "  R%d %s → net_flow=%.2f (%d agents, histogram=%s)",
-                    round_idx, order.persona_id,
-                    flow.net_flow, flow.n_agents, flow.action_histogram,
-                )
-                safe_emit(
-                    event_sink,
-                    EVENT_CLASS_FLOW_COMPUTED,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    persona_id=order.persona_id,
-                    archetype=persona.archetype,
-                    net_flow=float(flow.net_flow),
-                    n_agents=int(flow.n_agents),
-                    action_histogram=dict(flow.action_histogram),
-                    held=False,
-                )
 
-            # Traders that didn't submit this round → treat as full hold.
-            # Build a synthetic "all-hold" distribution per sandbox action_space.
-            for persona in personas:
-                if persona.sandbox is None or persona.id in submitted_ids:
-                    continue
-                if persona.id in inactive_trader_ids:
-                    continue  # temporally inactive traders produce zero flow
-                hold_action = next(
-                    (a["name"] for a in persona.sandbox.action_space
-                     if a.get("side") == "none"),
-                    persona.sandbox.action_space[0]["name"],
-                )
-                hold_dist = {hold_action: 1.0}
-                hold_flow = apply_distribution_to_agent_pop(
-                    persona=persona,
-                    agents=agent_pops[persona.id],
-                    distribution=hold_dist,
-                    current_price=current_price,
-                    rng=sample_rng,
-                    instrument=_primary_ticker if instrument_universe is None else "_default",
-                    rationale="(no tool call this round, held)",
-                    round_idx=round_idx,
-                    limit_board=limit_board,
-                    t1_ledger=t1_ledger,
-                    event_type=event.event_type or "",
-                    decision_params=_sim_params.decision,
-                )
-                class_flows.append(hold_flow)
-                safe_emit(
-                    event_sink,
-                    EVENT_CLASS_FLOW_COMPUTED,
-                    simulation_id=simulation_id,
-                    round_idx=round_idx,
-                    persona_id=persona.id,
-                    archetype=persona.archetype,
-                    net_flow=float(hold_flow.net_flow),
-                    n_agents=int(hold_flow.n_agents),
-                    action_histogram=dict(hold_flow.action_histogram),
-                    held=True,
-                )
-
-            # 4. Per-instrument flow aggregation + independent Kyle
-            if instrument_universe is not None and current_prices:
-                from .market_dynamics import (
-                    compute_dynamic_knee,
-                    compute_multi_instrument_impact,
-                )
-
-                # Group flows by instrument (skip _default — shouldn't happen
-                # in multi-instrument mode, but guard defensively)
-                flows_by_ticker: dict[str, float] = {}
-                for cf in class_flows:
-                    if cf.instrument == "_default":
+                # 2h. Synthetic holds for this phase's non-submitted traders.
+                for persona in personas:
+                    if persona.id not in _phase_persona_ids:
                         continue
-                    flows_by_ticker[cf.instrument] = (
-                        flows_by_ticker.get(cf.instrument, 0.0) + cf.net_flow
+                    if persona.sandbox is None or persona.id in _phase_submitted:
+                        continue
+                    if persona.id in inactive_trader_ids:
+                        continue
+                    hold_action = next(
+                        (a["name"] for a in persona.sandbox.action_space
+                         if a.get("side") == "none"),
+                        persona.sandbox.action_space[0]["name"],
+                    )
+                    hold_dist = {hold_action: 1.0}
+                    hold_flow = apply_distribution_to_agent_pop(
+                        persona=persona,
+                        agents=agent_pops[persona.id],
+                        distribution=hold_dist,
+                        current_price=_phase_price,
+                        rng=sample_rng,
+                        instrument=_primary_ticker if instrument_universe is None else "_default",
+                        rationale="(no tool call this round, held)",
+                        round_idx=round_idx,
+                        limit_board=limit_board,
+                        t1_ledger=t1_ledger,
+                        event_type=event.event_type or "",
+                        decision_params=_sim_params.decision,
+                    )
+                    hold_flow.phase = _phase.value
+                    hold_flow.source = "hold"
+                    _phase_flows.append(hold_flow)
+                    submitted_ids.add(persona.id)
+                    safe_emit(
+                        event_sink,
+                        EVENT_CLASS_FLOW_COMPUTED,
+                        simulation_id=simulation_id,
+                        round_idx=round_idx,
+                        persona_id=persona.id,
+                        archetype=persona.archetype,
+                        net_flow=float(hold_flow.net_flow),
+                        n_agents=int(hold_flow.n_agents),
+                        action_histogram=dict(hold_flow.action_histogram),
+                        held=True,
                     )
 
-                # Pre-compute the same cadence-aware inputs as the
-                # single-instrument path (see line ~1929). Until the
-                # 2026-04-12 bug fix, this call was silently using the
-                # compute_price_impact defaults (max_delta_pct=0.10,
-                # sentiment_modifier=0, flow_knee=FLOW_KNEE), which meant:
-                #   - All monthly sims were clipped to daily ±10% caps
-                #   - The severity-prior decay (P0.3) never reached Kyle
-                #   - The dynamic knee never engaged
-                # Result: backtest_monthly_v3_full_smonly.json showed
-                # deltas hitting ±10% hard on regulatory events and
-                # policy-bull events getting zero sentiment lift.
-                _mi_n_active = len({
-                    cf.persona_id for cf in class_flows if cf.net_flow != 0
-                })
-                _mi_n_total = sum(1 for p in personas if p.sandbox is not None)
-                _mi_cum_abs = abs(cumulative_delta_pct)
-                _mi_knee = compute_dynamic_knee(
-                    _mi_n_active, _mi_n_total, _mi_cum_abs, round_idx,
-                    base_knee=_calibrated_knee,
-                    resistance_scale=_resistance_scale,
-                )
-                _mi_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
+                # 2i. Kyle price impact for this phase.
+                _phase_net_flow = sum(cf.net_flow for cf in _phase_flows)
+                _phase_delta_pct = 0.0
+                _phase_price_after = _phase_price
 
-                # Independent Kyle per instrument with direct orders
-                delta_by_ticker = compute_multi_instrument_impact(
-                    flows_by_ticker,
-                    adv_values,
-                    lambda_market=lambda_used,
-                    max_delta_pct=_max_delta_pct,
-                    flow_knee=_mi_knee,
-                    sentiment_modifier=_mi_sentiment,
-                    sentiment_scale=_mp.sentiment_scale,
-                )
-                for ticker, delta in delta_by_ticker.items():
-                    current_prices[ticker] = current_prices[ticker] * (1.0 + delta)
-
-                # Bidirectional spillover: any instrument with a delta can
-                # influence any instrument without, weighted by pairwise beta.
-                spillover = instrument_universe.compute_spillover(delta_by_ticker)
-                for ticker, spill in spillover.items():
-                    delta_by_ticker[ticker] = spill
-                    current_prices[ticker] = current_prices[ticker] * (1.0 + spill)
+                if instrument_universe is not None and _phase_prices:
+                    from .market_dynamics import (
+                        compute_dynamic_knee,
+                        compute_multi_instrument_impact,
+                    )
+                    _pf_flows_by_ticker: dict[str, float] = {}
+                    for cf in _phase_flows:
+                        if cf.instrument == "_default":
+                            continue
+                        _pf_flows_by_ticker[cf.instrument] = (
+                            _pf_flows_by_ticker.get(cf.instrument, 0.0) + cf.net_flow
+                        )
+                    _pf_n_active = len({
+                        cf.persona_id for cf in _phase_flows if cf.net_flow != 0
+                    })
+                    _pf_n_total = sum(
+                        1 for p in personas
+                        if p.sandbox is not None and p.id in _phase_persona_ids
+                    )
+                    _pf_cum_abs = abs(cumulative_delta_pct)
+                    _pf_knee = compute_dynamic_knee(
+                        _pf_n_active, _pf_n_total, _pf_cum_abs, round_idx,
+                        base_knee=_calibrated_knee,
+                        resistance_scale=_resistance_scale,
+                    )
+                    _pf_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
+                    _pf_delta_by_ticker = compute_multi_instrument_impact(
+                        _pf_flows_by_ticker,
+                        adv_values,
+                        lambda_market=lambda_used,
+                        max_delta_pct=_max_delta_pct,
+                        flow_knee=_pf_knee,
+                        sentiment_modifier=_pf_sentiment,
+                        sentiment_scale=_mp.sentiment_scale,
+                    )
+                    for ticker, delta in _pf_delta_by_ticker.items():
+                        _phase_prices[ticker] = _phase_prices[ticker] * (1.0 + delta)
+                    spillover = instrument_universe.compute_spillover(_pf_delta_by_ticker)
+                    for ticker, spill in spillover.items():
+                        _pf_delta_by_ticker[ticker] = spill
+                        _phase_prices[ticker] = _phase_prices[ticker] * (1.0 + spill)
+                    es_ticker = instrument_universe.event_subject_ticker
+                    _phase_delta_pct = _pf_delta_by_ticker.get(es_ticker, 0.0)
+                    _phase_price_after = _phase_prices.get(es_ticker, _phase_price)
+                else:
+                    from .market_dynamics import compute_dynamic_knee
+                    _pf_n_active = len({
+                        cf.persona_id for cf in _phase_flows if cf.net_flow != 0
+                    })
+                    _pf_n_total = sum(
+                        1 for p in personas
+                        if p.sandbox is not None and p.id in _phase_persona_ids
+                    )
+                    _pf_cum_abs = abs(cumulative_delta_pct)
+                    _pf_knee = compute_dynamic_knee(
+                        _pf_n_active, _pf_n_total, _pf_cum_abs, round_idx,
+                        base_knee=_calibrated_knee,
+                        resistance_scale=_resistance_scale,
+                    )
+                    _pf_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
+                    _pf_abs_flow = sum(abs(cf.net_flow) for cf in _phase_flows)
+                    effective_adv = adaptive_adv.update(_pf_abs_flow)
+                    _pf_raw_delta = compute_price_impact(
+                        net_flow_value=_phase_net_flow,
+                        adv_value=effective_adv,
+                        lambda_market=lambda_used,
+                        max_delta_pct=_max_delta_pct,
+                        flow_knee=_pf_knee,
+                        sentiment_modifier=_pf_sentiment,
+                        sentiment_scale=_mp.sentiment_scale,
+                    )
+                    if _is_monthly_cadence:
+                        _phase_delta_pct = _pf_raw_delta
+                    else:
+                        _phase_delta_pct = limit_board.clamp_delta(_pf_raw_delta)
+                    _pf_buy_vol = sum(cf.net_flow for cf in _phase_flows if cf.net_flow > 0)
+                    _pf_sell_vol = abs(sum(cf.net_flow for cf in _phase_flows if cf.net_flow < 0))
+                    if not _is_monthly_cadence:
+                        limit_board.update(
+                            _phase_delta_pct,
+                            buy_volume=_pf_buy_vol,
+                            sell_volume=_pf_sell_vol,
+                        )
+                    if limit_board.at_limit:
+                        seal = limit_board.seal_strength(effective_adv)
+                        log.info(
+                            "  R%d/%s LIMIT BOARD: %s (seal=%.2f, unfilled=%.2e)",
+                            round_idx, _phase.value, limit_board.state.value, seal,
+                            limit_board.unfilled_volume,
+                        )
+                    _phase_price_after = _phase_price * (1.0 + _phase_delta_pct)
 
                 log.info(
-                    "  R%d multi-instrument deltas: %s",
-                    round_idx,
-                    {t: f"{d*100:+.2f}%" for t, d in delta_by_ticker.items()},
+                    "  R%d/%s: price %.2f → %.2f (%+.2f%%), net_flow=%+.2e, "
+                    "%d traders",
+                    round_idx, _phase.value, _phase_price,
+                    _phase_price_after, _phase_delta_pct * 100,
+                    _phase_net_flow, len(_phase_submitted),
                 )
 
-                # Backward compat: scalar vars refer to event subject
-                es_ticker = instrument_universe.event_subject_ticker
-                delta_pct = delta_by_ticker.get(es_ticker, 0.0)
-                net_flow_total = flows_by_ticker.get(es_ticker, 0.0)
-                price_after = current_prices.get(es_ticker, current_price)
-            else:
-                # Single-instrument path — with dynamic knee + sentiment
-                from .market_dynamics import compute_dynamic_knee
-                net_flow_total = sum(cf.net_flow for cf in class_flows)
-                n_active = len({cf.persona_id for cf in class_flows
-                                if cf.net_flow != 0})
-                n_total = sum(1 for p in personas if p.sandbox is not None)
-                cumulative_abs = abs(cumulative_delta_pct)
-                dynamic_knee = compute_dynamic_knee(
-                    n_active, n_total, cumulative_abs, round_idx,
-                    base_knee=_calibrated_knee,
-                    resistance_scale=_resistance_scale,
+                # 2j. Record PhaseResult, accumulate into all_class_flows.
+                phase_results.append(PhaseResult(
+                    phase=_phase,
+                    class_flows=_phase_flows,
+                    net_flow=_phase_net_flow,
+                    price_before=_phase_price,
+                    price_after=_phase_price_after,
+                    delta_pct=_phase_delta_pct,
+                    n_active_personas=len(_phase_submitted),
+                    n_plan_executions=len(_phase_plan_orders),
+                ))
+                class_flows.extend(_phase_flows)
+
+                safe_emit(
+                    event_sink,
+                    EVENT_PHASE_COMPLETE,
+                    simulation_id=simulation_id,
+                    round_idx=round_idx,
+                    phase=_phase.value,
+                    price_before=float(_phase_price),
+                    price_after=float(_phase_price_after),
+                    delta_pct=float(_phase_delta_pct),
+                    net_flow=float(_phase_net_flow),
+                    n_active=len(_phase_submitted),
                 )
-                # Clamp sentiment shift to [-0.5, 0.5]
-                clamped_sentiment = max(-0.5, min(0.5, round_sentiment_shift))
-                # Update adaptive ADV from observed round volume
-                total_abs_flow = sum(abs(cf.net_flow) for cf in class_flows)
-                effective_adv = adaptive_adv.update(total_abs_flow)
-                raw_delta = compute_price_impact(
-                    net_flow_value=net_flow_total,
-                    adv_value=effective_adv,
-                    lambda_market=lambda_used,
-                    max_delta_pct=_max_delta_pct,
-                    flow_knee=dynamic_knee,
-                    sentiment_modifier=clamped_sentiment,
-                    sentiment_scale=_mp.sentiment_scale,
-                )
-                # Apply A-share limit-board clamping (涨跌停板). The limit
-                # board models *daily* 10% limits — on monthly cadence the
-                # cap has no physical meaning (a real month can freely
-                # move >30%) so we skip it and let the Kyle cap govern.
-                if _is_monthly_cadence:
-                    delta_pct = raw_delta
-                else:
-                    delta_pct = limit_board.clamp_delta(raw_delta)
-                # Compute buy/sell volumes for limit-board state tracking
-                buy_vol = sum(cf.net_flow for cf in class_flows if cf.net_flow > 0)
-                sell_vol = abs(sum(cf.net_flow for cf in class_flows if cf.net_flow < 0))
-                # Monthly cadence: skip limit_board state tracking; the
-                # one-word-up / seal_strength / limit_up machinery models
-                # intraday queue dynamics that have no meaning at a
-                # month-scale granularity. Leaving the board in NORMAL
-                # keeps downstream code paths happy.
-                if not _is_monthly_cadence:
-                    limit_board.update(
-                        delta_pct, buy_volume=buy_vol, sell_volume=sell_vol,
+
+                # 2k. Between fast and slow: inject fast_move_ctx into slow
+                #     agents so they see the fast-phase price move.
+                if _phase == RoundPhase.FAST_REACT and _phase_delta_pct != 0.0:
+                    _move_dir = "涨" if _phase_delta_pct > 0 else "跌"
+                    _move_ctx = (
+                        f"[快反馈] 本轮散户/量化/KOL 先行交易后价格"
+                        f"{_move_dir}{abs(_phase_delta_pct)*100:.1f}%"
+                        f" ({_phase_price:.2f}→{_phase_price_after:.2f})。"
+                        f" 净资金流={_phase_net_flow:+.0f}。"
                     )
-                if limit_board.at_limit:
-                    seal = limit_board.seal_strength(effective_adv)
-                    log.info(
-                        "  R%d LIMIT BOARD: %s (seal=%.2f, unfilled=%.2e)",
-                        round_idx, limit_board.state.value, seal,
-                        limit_board.unfilled_volume,
-                    )
-                price_after = current_price * (1.0 + delta_pct)
-                if abs(dynamic_knee - _calibrated_knee) > 1e-6:
-                    log.info(
-                        "  R%d dynamic_knee=%.4f (active=%d/%d, cum=%.1f%%, "
-                        "sentiment=%+.2f)",
-                        round_idx, dynamic_knee, n_active, n_total,
-                        cumulative_abs * 100, clamped_sentiment,
-                    )
+                    for _sp in personas:
+                        if _sp.id not in _slow_persona_ids:
+                            continue
+                        if _sp.id not in persona_id_to_oasis_id:
+                            continue
+                        _sp_oasis = agent_graph.get_agent(
+                            persona_id_to_oasis_id[_sp.id]
+                        )
+                        set_round_context(_sp_oasis, fast_move_ctx=_move_ctx)
+
+                # Update _phase_price for next iteration
+                _phase_price = _phase_price_after
+
+            # 3. After phase loop: combine results.
+            #    price_after is the final price after both phases.
+            price_after = _phase_price
+            net_flow_total = sum(pr.net_flow for pr in phase_results)
+            # Compute combined delta_pct from initial current_price
+            delta_pct = (price_after / current_price - 1.0) if current_price > 0 else 0.0
+
+            # Update current_prices dict if in multi-instrument mode
+            if current_prices:
+                current_prices.update(_phase_prices)
 
             safe_emit(
                 event_sink,
@@ -2183,9 +2464,6 @@ async def run_simulation(
                     multi_trajectories[t].append(p)
 
             # 4.6. Sync trading population state → SimGraph agents
-            #      This is THE FIX for the parallel-books problem: actual
-            #      holdings/cash stats from the trading population are written
-            #      back to the corresponding SimAgent.state dict every round.
             sim_graph.sync_population_state(agent_pops, price_after, round_idx)
             sim_graph.update_price_derived_state(price_after, initial_price)
             sim_graph.record_all_snapshots()
@@ -2345,6 +2623,17 @@ async def run_simulation(
             _total_unfilled = sum(cf.unfilled_volume for cf in class_flows)
             _total_t1 = sum(cf.t1_blocked_sells for cf in class_flows)
 
+            _n_active_traders = len({
+                cf.persona_id for cf in class_flows
+                if cf.source != "hold"
+            })
+            _n_hold_skip = len({
+                cf.persona_id for cf in class_flows
+                if cf.source == "hold"
+            })
+            _round_char = "active" if _n_active_traders > 0 else (
+                "plan_only" if _round_plan_executions > 0 else "quiet"
+            )
             rounds.append(
                 RoundRecord(
                     round_idx=round_idx,
@@ -2361,6 +2650,11 @@ async def run_simulation(
                     avg_fill_rate=_avg_fill,
                     total_unfilled_volume=_total_unfilled,
                     total_t1_blocked=_total_t1,
+                    phase_results=[pr.to_serializable() for pr in phase_results],
+                    plan_executions=_round_plan_executions,
+                    active_trader_count=_n_active_traders,
+                    hold_skip_count=_n_hold_skip,
+                    round_character=_round_char,
                 )
             )
             safe_emit(
@@ -2369,7 +2663,7 @@ async def run_simulation(
                 simulation_id=simulation_id,
                 round_idx=round_idx,
                 publications_count=len(publications_this_round),
-                orders_count=len(pending_orders),
+                orders_count=len([cf for cf in class_flows if cf.source != "hold"]),
                 class_flows_count=len(class_flows),
                 price_after=float(price_after),
                 net_flow_total=float(net_flow_total),

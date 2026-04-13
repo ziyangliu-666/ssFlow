@@ -240,9 +240,11 @@ const errorMsg = ref('')
 const filterTypes = ref([
   { label: '想法', value: 'persona_thought', on: false },
   { label: '交易', value: 'trade_submitted', on: true },
+  { label: '阶段', value: 'phase_complete', on: true },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },
   { label: '流向', value: 'class_flow_computed', on: false },
+  { label: 'TWAP', value: 'plan_created,plan_slice_executed,plan_cancelled', on: true },
 ])
 
 const visibleEvents = computed(() => {
@@ -521,6 +523,15 @@ function applyEvent (e) {
           held: payload.held,
         },
       }
+      break
+    case 'phase_complete':
+      if (payload.price_after) {
+        currentPrice.value = payload.price_after
+      }
+      break
+    case 'plan_created':
+    case 'plan_slice_executed':
+    case 'plan_cancelled':
       break
     case 'round_complete':
       currentRound.value = (payload.round_idx || 0) + 1

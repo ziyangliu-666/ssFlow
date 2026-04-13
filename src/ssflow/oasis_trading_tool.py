@@ -56,6 +56,8 @@ class PendingOrder:
     raw_args: dict[str, Any] = field(default_factory=dict)
     # Multi-instrument: which ticker this order targets. None = primary/default.
     instrument: str | None = None
+    # TWAP execution plan config from LLM tool call. None = immediate execution.
+    execution_plan: dict | None = None
 
 
 class OrderCollector:
@@ -90,6 +92,7 @@ class OrderCollector:
         rationale: str = "",
         raw_args: dict[str, Any] | None = None,
         instrument: str | None = None,
+        execution_plan: dict | None = None,
     ) -> None:
         with self._lock:
             self._pending.append(
@@ -100,6 +103,7 @@ class OrderCollector:
                     round_idx=self._current_round,
                     raw_args=dict(raw_args or {}),
                     instrument=instrument,
+                    execution_plan=dict(execution_plan) if execution_plan else None,
                 )
             )
 
@@ -173,6 +177,7 @@ def make_freeform_trading_tool(
         rationale: str = "",
         instrument: str = "",
         pool: str = "",
+        execution_rounds: int = 0,
     ) -> str:
         """Submit a trading decision for this persona class this round.
 
@@ -187,6 +192,10 @@ def make_freeform_trading_tool(
           - pool: "cash" (default for buy), "holdings_in_target" (default for
             sell long inventory), or "margin" (borrow to short — only valid
             on the sell side, requires margin access).
+          - execution_rounds: split this trade over N rounds (TWAP). E.g.,
+            execution_rounds=4 executes 25% per round over 4 rounds. Use for
+            large positions to minimize market impact. Default 0 = execute all
+            immediately in this round.
 
         Short-seller personas (融券做空基金, 宏观空头对冲): omit `pool`
         and the engine will automatically route your sell to the margin
@@ -221,6 +230,15 @@ def make_freeform_trading_tool(
         else:
             resolved_pool = "none"
 
+        # Parse execution_rounds into an execution plan config
+        try:
+            exec_rounds = max(0, int(execution_rounds))
+        except (TypeError, ValueError):
+            exec_rounds = 0
+        exec_plan = None
+        if exec_rounds > 1 and side_clean != "hold":
+            exec_plan = {"n_rounds": exec_rounds}
+
         # Store as a special __freeform__ distribution
         collector.add(
             persona_id=persona_id,
@@ -232,6 +250,7 @@ def make_freeform_trading_tool(
                 "pool": resolved_pool,
             },
             instrument=inst,
+            execution_plan=exec_plan,
         )
 
         inst_label = inst or "primary"

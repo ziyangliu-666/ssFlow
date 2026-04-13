@@ -56,6 +56,11 @@ export function openSimulationStream (streamId, handlers) {
     'policy_fired',
     'agent_action',
     'policy_created',
+    // Phase-based execution events
+    'phase_complete',
+    'plan_created',
+    'plan_slice_executed',
+    'plan_cancelled',
   ]
 
   for (const t of knownTypes) {

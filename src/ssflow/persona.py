@@ -744,7 +744,7 @@ _SUBARCH_TO_AGENT_TYPE: dict[str, str] = {
     "institution_active": "institutional",
     "institution_long_horizon": "institutional",
     "foreign_long_short": "institutional",
-    "quant": "institutional",
+    "quant": "quant",
     "strategic_industrial": "strategic",
     "strategic_cross_holding": "strategic",
     "strategic_government": "strategic",
@@ -779,8 +779,8 @@ def _infer_agent_type(sub_archetype: str | None, entity_role: str) -> str:
     """
     if sub_archetype and sub_archetype in _SUBARCH_TO_AGENT_TYPE:
         return _SUBARCH_TO_AGENT_TYPE[sub_archetype]
-    if entity_role in ("media", "analyst", "kol", "news_wire", "regulator",
-                       "policy", "company_ir"):
+    if entity_role in ("media", "analyst", "kol", "quant", "news_wire",
+                       "regulator", "policy", "company_ir"):
         return entity_role
     return "retail"
 

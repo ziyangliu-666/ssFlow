@@ -85,6 +85,26 @@
         <span v-if="payload.held" class="held-chip">持仓不动</span>
       </div>
 
+      <!-- phase_complete -->
+      <div v-else-if="type === 'phase_complete'" class="t-text">
+        <div class="phase-line">
+          <span class="phase-tag" :class="payload.phase === 'fast_react' ? 'fast' : 'slow'">
+            {{ payload.phase === 'fast_react' ? '快反应' : '慢反应' }}
+          </span>
+          <span class="mono">
+            <span class="before">{{ formatPrice(payload.price_before) }}</span>
+            <span class="arrow">→</span>
+            <strong :class="priceDeltaClass(payload.delta_pct)">{{ formatPrice(payload.price_after) }}</strong>
+            <span :class="['delta', priceDeltaClass(payload.delta_pct)]">
+              {{ payload.delta_pct >= 0 ? '+' : '' }}{{ (payload.delta_pct * 100).toFixed(2) }}%
+            </span>
+          </span>
+        </div>
+        <div class="meta-line mono">
+          净流入 {{ formatFlow(payload.net_flow) }} · {{ payload.n_active || 0 }} 个角色
+        </div>
+      </div>
+
       <!-- price_updated -->
       <div v-else-if="type === 'price_updated'" class="t-text">
         <div class="price-line mono">
@@ -98,9 +118,33 @@
         <div class="meta-line mono">总净流入 {{ formatFlow(payload.net_flow_total) }}</div>
       </div>
 
+      <!-- plan_created -->
+      <div v-else-if="type === 'plan_created'" class="t-text">
+        <span class="plan-tag">TWAP</span>
+        <strong>{{ payload.persona_id }}</strong>
+        {{ payload.side === 'buy' ? '买入' : '卖出' }}计划 ·
+        <span class="mono">{{ payload.n_rounds }} 轮分批执行</span>
+      </div>
+
+      <!-- plan_slice_executed -->
+      <div v-else-if="type === 'plan_slice_executed'" class="t-text">
+        <span class="plan-tag">TWAP</span>
+        <strong>{{ payload.persona_id }}</strong>
+        第 {{ payload.slice_number }} 片 ·
+        <span class="mono">{{ (payload.slice_pct * 100).toFixed(0) }}%</span>
+        <span v-if="payload.remaining_pct <= 0.001" class="plan-done">已完成</span>
+      </div>
+
+      <!-- plan_cancelled -->
+      <div v-else-if="type === 'plan_cancelled'" class="t-text subdued">
+        <span class="plan-tag cancelled">TWAP 取消</span>
+        <strong>{{ payload.persona_id }}</strong>:
+        {{ payload.reason === 'adverse_price_move' ? '价格逆向超限' : payload.reason }}
+      </div>
+
       <!-- round_complete -->
       <div v-else-if="type === 'round_complete'" class="t-text subdued">
-        第 {{ (payload.round_idx ?? 0) + 1 }} 轮结束 · {{ payload.publications_count }} 篇发布 · {{ payload.orders_count }} 笔订单
+        第 {{ (payload.round_idx ?? 0) + 1 }} 轮结束 · {{ payload.publications_count }} 篇发布 · {{ payload.class_flows_count || payload.orders_count }} 笔订单
       </div>
 
       <!-- simulation_complete / simulation_done — per-ticker distribution
@@ -209,6 +253,7 @@ const KIND_MAP = {
   persona_thought: '想法',
   trade_submitted: '交易',
   class_flow_computed: '分组流向',
+  phase_complete: '阶段结算',
   price_updated: '价格更新',
   round_complete: '轮次结束',
   simulation_complete: '推演结束',
@@ -218,6 +263,9 @@ const KIND_MAP = {
   threshold_fired: '阈值触发',
   force_action_override: '强制约束',
   policy_fired: '规则触发',
+  plan_created: 'TWAP 计划',
+  plan_slice_executed: 'TWAP 执行',
+  plan_cancelled: 'TWAP 取消',
   agent_action: '行动',
   entity_state_updated: '实体状态',
   error: '错误',
@@ -230,6 +278,7 @@ const evClass = computed(() => {
     persona_thought: 'thought',
     trade_submitted: 'trade',
     class_flow_computed: 'flow',
+    phase_complete: 'phase',
     price_updated: 'price',
     round_start: 'round',
     round_complete: 'round-end',
@@ -241,6 +290,9 @@ const evClass = computed(() => {
     threshold_fired: 'threshold',
     force_action_override: 'force',
     policy_fired: 'force',
+    plan_created: 'plan',
+    plan_slice_executed: 'plan',
+    plan_cancelled: 'plan',
     entity_state_updated: 'entity',
     error: 'error',
   }
@@ -249,6 +301,7 @@ const evClass = computed(() => {
 
 const markerGlyph = computed(() => {
   if (props.type === 'round_start' || props.type === 'round_complete') return 'R' + (props.payload.round_idx ?? '')
+  if (props.type === 'phase_complete') return props.payload.phase === 'fast_react' ? 'F' : 'S'
   if (props.type === 'persona_thought') return '◆'
   if (props.type === 'trade_submitted') return '◆'
   if (props.type === 'class_flow_computed') return '·'
@@ -256,6 +309,7 @@ const markerGlyph = computed(() => {
   if (props.type === 'threshold_fired') return '⚡'
   if (props.type === 'force_action_override') return '⚠'
   if (props.type === 'policy_fired') return '⚡'
+  if (props.type === 'plan_created' || props.type === 'plan_slice_executed' || props.type === 'plan_cancelled') return 'T'
   if (props.type === 'resource_flow_executed') return '→'
   if (props.type === 'entity_state_updated') return '◇'
   if (props.type === 'error') return '!'
@@ -407,10 +461,32 @@ function agentTypeLabel (t) { return AGENT_TYPE_LABELS[t] || t }
   border-color: var(--ss-fg);
   color: #fff;
 }
-/* Price updates are the key signal each round — make them pop */
+/* Phase-complete events are the key signal each round — make them pop */
+.t-ev.phase {
+  padding: 6px 0;
+  margin-bottom: 12px;
+}
+.t-ev.phase .marker {
+  background: var(--ss-fg);
+  border-color: var(--ss-fg);
+  color: #fff;
+  font-weight: 700;
+}
+/* Price updates demoted slightly when phases are present */
 .t-ev.price {
   padding: 8px 0;
   margin-bottom: 16px;
+}
+/* TWAP plan events */
+.t-ev.plan {
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+.t-ev.plan .marker {
+  background: var(--ss-accent);
+  border-color: var(--ss-accent);
+  color: #fff;
+  font-weight: 600;
 }
 .t-ev.round .marker, .t-ev.round-end .marker {
   background: var(--ss-bg-soft);
@@ -736,6 +812,52 @@ function agentTypeLabel (t) { return AGENT_TYPE_LABELS[t] || t }
 
 .good { color: var(--ss-good); }
 .bad  { color: var(--ss-bad); }
+
+/* Phase-complete line */
+.phase-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.phase-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.phase-tag.fast {
+  background: #fff3e0;
+  color: #e65100;
+}
+.phase-tag.slow {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+/* TWAP plan tag */
+.plan-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--ss-accent);
+  color: #fff;
+  margin-right: 6px;
+}
+.plan-tag.cancelled {
+  background: var(--ss-fg-muted);
+}
+.plan-done {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9px;
+  background: var(--ss-good);
+  color: #fff;
+  border-radius: 3px;
+}
 
 /* Active agent types shown on round_start */
 .active-types {

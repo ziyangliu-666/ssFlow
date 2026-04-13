@@ -521,6 +521,9 @@ class ClassFlowResult:
     # For personas without sub_populations this is {"default": {...}} and
     # summing across keys gives back ``action_histogram``.
     action_histogram_by_sub_pop: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Phase-based execution metadata (backward-compat: defaults to empty/llm)
+    phase: str = ""                  # "fast_react" | "slow_react" | ""
+    source: str = "llm"             # "llm" | "plan" | "policy" | "hold"
 
 
 # ─────────────────────── Distribution application (pure math) ───────────────────────

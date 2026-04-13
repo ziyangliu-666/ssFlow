@@ -165,8 +165,15 @@ def _render_round_order_flow(result: "OasisSimResult", round_record) -> str:
             continue
         sign = "净买盘" if cf.net_flow > 0 else ("净卖盘" if cf.net_flow < 0 else "观望")
         rationale = sanitize_text(cf.rationale)[:160]
+        # Source tag for TWAP plan or policy-forced orders
+        source_tag = ""
+        source = getattr(cf, "source", "llm")
+        if source == "plan":
+            source_tag = " [TWAP]"
+        elif source == "policy":
+            source_tag = " [POLICY]"
         lines.append(
-            f"- **{p.archetype}** ({sign} {sym}{abs(cf.net_flow) / big_div:.2f}{big_unit}): _{rationale}_"
+            f"- **{p.archetype}**{source_tag} ({sign} {sym}{abs(cf.net_flow) / big_div:.2f}{big_unit}): _{rationale}_"
         )
     return "\n".join(lines)
 
@@ -214,6 +221,40 @@ def _render_execution_state(round_record, currency: str = "CNY") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_phase_breakdown(round_record, currency: str = "CNY") -> str:
+    """Render phase-level breakdown (fast_react / slow_react) if available."""
+    phase_results = getattr(round_record, "phase_results", None)
+    if not phase_results:
+        return ""
+    fmt = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])
+    sym = fmt["symbol"]
+    big_div = fmt["big_divisor"]
+    big_unit = fmt["big_unit"]
+    lines = ["\n### Phase breakdown"]
+    for pr in phase_results:
+        if isinstance(pr, dict):
+            phase_name = pr.get("phase", "?")
+            pb = pr.get("price_before", 0)
+            pa = pr.get("price_after", 0)
+            dp = pr.get("delta_pct", 0)
+            nf = pr.get("net_flow", 0)
+            na = pr.get("n_active_personas", 0)
+            np_ = pr.get("n_plan_executions", 0)
+        else:
+            phase_name = pr.phase if isinstance(pr.phase, str) else pr.phase.value
+            pb, pa, dp = pr.price_before, pr.price_after, pr.delta_pct
+            nf = pr.net_flow
+            na = pr.n_active_personas
+            np_ = pr.n_plan_executions
+        lines.append(
+            f"- **{phase_name}**: "
+            f"{sym}{pb:.2f} → {sym}{pa:.2f} ({dp*100:+.2f}%), "
+            f"flow={sym}{nf/big_div:+.2f}{big_unit}, "
+            f"{na} LLM + {np_} plan"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _render_round_block(result: "OasisSimResult", round_record) -> str:
     currency = _event_currency(result)
     sym = CURRENCY_FORMATS.get(currency, CURRENCY_FORMATS["USD"])["symbol"]
@@ -221,6 +262,7 @@ def _render_round_block(result: "OasisSimResult", round_record) -> str:
     pub_section = _render_round_publications(round_record.publications_this_round)
     flow_section = _render_round_order_flow(result, round_record)
     exec_section = _render_execution_state(round_record, currency)
+    phase_section = _render_phase_breakdown(round_record, currency)
 
     delta_pct_str = f"{round_record.delta_pct * 100:+.2f}%"
     external_marker = ""
@@ -229,9 +271,18 @@ def _render_round_block(result: "OasisSimResult", round_record) -> str:
             f" — **{round_record.external_events_injected} external event(s) injected**"
         )
 
-    return f"""## Round {round_record.round_idx}{external_marker}
-{sym}{round_record.price_before:.2f} → {sym}{round_record.price_after:.2f} ({delta_pct_str})
+    # Round character badge
+    round_char = getattr(round_record, "round_character", "")
+    char_badge = ""
+    if round_char == "quiet":
+        char_badge = " — **安静轮** (多数参与者未行动)"
+    elif round_char == "plan_only":
+        plan_n = getattr(round_record, "plan_executions", 0)
+        char_badge = f" — **计划执行轮** ({plan_n} TWAP slices)"
 
+    return f"""## Round {round_record.round_idx}{external_marker}{char_badge}
+{sym}{round_record.price_before:.2f} → {sym}{round_record.price_after:.2f} ({delta_pct_str})
+{phase_section}
 ### Publications this round
 {pub_section}
 

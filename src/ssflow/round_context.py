@@ -30,6 +30,7 @@ def set_round_context(
     conviction_ctx: str = "",
     pub_effects_ctx: str = "",
     terminal_risk_ctx: str = "",
+    fast_move_ctx: str = "",
 ) -> None:
     """Stash per-round context on an agent for the patched action loop to
     pick up. The patched ``perform_action_by_llm`` prepends these strings
@@ -49,6 +50,8 @@ def set_round_context(
         ctx["pub_effects_ctx"] = pub_effects_ctx
     if terminal_risk_ctx:
         ctx["terminal_risk_ctx"] = terminal_risk_ctx
+    if fast_move_ctx:
+        ctx["fast_move_ctx"] = fast_move_ctx
     agent._ssflow_round_context = ctx
 
 

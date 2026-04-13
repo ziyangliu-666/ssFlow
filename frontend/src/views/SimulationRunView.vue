@@ -370,9 +370,11 @@ const eventBuffer = ref([])           // buffered events while paused
 const filterTypes = ref([
   { label: '想法', value: 'persona_thought', on: false },
   { label: '交易', value: 'trade_submitted', on: true },
+  { label: '阶段', value: 'phase_complete', on: true },
   { label: '价格', value: 'price_updated', on: true },
   { label: '轮次', value: 'round_start,round_complete', on: true },
   { label: '流向', value: 'class_flow_computed', on: false },
+  { label: 'TWAP', value: 'plan_created,plan_slice_executed,plan_cancelled', on: true },
   { label: '阈值', value: 'threshold_fired', on: false },
   { label: '强制', value: 'force_action_override', on: false },
   { label: '规则', value: 'policy_fired', on: false },
@@ -560,6 +562,17 @@ function _processEvent (type, payload) {
           held: payload.held,
         },
       }
+      break
+    case 'phase_complete':
+      // Phase-complete carries an intra-round price update; update live price
+      if (payload.price_after) {
+        currentPrice.value = payload.price_after
+      }
+      break
+    case 'plan_created':
+    case 'plan_slice_executed':
+    case 'plan_cancelled':
+      // Rendered by TimelineEvent, no extra state to track
       break
     case 'round_complete':
       currentRound.value = (payload.round_idx || 0) + 1

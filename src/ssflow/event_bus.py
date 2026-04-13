@@ -61,6 +61,12 @@ EVENT_POLICY_CREATED = "policy_created"
 # (which is for EntityGraph entities) so the two domains never collide.
 EVENT_PERSONA_STATE_UPDATED = "persona_state_updated"
 
+# Phase-based execution events (round_phase subsystem)
+EVENT_PHASE_COMPLETE = "phase_complete"
+EVENT_PLAN_CREATED = "plan_created"
+EVENT_PLAN_SLICE_EXECUTED = "plan_slice_executed"
+EVENT_PLAN_CANCELLED = "plan_cancelled"
+
 ALL_EVENT_TYPES: frozenset[str] = frozenset(
     {
         EVENT_SIMULATION_START,
@@ -81,6 +87,10 @@ ALL_EVENT_TYPES: frozenset[str] = frozenset(
         EVENT_AGENT_ACTION,
         EVENT_POLICY_CREATED,
         EVENT_PERSONA_STATE_UPDATED,
+        EVENT_PHASE_COMPLETE,
+        EVENT_PLAN_CREATED,
+        EVENT_PLAN_SLICE_EXECUTED,
+        EVENT_PLAN_CANCELLED,
     }
 )
 
@@ -230,6 +240,10 @@ __all__ = [
     "EVENT_SIMULATION_COMPLETE",
     "EVENT_ERROR",
     "EVENT_FORCE_ACTION_OVERRIDE",
+    "EVENT_PHASE_COMPLETE",
+    "EVENT_PLAN_CREATED",
+    "EVENT_PLAN_SLICE_EXECUTED",
+    "EVENT_PLAN_CANCELLED",
     "ALL_EVENT_TYPES",
     "EventSink",
     "ListSink",

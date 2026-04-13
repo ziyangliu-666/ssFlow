@@ -248,10 +248,13 @@ def _patch_perform_action(agent: "SocialAgent", *, is_trader: bool = False) -> N
         conviction_ctx = round_ctx.get("conviction_ctx", "")
         pub_effects_ctx = round_ctx.get("pub_effects_ctx", "")
         terminal_risk_ctx = round_ctx.get("terminal_risk_ctx", "")
+        fast_move_ctx = round_ctx.get("fast_move_ctx", "")
         extra_header = ""
-        if any((time_ctx, conviction_ctx, pub_effects_ctx, terminal_risk_ctx)):
+        if any((time_ctx, conviction_ctx, pub_effects_ctx,
+                terminal_risk_ctx, fast_move_ctx)):
             extra_header = (
-                f"{terminal_risk_ctx}\n{time_ctx}\n{conviction_ctx}\n{pub_effects_ctx}\n"
+                f"{terminal_risk_ctx}\n{time_ctx}\n{fast_move_ctx}\n"
+                f"{conviction_ctx}\n{pub_effects_ctx}\n"
             ).strip("\n") + "\n\n"
 
         if is_trader:
