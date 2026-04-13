@@ -695,62 +695,79 @@ def apply_distribution_to_agent_pop(
         else:
             class_conviction = 0.0
 
-        # Compute per-agent dispersion from persona biases.
-        # Weights and floor are now driven by DecisionParams so each
-        # simulation can have different sensitivity.
-        dp = decision_params or DecisionParams()
-        biases = persona.biases if persona.biases else {}
-        herd = biases.get("herd_following", biases.get("herd_mentality", 0.5))
-        contrarian = biases.get("contrarian_tendency", 0.0)
-        dispersion = max(
-            dp.min_dispersion,
-            dp.herd_weight * (1.0 - herd) + dp.contrarian_weight * contrarian,
-        )
-        conv_thresh = dp.conviction_threshold
-        tilt_table = dp.style_tilt if dp.style_tilt else None
-
-        histogram = {"buy": 0, "sell": 0, "hold": 0}
-        for agent_inst in active_agents:
-            style_tilt = style_tilt_for(
-                agent_inst.sub_pop_style, event_type, tilt_table=tilt_table,
-            )
-            explicit_offset = 0.0
-            traits = agent_inst.sub_pop_traits
-            if traits is not None and traits.event_conviction_offset:
-                explicit_offset = float(
-                    traits.event_conviction_offset.get(event_type, 0.0)
-                )
-            agent_conviction = (
-                class_conviction
-                + style_tilt
-                + explicit_offset
-                + rng.gauss(0, dispersion)
-            )
-
-            if agent_conviction > conv_thresh:
-                agent_frac = min(abs(agent_conviction), 1.0)
-                buy_pool = pool if pool and side == "buy" else "cash"
-                spec = {"side": "buy", "pool": buy_pool, "fraction": agent_frac}
-                action_name = "buy"
-            elif agent_conviction < -conv_thresh:
-                agent_frac = min(abs(agent_conviction), 1.0)
-                sell_pool = pool if pool and side == "sell" else "holdings_in_target"
-                spec = {"side": "sell", "pool": sell_pool, "fraction": agent_frac}
-                action_name = "sell"
-            else:
+        # When the LLM explicitly chose "hold", ALL agents hold — no noise,
+        # no sub-pop sampling. Sub-pop dispersion is meant to create
+        # heterogeneity around a *directional* signal; when class conviction
+        # is zero, noise produces a random directional bias that looks like
+        # "hold but net buy ¥0.9億" — a credibility-killing contradiction.
+        if class_conviction == 0.0:
+            histogram = {"buy": 0, "sell": 0, "hold": len(active_agents)}
+            for agent_inst in active_agents:
                 spec = {"side": "none", "pool": "none", "fraction": 0.0}
-                action_name = "hold"
-
-            histogram[action_name] += 1
-            bucket = histogram_by_sub_pop.setdefault(
-                agent_inst.sub_pop_id,
-                {"buy": 0, "sell": 0, "hold": 0},
+                agent_specs.append((agent_inst, spec))
+                bucket = histogram_by_sub_pop.setdefault(
+                    agent_inst.sub_pop_id,
+                    {"buy": 0, "sell": 0, "hold": 0},
+                )
+                bucket["hold"] += 1
+            normalized = {"__freeform__": 1.0}
+        else:
+            # Compute per-agent dispersion from persona biases.
+            # Weights and floor are now driven by DecisionParams so each
+            # simulation can have different sensitivity.
+            dp = decision_params or DecisionParams()
+            biases = persona.biases if persona.biases else {}
+            herd = biases.get("herd_following", biases.get("herd_mentality", 0.5))
+            contrarian = biases.get("contrarian_tendency", 0.0)
+            dispersion = max(
+                dp.min_dispersion,
+                dp.herd_weight * (1.0 - herd) + dp.contrarian_weight * contrarian,
             )
-            bucket[action_name] += 1
+            conv_thresh = dp.conviction_threshold
+            tilt_table = dp.style_tilt if dp.style_tilt else None
 
-            agent_specs.append((agent_inst, spec))
+            histogram = {"buy": 0, "sell": 0, "hold": 0}
+            for agent_inst in active_agents:
+                style_tilt = style_tilt_for(
+                    agent_inst.sub_pop_style, event_type, tilt_table=tilt_table,
+                )
+                explicit_offset = 0.0
+                traits = agent_inst.sub_pop_traits
+                if traits is not None and traits.event_conviction_offset:
+                    explicit_offset = float(
+                        traits.event_conviction_offset.get(event_type, 0.0)
+                    )
+                agent_conviction = (
+                    class_conviction
+                    + style_tilt
+                    + explicit_offset
+                    + rng.gauss(0, dispersion)
+                )
 
-        normalized = {"__freeform__": 1.0}
+                if agent_conviction > conv_thresh:
+                    agent_frac = min(abs(agent_conviction), 1.0)
+                    buy_pool = pool if pool and side == "buy" else "cash"
+                    spec = {"side": "buy", "pool": buy_pool, "fraction": agent_frac}
+                    action_name = "buy"
+                elif agent_conviction < -conv_thresh:
+                    agent_frac = min(abs(agent_conviction), 1.0)
+                    sell_pool = pool if pool and side == "sell" else "holdings_in_target"
+                    spec = {"side": "sell", "pool": sell_pool, "fraction": agent_frac}
+                    action_name = "sell"
+                else:
+                    spec = {"side": "none", "pool": "none", "fraction": 0.0}
+                    action_name = "hold"
+
+                histogram[action_name] += 1
+                bucket = histogram_by_sub_pop.setdefault(
+                    agent_inst.sub_pop_id,
+                    {"buy": 0, "sell": 0, "hold": 0},
+                )
+                bucket[action_name] += 1
+
+                agent_specs.append((agent_inst, spec))
+
+            normalized = {"__freeform__": 1.0}
 
     else:
         # ── Legacy distribution path ──

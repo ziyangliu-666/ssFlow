@@ -240,10 +240,13 @@ def test_style_tilt_library_shape():
 
 
 def test_structural_dissent_neutral_class_policy_event():
-    """With a NEUTRAL class decision + contrarian event_conviction_offset,
-    burnt_veterans should sell while momentum_chasers buy — on the same
-    event, from the same LLM call. This is the core load-bearing test of
-    the whole heterogeneity mechanism.
+    """When the LLM chooses hold (class_conviction=0), ALL agents hold —
+    sub-pop dissent does NOT override a hold decision.
+
+    This was changed to prevent "hold but net buy" contradictions in
+    reports. Sub-pop dissent still applies when the class has a
+    directional conviction (buy/sell), where momentum agents amplify
+    and contrarian agents dampen the signal.
     """
     sub_pops = [
         SubPopulation(
@@ -278,14 +281,14 @@ def test_structural_dissent_neutral_class_policy_event():
     buckets = result.action_histogram_by_sub_pop
     assert set(buckets.keys()) == {"momentum_chaser", "burnt_veteran"}
 
+    # When class=hold, ALL agents hold regardless of sub-pop traits
     mom = buckets["momentum_chaser"]
     vet = buckets["burnt_veteran"]
-    assert mom["buy"] > mom["sell"], (
-        f"momentum should net buy on policy, got {mom}"
-    )
-    assert vet["sell"] > vet["buy"], (
-        f"burnt_veteran should net sell on policy, got {vet}"
-    )
+    mom_total = sum(mom.values())
+    vet_total = sum(vet.values())
+    assert mom["hold"] == mom_total, f"all momentum agents should hold, got {mom}"
+    assert vet["hold"] == vet_total, f"all veteran agents should hold, got {vet}"
+    assert result.net_flow == 0.0, "hold should produce zero net flow"
 
 
 def test_action_histogram_buckets_by_sub_pop_id():
@@ -382,14 +385,9 @@ def test_event_type_default_is_zero_tilt():
         round_idx=0,
         # event_type omitted — default "" → no tilt
     )
-    # Neutral class + no tilt + Gaussian noise: the buy/sell split should
-    # be roughly symmetric (within noise). Assert that NEITHER side
-    # dominates by more than 3x, which would only happen under tilt.
+    # When class=hold, ALL agents hold — no noise, no sub-pop sampling.
+    # This prevents "hold but net buy" contradictions in reports.
     hist = result.action_histogram
-    buy = hist.get("buy", 0)
-    sell = hist.get("sell", 0)
-    assert buy > 0 and sell > 0
-    ratio = max(buy, sell) / max(1, min(buy, sell))
-    assert ratio < 3.0, (
-        f"expected symmetric split without event_type, got {hist}"
-    )
+    assert hist.get("buy", 0) == 0, f"hold should produce no buys, got {hist}"
+    assert hist.get("sell", 0) == 0, f"hold should produce no sells, got {hist}"
+    assert hist.get("hold", 0) == len(agents), f"all agents should hold, got {hist}"
