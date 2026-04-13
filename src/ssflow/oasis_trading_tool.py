@@ -253,6 +253,23 @@ def make_freeform_trading_tool(
                 )
                 side_clean = "sell"
 
+        # ── Hard role constraint: sell-only personas cannot buy ──────
+        # If the persona's action_space has no buy actions, the LLM must
+        # not produce a buy side. This catches cases where the LLM
+        # ignores the voice_prompt (e.g., lockup seller "增持25%").
+        if side_clean == "buy" and persona.sandbox and persona.sandbox.action_space:
+            _has_buy_action = any(
+                a.get("side") == "buy" for a in persona.sandbox.action_space
+            )
+            if not _has_buy_action:
+                log.info(
+                    "Role constraint override for %s: buy→hold "
+                    "(action_space has no buy actions)",
+                    persona_id,
+                )
+                side_clean = "hold"
+                qty = 0.0
+
         inst = str(instrument).strip() if instrument else None
         pool_raw = str(pool).strip().lower() if pool else ""
 
