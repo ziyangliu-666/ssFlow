@@ -100,6 +100,10 @@ class MarketQuote:
 
 _ASHARE_TICKER_RE = re.compile(r"^\d{6}$")
 
+# SZSE composite / component indices — volume field is already turnover in
+# CNY (not shares), so we must NOT multiply by close when computing ADV.
+_SZSE_INDEX_RE = re.compile(r"^399\d{3}$")
+
 
 def _ashare_prefix(ticker: str) -> tuple[str, str]:
     """Return (sina_prefix, eastmoney_prefix) for a 6-digit A-share ticker.
@@ -189,15 +193,16 @@ async def _fetch_sina_realtime(ticker: str) -> dict[str, float] | None:
 async def _fetch_sina_kline_adv(
     ticker: str, lookback_days: int = 20
 ) -> float | None:
-    """Sina K-line — fetch N daily bars and compute mean `volume × close`
-    as a proxy for daily turnover (ADV in CNY).
+    """Sina K-line — fetch N daily bars and compute mean daily turnover
+    (ADV in CNY).
 
-    Sina's endpoint returns OHLCV where `volume` is in shares. True
-    turnover would be `mean_price × volume`, but `close × volume` is
-    within a few percent and is good enough for the sandbox lambda
-    coefficient. Returns None if the endpoint fails or returns no data.
+    For **stocks** Sina returns volume in shares, so we multiply by close
+    to get turnover.  For **SZSE indices** (399xxx) the volume field is
+    already aggregate turnover in CNY — multiplying by close again would
+    inflate ADV by ~index-points (1000-3000×).
     """
     sina_prefix, _ = _ashare_prefix(ticker)
+    is_index = bool(_SZSE_INDEX_RE.match(ticker))
     url = (
         "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
@@ -221,10 +226,11 @@ async def _fetch_sina_kline_adv(
         turnovers: list[float] = []
         for row in rows:
             try:
-                volume_shares = float(row.get("volume", 0))
+                volume = float(row.get("volume", 0))
                 close = float(row.get("close", 0))
-                if volume_shares > 0 and close > 0:
-                    turnovers.append(volume_shares * close)
+                if volume > 0 and close > 0:
+                    turnover = volume if is_index else volume * close
+                    turnovers.append(turnover)
             except (TypeError, ValueError):
                 continue
         if not turnovers:
