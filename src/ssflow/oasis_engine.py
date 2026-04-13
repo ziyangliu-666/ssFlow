@@ -1106,6 +1106,10 @@ async def run_simulation(
 
     try:
         for round_idx in range(n_rounds):
+            # Capture price BEFORE gap-open so the report shows continuous
+            # prices across rounds (prev round close == next round open).
+            price_at_round_start = current_price
+
             log.info("OASIS sim %s round %d starting at price %.2f",
                      simulation_id, round_idx, current_price)
             pre_round_post_id = _max_post_id(str(db_path_obj))
@@ -2476,8 +2480,9 @@ async def run_simulation(
             #    price_after is the final price after both phases.
             price_after = _phase_price
             net_flow_total = sum(pr.net_flow for pr in phase_results)
-            # Compute combined delta_pct from initial current_price
-            delta_pct = (price_after / current_price - 1.0) if current_price > 0 else 0.0
+            # Compute combined delta_pct from pre-gap round start price
+            # so the report shows continuous price across rounds.
+            delta_pct = (price_after / price_at_round_start - 1.0) if price_at_round_start > 0 else 0.0
 
             # Update current_prices dict if in multi-instrument mode
             if current_prices:
@@ -2488,7 +2493,7 @@ async def run_simulation(
                 EVENT_PRICE_UPDATED,
                 simulation_id=simulation_id,
                 round_idx=round_idx,
-                price_before=float(current_price),
+                price_before=float(price_at_round_start),
                 price_after=float(price_after),
                 delta_pct=float(delta_pct),
                 net_flow_total=float(net_flow_total),
@@ -2609,7 +2614,7 @@ async def run_simulation(
 
             # 5. Post the price update from the market broadcaster
             price_post = _build_price_update_post(
-                event, round_idx, current_price, price_after, net_flow_total,
+                event, round_idx, price_at_round_start, price_after, net_flow_total,
                 round_label=round_label,
                 initial_price=initial_price,
                 currency=event_currency,
@@ -2688,7 +2693,7 @@ async def run_simulation(
             rounds.append(
                 RoundRecord(
                     round_idx=round_idx,
-                    price_before=current_price,
+                    price_before=price_at_round_start,
                     price_after=price_after,
                     delta_pct=delta_pct,
                     net_flow=net_flow_total,
