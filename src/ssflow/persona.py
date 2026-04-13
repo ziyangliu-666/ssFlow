@@ -738,6 +738,7 @@ _SUBARCH_TO_AGENT_TYPE: dict[str, str] = {
     "retail_active": "retail",
     "retail_passive": "retail",
     "retail_pro_am": "retail",
+    "retail_speculative": "retail",
     "short_term_momentum": "retail",
     "institution_long_only": "institutional",
     "institution_passive": "institutional",

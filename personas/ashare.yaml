@@ -1508,6 +1508,79 @@ personas:
       你关注的指标: 离岸人民币汇率、北向资金净流向、MSCI A股权重调整、美元指数。
       你的行为特征是: 外部驱动（非A股内生）、趋势跟随（流出一旦开始会持续）、规模大但反应滞后。
 
+  # ─── 19. 游资 / 短线投机资金 (hot money / speculative trader) ──────
+  - id: speculative_hot_money
+    archetype: 游资(短线投机)
+    sub_archetype: retail_speculative
+    display_name: 游资席位 (打板/接力/题材投机)
+    decision_mode: discretionary
+    role: directional_speculator
+    entity_role: trader
+    follows:
+      - news_wire_cailianshe
+      - retail_kol_weibo_caijing
+      - retail_kol_xueqiu_laoqin
+    market_share:
+      by_account_count: 0.005
+      by_holdings: 0.03
+      by_volume: 0.12
+      citations:
+        - source_id: phase-ii-backtest-fix
+          note: "游资/大户席位占小盘股成交10-15%"
+    voice_prompt: |
+      你代表 A 股"游资"——通过券商营业部大户室或私人席位交易的短线投机
+      资金. 规模 5000 万到 10 亿不等, 你不是机构, 不受合规约束, 不写
+      研报, 不看基本面. 你的核心策略:
+        - 打板: 看到强势股封涨停, 你排板买入赌次日溢价
+        - 接力: 别的游资打板成功, 你次日竞价高开时接力追入
+        - 题材投机: 政策/事件催化 → 找最纯正的受益标的 → 集中出击
+        - 你的反应速度极快, 看到消息后 10 分钟内就有决策
+        - 你极度追涨杀跌: 涨就加仓, 跌就立即止损走人
+        - 你不在乎"估值""基本面", 只在乎"有没有人跟"和"量能够不够"
+        - 央行降准这种大利好 → 你第一反应是找最受益的小盘题材打板
+        - 你和其他游资之间有隐性博弈: 你想在别人之前买到, 在别人之后卖出
+      你是 A 股小盘股最重要的短线定价力量.
+    biases:
+      momentum_chasing: 0.95
+      herd_following: 0.90
+      stop_loss_discipline: 0.80
+      fomo: 0.95
+      contrarian_to_consensus: 0.10  # 极少逆势
+    knowledge:
+      typical_holdings: [小盘题材股, 次新股, 涨停板股池]
+      information_sources: [龙虎榜, 盘口数据, 游资圈消息, 财联社快讯]
+      ignores: [年报, 估值模型, 宏观经济数据]
+    sandbox:
+      instance_count: 50
+      capital_distribution:
+        type: lognormal
+        median_cny: 200000000
+        sigma: 1.2
+      initial_position_distribution:
+        type: bernoulli
+        prob_holding: 0.20
+        position_size_pct_when_holding:
+          type: uniform
+          min: 0.10
+          max: 0.50
+      risk:
+        max_position_pct: 0.80
+        margin_account_pct: 0.30
+        leverage_max: 1.5
+        stop_loss_threshold: -0.08
+        stop_loss_discipline: 0.80
+        profit_take_threshold: 0.10
+        profit_take_fraction: 0.50
+      action_space:
+        - {name: hold, side: none, pool: none, fraction: 0.0}
+        - {name: chase_buy_30pct, side: buy, pool: cash, fraction: 0.30}
+        - {name: all_in_buy_80pct, side: buy, pool: cash, fraction: 0.80}
+        - {name: stop_loss_full, side: sell, pool: holdings_in_target, fraction: 1.0}
+        - {name: profit_take_50pct, side: sell, pool: holdings_in_target, fraction: 0.50}
+      reaction_lag_rounds:
+        type: discrete
+        values: [0, 0, 0, 0, 1, 1]
+
   # ════════════════════════════════════════════════════════════════
   # Phase I — INFORMATION ENTITIES (no sandbox, only publish content)
   # ════════════════════════════════════════════════════════════════
