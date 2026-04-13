@@ -38,35 +38,9 @@
       </ol>
     </nav>
 
-    <!-- Current event card — fills the space between the workflow
-         rail and the footer with context about what the user is
-         currently working on. Only visible once there's something
-         to show (an extracted event or a remembered sim id). -->
-    <div v-if="contextCard" class="ctx-card">
-      <div class="ctx-title">{{ contextCard.title }}</div>
-      <div class="ctx-body">
-        <div class="ctx-row" v-if="contextCard.ticker">
-          <span class="ctx-k">代码</span>
-          <span class="ctx-v mono">{{ contextCard.ticker }}</span>
-        </div>
-        <div class="ctx-row" v-if="contextCard.instrument">
-          <span class="ctx-v serif">{{ contextCard.instrument }}</span>
-        </div>
-        <div class="ctx-row" v-if="contextCard.market">
-          <span class="ctx-k">市场</span>
-          <span class="ctx-v mono">{{ contextCard.market }}</span>
-        </div>
-        <div class="ctx-row" v-if="contextCard.eventType">
-          <span class="ctx-k">事件</span>
-          <span class="ctx-v mono">{{ contextCard.eventType }}</span>
-        </div>
-        <div class="ctx-row" v-if="contextCard.price">
-          <span class="ctx-k">价格</span>
-          <span class="ctx-v mono">{{ contextCard.price }}</span>
-        </div>
-      </div>
-      <div v-if="contextCard.footnote" class="ctx-foot">{{ contextCard.footnote }}</div>
-    </div>
+    <!-- Context card removed — the sidebar rail is for navigation,
+         not for displaying stale event metadata. The event context
+         is already visible in the main content area of each view. -->
 
     <div class="rail-foot">
       <slot name="foot-extra" />
@@ -197,62 +171,6 @@ const steps = computed(() => {
     },
   ]
 })
-
-const contextCard = computed(() => {
-  const ep = session.eventProposal
-  if (!ep && !session.lastSimulationId) return null
-
-  const onReport = route.name === 'Report'
-  const onRun = route.name === 'Run'
-
-  let title = '当前事件'
-  let footnote = ''
-
-  if (onReport) {
-    title = '上次推演'
-    footnote = session.lastSimulationId
-      ? `${session.lastSimulationId.slice(0, 14)}…`
-      : ''
-  } else if (onRun) {
-    title = '推演中'
-  } else if (ep) {
-    title = '当前事件'
-  }
-
-  // Pull the event-subject's price from the instrument_universe (price now
-  // lives there, not on the event proposal).
-  const universe = session.instrumentUniverse
-  let price = ''
-  if (universe && Array.isArray(universe.instruments) && universe.instruments.length) {
-    const subj = universe.instruments.find(
-      (i) => i.relationship === 'event_subject' || i.relationship === 'primary'
-    ) || universe.instruments[0]
-    if (subj && typeof subj.current_price === 'number' && subj.current_price > 0) {
-      price = currencySymbol(subj.price_currency || 'CNY') + subj.current_price.toFixed(2)
-    }
-  }
-
-  // Use the Chinese instrument name from the universe if available,
-  // otherwise fall back to the event proposal's instrument (often English).
-  const primaryInst = universe?.instruments?.find(
-    (i) => i.relationship === 'event_subject' || i.relationship === 'primary'
-  ) || universe?.instruments?.[0]
-  const displayInstrument = primaryInst?.name || ep?.instrument || ''
-
-  return {
-    title,
-    ticker: ep?.ticker || '',
-    instrument: displayInstrument,
-    market: ep?.market || '',
-    eventType: ep?.event_type || '',
-    price,
-    footnote,
-  }
-})
-
-function currencySymbol (cur) {
-  return { CNY: '¥', USD: '$', EUR: '€', JPY: '¥', HKD: 'HK$', BTC: '₿' }[cur] || '$'
-}
 
 const authTitle = computed(() => (session.password ? '密码已保存' : '填入认证密码'))
 
@@ -460,67 +378,6 @@ function statusClass (s) {
   color: #fff;
 }
 .done .label { color: var(--ss-fg); }
-
-/* Context card — fills the space between workflow rail and footer */
-.ctx-card {
-  margin-top: 32px;
-  padding: 14px 12px;
-  border: 1px solid var(--ss-line);
-  background: #fff;
-  border-radius: 8px;
-  border-top: 1px solid var(--ss-line);
-}
-.ctx-title {
-  font-family: 'Noto Serif SC', serif;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ss-fg-muted);
-  margin-bottom: 8px;
-  letter-spacing: 0.02em;
-}
-.ctx-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.ctx-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.4;
-}
-.ctx-k {
-  font-size: 9px;
-  color: var(--ss-fg-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  min-width: 40px;
-}
-.ctx-v { color: var(--ss-fg); }
-.ctx-v.mono {
-  font-family: 'JetBrains Mono', monospace;
-  font-variant-numeric: tabular-nums;
-}
-.ctx-v.serif {
-  font-family: 'Noto Serif SC', serif;
-  font-size: 12px;
-  font-weight: 500;
-}
-.ctx-foot {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--ss-line);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
-  color: var(--ss-fg-faint);
-}
-
-@media (max-width: 860px) {
-  /* On narrow, the rail is a horizontal strip — hide the context
-     card so it doesn't overflow the strip. */
-  .ctx-card { display: none; }
-}
 
 .rail-foot {
   margin-top: auto;
