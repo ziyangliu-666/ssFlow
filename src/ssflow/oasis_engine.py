@@ -2173,12 +2173,17 @@ async def run_simulation(
                         event_type=event.event_type or "",
                         decision_params=_sim_params.decision,
                     )
-                    # ── Per-class ADV flow cap ──
-                    # No single participant class should generate more flow
-                    # than the market can absorb in one phase. Cap at 1x ADV.
-                    _ADV_FLOW_CAP = 1.0
+                    # ── Per-class ADV flow cap (market-share scaled) ──
+                    # Each class's max flow is proportional to its real
+                    # volume share so different participants hit different
+                    # ceilings — avoids the "uniform ration" artifact.
+                    _VOLUME_SHARE_MULT = 5.0  # allow up to 5x normal share
                     _cap_adv = adv_values.get(order_ticker, effective_adv)
-                    _cap_limit = _ADV_FLOW_CAP * _cap_adv
+                    _vol_share = 0.05  # default floor
+                    if persona.market_share and persona.market_share.by_volume:
+                        _vol_share = max(0.05, persona.market_share.by_volume)
+                    _cap_ratio = min(1.0, _vol_share * _VOLUME_SHARE_MULT)
+                    _cap_limit = _cap_ratio * _cap_adv
                     if _cap_limit > 0 and abs(flow.net_flow) > _cap_limit:
                         _pre_cap = flow.net_flow
                         flow.net_flow = (
@@ -2186,10 +2191,10 @@ async def run_simulation(
                         )
                         log.info(
                             "  R%d/%s FLOW_CAP %s: %.2fB → %.2fB "
-                            "(capped at %.1fx ADV=%.2fB)",
+                            "(vol_share=%.0f%% cap=%.2fx ADV=%.2fB)",
                             round_idx, _phase.value, order.persona_id,
                             _pre_cap / 1e8, flow.net_flow / 1e8,
-                            _ADV_FLOW_CAP, _cap_adv / 1e8,
+                            _vol_share * 100, _cap_ratio, _cap_adv / 1e8,
                         )
 
                     # Tag flow with phase and source metadata
