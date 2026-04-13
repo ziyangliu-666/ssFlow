@@ -147,8 +147,14 @@ RULES:
      HK: instrument="恒生ETF", ticker="02800"
    This ensures the simulation has a real tradeable instrument with price data.
 5. For regulatory events targeting "某" (unspecified company), pick the most
-   prominent company in that sector. E.g., "某头部互联网平台" → "腾讯" or "阿里巴巴".
-   If A-share, prefer A-share listed entities (e.g., ticker="600519" for 茅台).
+   prominent A-SHARE LISTED company in that sector. Important: many Chinese
+   internet companies (腾讯, 阿里巴巴, 美团) are NOT A-share listed. For A-share
+   market, use A-share alternatives:
+   - 互联网/平台 → instrument="恒生科技ETF", ticker="513180"
+   - 半导体/芯片 → instrument="芯片ETF", ticker="159995"
+   - 新能源车 → instrument="新能源车ETF", ticker="515030"
+   - 白酒/消费 → instrument="贵州茅台", ticker="600519"
+   Do NOT use HK tickers (00700, 09988) when market is "ashare".
 6. Return ONLY the JSON, no commentary."""
 
 
