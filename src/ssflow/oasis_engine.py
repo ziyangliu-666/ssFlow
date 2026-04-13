@@ -201,9 +201,23 @@ class OasisSimResult:
 
     @property
     def price_trajectory(self) -> list[float]:
+        """Price trajectory including intra-round phase prices.
+
+        Includes intermediate phase prices (e.g. fast_react close before
+        slow_react pulls back) so that High/Low accurately reflects all
+        prices the simulation passed through.
+        """
         if not self.rounds:
             return [self.initial_price]
-        return [self.initial_price] + [r.price_after for r in self.rounds]
+        traj = [self.initial_price]
+        for r in self.rounds:
+            if r.phase_results:
+                for pr in r.phase_results[:-1]:
+                    pa = pr.get("price_after", None) if isinstance(pr, dict) else pr.price_after
+                    if pa is not None:
+                        traj.append(pa)
+            traj.append(r.price_after)
+        return traj
 
     @property
     def cumulative_delta_pct(self) -> float:
@@ -1227,6 +1241,10 @@ async def run_simulation(
                     limit_board.current_price = _open_price
                     # Adjust the running price so agents see the post-gap level
                     current_price = _open_price
+                    # Keep current_prices dict in sync with scalar price
+                    if instrument_universe and current_prices:
+                        _gap_es = instrument_universe.event_subject_ticker
+                        current_prices[_gap_es] = _open_price
                     log.info(
                         "  R%d PRE-OPEN AUCTION: gap %.2f%% → board %s, "
                         "price %.2f → %.2f (sentiment=%.2f)",
@@ -1681,8 +1699,15 @@ async def run_simulation(
             #      Slow agents (institutional, strategic, analyst) see the
             #      post-fast price and trade second. Two Kyle computations
             #      per round, but only ONE EVENT_PRICE_UPDATED at the end.
-            _phase_price = current_price
             _phase_prices = dict(current_prices) if current_prices else {}
+            # In multi-instrument mode, sync the scalar _phase_price with
+            # the event-subject ticker's price in current_prices to avoid
+            # price_before / delta_pct inconsistencies in PhaseResult.
+            if instrument_universe and current_prices:
+                _es_ticker = instrument_universe.event_subject_ticker
+                _phase_price = current_prices.get(_es_ticker, current_price)
+            else:
+                _phase_price = current_price
             class_flows: list[ClassFlowResult] = []
             submitted_ids: set[str] = set()
             social_publications: list = []
@@ -2384,13 +2409,19 @@ async def run_simulation(
                 )
 
                 # 2j. Record PhaseResult, accumulate into all_class_flows.
+                # Recompute delta_pct from actual prices to guarantee
+                # price_before → price_after matches the displayed %.
+                _pr_delta = (
+                    (_phase_price_after / _phase_price - 1.0)
+                    if _phase_price > 0 else 0.0
+                )
                 phase_results.append(PhaseResult(
                     phase=_phase,
                     class_flows=_phase_flows,
                     net_flow=_phase_net_flow,
                     price_before=_phase_price,
                     price_after=_phase_price_after,
-                    delta_pct=_phase_delta_pct,
+                    delta_pct=_pr_delta,
                     n_active_personas=len(_phase_submitted),
                     n_plan_executions=len(_phase_plan_orders),
                 ))
@@ -2458,8 +2489,19 @@ async def run_simulation(
                 adv_baseline=initial_adv,
             )
 
-            # Accumulate multi-instrument trajectories
+            # Accumulate multi-instrument trajectories.
+            # Include intra-round phase prices so High/Low captures
+            # intermediate peaks (e.g. fast_react high before slow_react
+            # pulls back).
             if multi_trajectories:
+                for pr in phase_results[:-1]:  # intermediate phases
+                    if instrument_universe:
+                        # Only the event-subject ticker has phase-level
+                        # price_after; other tickers are approximated via
+                        # the same proportional move.
+                        _es = instrument_universe.event_subject_ticker
+                        multi_trajectories[_es].append(pr.price_after)
+                # Final phase = round close (already in current_prices)
                 for t, p in current_prices.items():
                     multi_trajectories[t].append(p)
 
