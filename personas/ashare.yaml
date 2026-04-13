@@ -1398,7 +1398,7 @@ personas:
       - news_wire_cailianshe
       - sellside_analyst_cicc_deng
     market_share:
-      by_volume: 0.03
+      by_volume: 0.01
       by_holdings: 0.05
       by_account_count: 0.00001
     capital_range_cny: [5000000000, 50000000000]
